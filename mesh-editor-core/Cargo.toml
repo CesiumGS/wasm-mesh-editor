@@ -1,0 +1,10 @@
+[package]
+name = "mesh-editor-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mesh-core = { path = "../mesh-core" }
+topology-overlay = { path = "../topology-overlay" }

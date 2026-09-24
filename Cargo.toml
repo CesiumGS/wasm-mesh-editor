@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "mesh-core",
+    "topology-overlay",
+    "mesh-editor-core",
+    "mesh-editor-wasm",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.85"
+# repository = "https://github.com/<you>/mesh-editor"
+
+[workspace.dependencies]
+glam = "0.29"
+slotmap = "1.0"
+wasm-bindgen = "0.2"
+
+# Release profile tuned for a small, fast wasm binary.
+[profile.release]
+opt-level = "s"   # optimize for size; switch to "3" if you need raw speed
+lto = true
+codegen-units = 1
+panic = "abort"   # no unwinding tables -> smaller wasm (Rust's analog of -fno-exceptions)
+strip = true

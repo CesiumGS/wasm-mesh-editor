@@ -1,0 +1,22 @@
+[package]
+name = "mesh-editor-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "WebAssembly boundary for the mesh editor, consumed by CesiumJS."
+
+[lib]
+# cdylib -> the .wasm artifact; rlib -> lets native tests/tools link the crate.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+mesh-editor-core = { path = "../mesh-editor-core" }
+wasm-bindgen.workspace = true
+
+# wasm-pack runs `wasm-opt`; modern rustc emits post-MVP ops (bulk memory:
+# memory.copy/fill, sign-ext, nontrapping float->int) that older binaryen
+# rejects unless the features are enabled. They're supported in all modern
+# browsers, so enable them and keep size optimization on.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ['-Os', '--enable-bulk-memory', '--enable-sign-ext', '--enable-nontrapping-float-to-int']
