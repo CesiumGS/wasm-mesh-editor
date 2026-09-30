@@ -1,0 +1,10 @@
+{
+    // Use rustfmt automatically whenever you save a file
+    "editor.formatOnSave": true,
+    "[rust]": {
+        "editor.defaultFormatter": "rust-lang.rust-analyzer"
+    },
+    // Swap the default background syntax compiler from "cargo check" to "clippy"
+    // This runs Rust's strict idiomatic linter in the background as you code
+    "rust-analyzer.check.command": "clippy"
+}
