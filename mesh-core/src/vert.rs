@@ -2,7 +2,7 @@
 
 use glam::Vec3;
 
-use crate::{Attributes, EdgeKey, FaceKey, Topology, VertKey};
+use crate::{Attributes, EdgeKey, EdgeRef, FaceKey, Topology, VertKey};
 
 /// A vertex. Its position lives in attribute storage, keyed by [`VertKey`].
 pub struct Vert {
@@ -35,12 +35,30 @@ impl<'a> VertRef<'a> {
         })
     }
 
+    /// The incident faces, each yielded once, including non-manifold fans.
+    /// Each face has exactly one outgoing loop at this vertex, so filtering on
+    /// the loop's vertex avoids allocating a set to deduplicate faces.
     pub fn faces(&self) -> impl Iterator<Item = FaceKey> + '_ {
-        std::iter::empty::<FaceKey>()
+        self.edges()
+            .flat_map(|key| {
+                EdgeRef {
+                    topo: self.topo,
+                    key,
+                }
+                .loops()
+            })
+            .filter_map(|key| {
+                let loop_ = &self.topo.loops[key];
+                (loop_.vert == self.key).then_some(loop_.face)
+            })
     }
 
+    /// The vertices connected to this vertex by an edge, including wire edges.
     pub fn neighbors(&self) -> impl Iterator<Item = VertKey> + '_ {
-        std::iter::empty::<VertKey>()
+        self.edges().map(|key| {
+            let verts = self.topo.edges[key].verts;
+            verts[usize::from(verts[0] == self.key)]
+        })
     }
 
     pub fn position(&self) -> Vec3 {
