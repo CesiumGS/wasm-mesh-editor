@@ -13,10 +13,6 @@ use crate::{
 pub use build::{MeshBuffers, MeshBuildError};
 
 /// A headless, editable mesh: connectivity, geometry attributes, and selection.
-///
-/// The three stores are separate fields so they can be borrowed disjointly
-/// (e.g. `&mut attributes` alongside `&topology`).
-/// The default is an empty mesh with selection at vertex level.
 #[derive(Default)]
 pub struct Mesh {
     pub(crate) topology: Topology,
@@ -41,19 +37,32 @@ impl Mesh {
     }
 
     pub fn topology(&self) -> &Topology {
-        todo!()
+        &self.topology
     }
 
     pub fn attributes(&self) -> &Attributes {
-        todo!()
+        &self.attributes
     }
 
     pub fn vert(&self, key: VertKey) -> Option<VertRef<'_>> {
-        todo!()
+        if !self.topology.verts.contains_key(key) {
+            return None;
+        }
+        Some(VertRef {
+            topo: &self.topology,
+            attrs: &self.attributes,
+            key,
+        })
     }
 
     pub fn edge(&self, key: EdgeKey) -> Option<EdgeRef<'_>> {
-        todo!()
+        if !self.topology.edges.contains_key(key) {
+            return None;
+        }
+        Some(EdgeRef {
+            topo: &self.topology,
+            key,
+        })
     }
 
     /// Returns a reference to the face with the given key, if it exists.
@@ -79,11 +88,19 @@ impl Mesh {
     }
 
     pub fn selection(&self) -> SelectionView<'_> {
-        todo!()
+        SelectionView {
+            state: &self.selection,
+            topo: &self.topology,
+            attrs: &self.attributes,
+        }
     }
 
     pub fn selection_mut(&mut self) -> Selection<'_> {
-        todo!()
+        Selection {
+            state: &mut self.selection,
+            topo: &self.topology,
+            attrs: &self.attributes,
+        }
     }
 
     pub fn add_change_listener(&mut self, listener: Box<dyn FnMut(&MeshChange)>) -> ListenerId {

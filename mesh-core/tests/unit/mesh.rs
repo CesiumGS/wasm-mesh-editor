@@ -113,6 +113,69 @@ fn new_and_default_create_empty_meshes_at_vertex_level() {
 }
 
 #[test]
+fn accessors_borrow_mesh_stores() {
+    let mut mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
+    assert!(std::ptr::eq(mesh.topology(), &mesh.topology));
+    assert!(std::ptr::eq(mesh.attributes(), &mesh.attributes));
+
+    let view = mesh.selection();
+    assert!(std::ptr::eq(view.state, &mesh.selection));
+    assert!(std::ptr::eq(view.topo, &mesh.topology));
+    assert!(std::ptr::eq(view.attrs, &mesh.attributes));
+
+    let vert_key = mesh.topology.verts.keys().next().unwrap();
+    let topology = &mesh.topology as *const Topology;
+    let attributes = &mesh.attributes as *const Attributes;
+    let state = &mesh.selection as *const SelectionState;
+    let selection = mesh.selection_mut();
+    assert!(std::ptr::eq(selection.topo, topology));
+    assert!(std::ptr::eq(selection.attrs, attributes));
+    assert!(std::ptr::eq(&*selection.state, state));
+    selection.state.verts.insert(vert_key);
+    assert!(mesh.selection().state.verts.contains(&vert_key));
+}
+
+#[test]
+fn component_accessors_return_views_for_live_keys() {
+    let mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
+    for key in mesh.topology.verts.keys() {
+        let view = mesh.vert(key).unwrap();
+        assert_eq!(view.key(), key);
+        assert!(std::ptr::eq(view.topo, &mesh.topology));
+        assert!(std::ptr::eq(view.attrs, &mesh.attributes));
+    }
+    for key in mesh.topology.edges.keys() {
+        let view = mesh.edge(key).unwrap();
+        assert_eq!(view.key(), key);
+        assert!(std::ptr::eq(view.topo, &mesh.topology));
+    }
+    for key in mesh.topology.faces.keys() {
+        let view = mesh.face(key).unwrap();
+        assert_eq!(view.key(), key);
+        assert!(std::ptr::eq(view.topo, &mesh.topology));
+        assert!(std::ptr::eq(view.attrs, &mesh.attributes));
+    }
+}
+
+#[test]
+fn component_accessors_reject_missing_and_removed_keys() {
+    let mut mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
+    assert!(mesh.vert(VertKey::null()).is_none());
+    assert!(mesh.edge(EdgeKey::null()).is_none());
+    assert!(mesh.face(FaceKey::null()).is_none());
+
+    let vert_key = mesh.topology.verts.keys().next().unwrap();
+    let edge_key = mesh.topology.edges.keys().next().unwrap();
+    let face_key = mesh.topology.faces.keys().next().unwrap();
+    mesh.topology.verts.remove(vert_key);
+    mesh.topology.edges.remove(edge_key);
+    mesh.topology.faces.remove(face_key);
+    assert!(mesh.vert(vert_key).is_none());
+    assert!(mesh.edge(edge_key).is_none());
+    assert!(mesh.face(face_key).is_none());
+}
+
+#[test]
 fn capacity_constructors_reserve_without_populating() {
     for (vertex_capacity, loop_capacity, uv_capacity) in [(0, 0, 0), (5, 13, 0), (7, 19, 19)] {
         let topology = Topology::with_capacity(vertex_capacity, loop_capacity);
