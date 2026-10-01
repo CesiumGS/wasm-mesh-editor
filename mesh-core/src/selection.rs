@@ -21,6 +21,17 @@ pub(crate) struct SelectionState {
     pub(crate) level: ComponentType,
 }
 
+impl Default for SelectionState {
+    fn default() -> Self {
+        Self {
+            verts: HashSet::new(),
+            edges: HashSet::new(),
+            faces: HashSet::new(),
+            level: ComponentType::Vertex,
+        }
+    }
+}
+
 /// Read-only accessor over a mesh's selection.
 pub struct SelectionView<'a> {
     pub(crate) state: &'a SelectionState,

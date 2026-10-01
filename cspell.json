@@ -1,0 +1,19 @@
+{
+    "version": "0.2",
+    "words": [
+        "binaryen",
+        "bindgen",
+        "cdylib",
+        "clippy",
+        "codegen",
+        "disjointly",
+        "dvec",
+        "gons",
+        "nontrapping",
+        "rlib",
+        "rustc",
+        "slotmap",
+        "topo",
+        "verts"
+    ]
+}

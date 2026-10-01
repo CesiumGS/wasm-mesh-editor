@@ -1,6 +1,8 @@
 //! The [`Mesh`] aggregate: topology, attributes, and selection.
 
-use glam::{Vec2, Vec3};
+mod build;
+
+use glam::Vec3;
 
 use crate::selection::SelectionState;
 use crate::{
@@ -8,20 +10,14 @@ use crate::{
     SelectionView, Topology, VertKey, VertRef,
 };
 
-/// Buffers describing a mesh to build.
-pub struct MeshOptions {
-    pub positions: Vec<Vec3>,
-    pub normals: Option<Vec<Vec3>>,
-    pub uvs: Option<Vec<Vec2>>,
-    pub indices: Vec<u32>,
-    /// Vertices per face, for n-gons; triangles are assumed when absent.
-    pub face_vertex_counts: Option<Vec<u32>>,
-}
+pub use build::{MeshBuffers, MeshBuildError};
 
 /// A headless, editable mesh: connectivity, geometry attributes, and selection.
 ///
 /// The three stores are separate fields so they can be borrowed disjointly
 /// (e.g. `&mut attributes` alongside `&topology`).
+/// The default is an empty mesh with selection at vertex level.
+#[derive(Default)]
 pub struct Mesh {
     pub(crate) topology: Topology,
     pub(crate) attributes: Attributes,
@@ -29,8 +25,19 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    pub fn from_options(options: MeshOptions) -> Self {
-        todo!()
+    /// Creates an empty mesh with selection at vertex level.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Constructs an editable mesh from vertex attribute and face index buffers.
+    /// Input buffers should contain decoded, typed data (not raw binary data).
+    /// Vertices that are duplicated in the attribute buffers are treated as distinct vertices in the mesh.
+    ///
+    /// # Errors
+    /// Returns an error if [`MeshBuffers::validate`] rejects the input buffers.
+    pub fn from_buffers(buffers: MeshBuffers) -> Result<Self, MeshBuildError> {
+        build::from_buffers(buffers)
     }
 
     pub fn topology(&self) -> &Topology {
@@ -49,8 +56,17 @@ impl Mesh {
         todo!()
     }
 
+    /// Returns a reference to the face with the given key, if it exists.
+    /// References wrap the underlying mesh component handle with access to both mesh topology and attributes.
     pub fn face(&self, key: FaceKey) -> Option<FaceRef<'_>> {
-        todo!()
+        if !self.topology.faces.contains_key(key) {
+            return None;
+        }
+        Some(FaceRef {
+            topo: &self.topology,
+            attrs: &self.attributes,
+            key,
+        })
     }
 
     /// Translate the currently selected vertices by `delta`.
@@ -78,3 +94,7 @@ impl Mesh {
         todo!()
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/mesh.rs"]
+mod tests;

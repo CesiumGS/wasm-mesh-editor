@@ -20,7 +20,7 @@ pub use attributes::{AttributeDomain, Attributes};
 pub use edge::{Edge, EdgeRef};
 pub use face::{Face, FaceRef};
 pub use loop_::Loop;
-pub use mesh::{Mesh, MeshOptions};
+pub use mesh::{Mesh, MeshBuffers, MeshBuildError};
 pub use mesh_change::{AttributeChange, ListenerId, MeshChange, SelectionChange, TopologyChange};
 pub use mesh_component::{ComponentKey, ComponentType, EdgeKey, FaceKey, LoopKey, VertKey};
 pub use selection::{Selection, SelectionBoundary, SelectionKind, SelectionView};
