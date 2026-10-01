@@ -6,5 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bitflags.workspace = true
 glam.workspace = true
 slotmap.workspace = true

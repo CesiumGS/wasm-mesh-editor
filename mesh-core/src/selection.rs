@@ -6,7 +6,7 @@ pub use boundary::SelectionBoundary;
 
 use std::collections::HashSet;
 
-use crate::{Attributes, ComponentKey, ComponentType, EdgeKey, FaceKey, Topology, VertKey};
+use crate::{Attributes, ComponentKey, ComponentTypes, EdgeKey, FaceKey, Topology, VertKey};
 
 /// A component kind that can be selected: the three handle types and
 /// [`ComponentKey`]. A named alias over `Copy + Into<ComponentKey>`.
@@ -18,7 +18,7 @@ pub(crate) struct SelectionState {
     pub(crate) verts: HashSet<VertKey>,
     pub(crate) edges: HashSet<EdgeKey>,
     pub(crate) faces: HashSet<FaceKey>,
-    pub(crate) level: ComponentType,
+    pub(crate) level: ComponentTypes,
 }
 
 impl Default for SelectionState {
@@ -27,7 +27,7 @@ impl Default for SelectionState {
             verts: HashSet::new(),
             edges: HashSet::new(),
             faces: HashSet::new(),
-            level: ComponentType::Vertex,
+            level: ComponentTypes::VERTEX,
         }
     }
 }
@@ -48,7 +48,8 @@ pub struct Selection<'a> {
 }
 
 impl<'a> SelectionView<'a> {
-    pub fn level(&self) -> ComponentType {
+    /// The component kinds that accept direct selection input.
+    pub fn level(&self) -> ComponentTypes {
         todo!()
     }
 
@@ -84,23 +85,29 @@ impl<'a> Selection<'a> {
         todo!()
     }
 
-    pub fn set_level(&mut self, level: ComponentType) {
+    /// Sets the component kinds that accept direct selection input.
+    /// Combine kinds with `|`, such as `ComponentTypes::VERTEX | ComponentTypes::EDGE`.
+    /// Other kinds may still be selected indirectly by down-cascade or up-bubble.
+    pub fn set_level(&mut self, level: ComponentTypes) {
         todo!()
     }
 
+    /// Sets the current selection to the given components, replacing any existing selection.
     pub fn set<K: SelectionKind>(&mut self, keys: &[K]) {
         todo!()
     }
 
+    /// Adds the given components to the current selection.
     pub fn select<K: SelectionKind>(&mut self, keys: &[K]) {
         todo!()
     }
 
+    /// Removes the given components from the current selection.
     pub fn deselect<K: SelectionKind>(&mut self, keys: &[K]) {
         todo!()
     }
 
-    /// Toggle `keys` against the state at the start of the call.
+    /// Toggles the given components in the current selection.
     pub fn toggle<K: SelectionKind>(&mut self, keys: &[K]) {
         todo!()
     }

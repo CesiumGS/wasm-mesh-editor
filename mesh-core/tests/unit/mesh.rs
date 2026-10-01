@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use glam::Vec2;
 use slotmap::Key;
 
-use crate::ComponentType;
+use crate::ComponentTypes;
 
 use super::*;
 
@@ -107,7 +107,7 @@ fn new_and_default_create_empty_meshes_at_vertex_level() {
         assert!(mesh.selection.verts.is_empty());
         assert!(mesh.selection.edges.is_empty());
         assert!(mesh.selection.faces.is_empty());
-        assert_eq!(mesh.selection.level, ComponentType::Vertex);
+        assert_eq!(mesh.selection.level, ComponentTypes::VERTEX);
         assert_connectivity(&mesh);
     }
 }
@@ -220,7 +220,7 @@ fn builds_triangle_cycles_positions_and_flat_normals() {
     assert!(mesh.selection.verts.is_empty());
     assert!(mesh.selection.edges.is_empty());
     assert!(mesh.selection.faces.is_empty());
-    assert_eq!(mesh.selection.level, ComponentType::Vertex);
+    assert_eq!(mesh.selection.level, ComponentTypes::VERTEX);
     assert_connectivity(&mesh);
 }
 

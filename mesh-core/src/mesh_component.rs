@@ -17,6 +17,26 @@ pub enum ComponentType {
     Face,
 }
 
+bitflags::bitflags! {
+    /// A set of component kinds.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub struct ComponentTypes: u8 {
+        const VERTEX = 0b001;
+        const EDGE = 0b010;
+        const FACE = 0b100;
+    }
+}
+
+impl From<ComponentType> for ComponentTypes {
+    fn from(kind: ComponentType) -> Self {
+        match kind {
+            ComponentType::Vertex => Self::VERTEX,
+            ComponentType::Edge => Self::EDGE,
+            ComponentType::Face => Self::FACE,
+        }
+    }
+}
+
 /// A component handle tagged by kind, letting components of different kinds share
 /// one flat collection.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -41,3 +61,7 @@ impl From<FaceKey> for ComponentKey {
         ComponentKey::Face(key)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/mesh_component.rs"]
+mod tests;
