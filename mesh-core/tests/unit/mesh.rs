@@ -45,6 +45,16 @@ fn assert_connectivity(mesh: &Mesh) {
         }
         assert_eq!(seen, expected);
         assert!(mesh.attributes.positions.contains_key(vert_key));
+
+        let expected_faces: HashSet<_> = topo
+            .loops
+            .values()
+            .filter(|loop_| loop_.vert == vert_key)
+            .map(|loop_| loop_.face)
+            .collect();
+        let vertex = mesh.vert(vert_key).unwrap();
+        assert_eq!(vertex.faces().count(), expected_faces.len());
+        assert_eq!(vertex.faces().collect::<HashSet<_>>(), expected_faces);
     }
 
     for (edge_key, edge) in &topo.edges {
@@ -69,6 +79,12 @@ fn assert_connectivity(mesh: &Mesh) {
             }
         }
         assert_eq!(seen, expected);
+        let view = mesh.edge(edge_key).unwrap();
+        assert_eq!(view.loops().count(), expected.len());
+        assert_eq!(view.loops().collect::<HashSet<_>>(), expected);
+        let expected_faces: HashSet<_> = expected.iter().map(|&key| topo.loops[key].face).collect();
+        assert_eq!(view.faces().count(), expected_faces.len());
+        assert_eq!(view.faces().collect::<HashSet<_>>(), expected_faces);
     }
 
     let mut all_loops = HashSet::new();
@@ -288,6 +304,30 @@ fn builds_shared_edges_with_any_winding_and_radial_valence() {
         );
         assert_connectivity(&mesh);
     }
+}
+
+#[test]
+fn vertex_faces_cover_disconnected_fans_and_wire_edges() {
+    let mut options = triangle_buffers();
+    options
+        .positions
+        .extend([Vec3::Z, -Vec3::Y, -Vec3::X, Vec3::ONE]);
+    options.indices = vec![0, 1, 2, 0, 3, 4];
+    let mut mesh = Mesh::from_buffers(options).unwrap();
+    assert_connectivity(&mesh);
+
+    let verts: Vec<_> = mesh.topology.verts.keys().collect();
+    let wire = mesh.topology.insert_edge([verts[0], verts[5]]);
+    let vertex = mesh.vert(verts[0]).unwrap();
+    assert_eq!(vertex.faces().count(), 2);
+    assert_eq!(
+        vertex.faces().collect::<HashSet<_>>(),
+        mesh.topology.faces.keys().collect()
+    );
+    assert_eq!(mesh.vert(verts[5]).unwrap().faces().count(), 0);
+    assert_eq!(mesh.vert(verts[6]).unwrap().faces().count(), 0);
+    assert_eq!(mesh.edge(wire).unwrap().loops().count(), 0);
+    assert_eq!(mesh.edge(wire).unwrap().faces().count(), 0);
 }
 
 #[test]

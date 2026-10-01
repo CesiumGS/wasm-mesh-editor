@@ -6,6 +6,8 @@ pub use boundary::SelectionBoundary;
 
 use std::collections::HashSet;
 
+use boundary::BoundaryCache;
+
 use crate::mesh_component::PerComponentType;
 use crate::{
     Attributes, ComponentKey, ComponentRef, ComponentType, ComponentTypes, EdgeKey, FaceKey,
@@ -23,6 +25,7 @@ pub(crate) struct SelectionState {
     pub(crate) edges: HashSet<EdgeKey>,
     pub(crate) faces: HashSet<FaceKey>,
     pub(crate) level: ComponentTypes,
+    boundary: BoundaryCache,
 }
 
 impl Default for SelectionState {
@@ -32,25 +35,42 @@ impl Default for SelectionState {
             edges: HashSet::new(),
             faces: HashSet::new(),
             level: ComponentTypes::VERTEX,
+            boundary: BoundaryCache::default(),
         }
     }
 }
 
 impl SelectionState {
+    /// Invalidate the boundary and its inner/outer vertex and face sets, allowing
+    /// them to be lazily recomputed when next requested. Selection changes call
+    /// this automatically; topology editing operations must call it as well.
+    /// Position-only edits do not change the boundary and need not invalidate it.
+    pub(crate) fn invalidate_boundary(&mut self) {
+        self.boundary = BoundaryCache::default();
+    }
+
     fn insert(&mut self, key: ComponentKey) -> bool {
-        match key {
+        let changed = match key {
             ComponentKey::Vert(key) => self.verts.insert(key),
             ComponentKey::Edge(key) => self.edges.insert(key),
             ComponentKey::Face(key) => self.faces.insert(key),
+        };
+        if changed {
+            self.invalidate_boundary();
         }
+        changed
     }
 
     fn remove(&mut self, key: ComponentKey) -> bool {
-        match key {
+        let changed = match key {
             ComponentKey::Vert(key) => self.verts.remove(&key),
             ComponentKey::Edge(key) => self.edges.remove(&key),
             ComponentKey::Face(key) => self.faces.remove(&key),
+        };
+        if changed {
+            self.invalidate_boundary();
         }
+        changed
     }
 }
 
@@ -133,8 +153,11 @@ impl<'a> SelectionView<'a> {
         }
     }
 
-    pub fn boundary(&self) -> SelectionBoundary {
-        todo!()
+    /// A read-only view of the selection's boundary and its inner and outer rings.
+    /// The sets are computed lazily when requested and shared across calls to this
+    /// accessor until a selection change invalidates them.
+    pub fn boundary(&self) -> SelectionBoundary<'a> {
+        SelectionBoundary::new(self)
     }
 }
 
@@ -161,11 +184,13 @@ impl<'a> Selection<'a> {
         if self.state.level == level {
             return;
         }
+
         let survivors: Vec<_> = self
             .view()
             .selected()
             .filter(|&key| level.contains(key.kind().into()))
             .collect();
+
         self.state.level = level;
         self.set(&survivors);
     }
@@ -193,17 +218,38 @@ impl<'a> Selection<'a> {
 
     /// Clears all selected components, regardless of the current mode.
     pub fn clear(&mut self) {
+        if !self.view().is_empty() {
+            self.state.invalidate_boundary();
+        }
+
         self.state.verts.clear();
         self.state.edges.clear();
         self.state.faces.clear();
     }
 
+    /// Adds the current boundary's unselected edge-neighbors, then restores the mode.
+    /// Components unsupported by the restored mode are discarded as in [`Self::set_level`].
     pub fn grow(&mut self) {
-        todo!()
+        let verts: Vec<_> = self.view().boundary().outer_vertices().collect();
+        self.apply_boundary_action(&verts, Action::Select);
     }
 
+    /// Removes the current boundary vertices, then restores the selection mode.
+    /// A fully selected connected surface has no selection boundary and is unchanged.
     pub fn shrink(&mut self) {
-        todo!()
+        let verts: Vec<_> = self.view().boundary().vertices().collect();
+        self.apply_boundary_action(&verts, Action::Deselect);
+    }
+
+    fn apply_boundary_action(&mut self, verts: &[VertKey], action: Action) {
+        if verts.is_empty() {
+            return;
+        }
+
+        let level = self.state.level;
+        self.set_level(ComponentTypes::VERTEX);
+        self.apply_action(verts, action);
+        self.set_level(level);
     }
 
     /// Takes a set of components by key and applies a selection action to them (select, remove, toggle).

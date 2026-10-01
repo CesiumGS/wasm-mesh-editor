@@ -27,15 +27,22 @@ impl<'a> EdgeRef<'a> {
         self.topo.edges[self.key].verts
     }
 
-    pub fn faces(&self) -> impl Iterator<Item = FaceKey> + '_ {
+    pub fn faces(&self) -> impl Iterator<Item = FaceKey> + use<'a> {
+        let topo = self.topo;
+        self.loops().map(move |key| topo.loops[key].face)
+    }
+
+    /// The loops in this edge's radial cycle, one per incident face.
+    pub(crate) fn loops(&self) -> impl Iterator<Item = LoopKey> + use<'a> {
+        let topo = self.topo;
         let first = self.topo.edges[self.key].loop_;
         let mut current = first;
         std::iter::from_fn(move || {
             let key = current?;
-            let loop_ = &self.topo.loops[key];
+            let loop_ = &topo.loops[key];
             let next = loop_.radial_next;
             current = (Some(next) != first).then_some(next);
-            Some(loop_.face)
+            Some(key)
         })
     }
 }
