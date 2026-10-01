@@ -28,7 +28,7 @@ impl<'a> FaceRef<'a> {
     }
 
     pub fn edges(&self) -> impl Iterator<Item = EdgeKey> + '_ {
-        std::iter::empty::<EdgeKey>()
+        self.loops().map(|key| self.topo.loops[key].edge)
     }
 
     fn loops(&self) -> impl Iterator<Item = LoopKey> + '_ {

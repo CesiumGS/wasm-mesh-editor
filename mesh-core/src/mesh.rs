@@ -6,8 +6,8 @@ use glam::Vec3;
 
 use crate::selection::SelectionState;
 use crate::{
-    Attributes, EdgeKey, EdgeRef, FaceKey, FaceRef, ListenerId, MeshChange, Selection,
-    SelectionView, Topology, VertKey, VertRef,
+    Attributes, ComponentKey, ComponentRef, EdgeKey, EdgeRef, FaceKey, FaceRef, ListenerId,
+    MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
 };
 
 pub use build::{MeshBuffers, MeshBuildError};
@@ -42,6 +42,15 @@ impl Mesh {
 
     pub fn attributes(&self) -> &Attributes {
         &self.attributes
+    }
+
+    /// Returns a view of a vertex, edge, or face, or `None` for a missing handle.
+    pub fn component<K: Into<ComponentKey>>(&self, key: K) -> Option<ComponentRef<'_>> {
+        let key = key.into();
+        if !self.topology.contains(key) {
+            return None;
+        }
+        Some(ComponentRef::new(key, &self.topology, &self.attributes))
     }
 
     pub fn vert(&self, key: VertKey) -> Option<VertRef<'_>> {

@@ -2,7 +2,7 @@
 
 use slotmap::{Key, SlotMap};
 
-use crate::{Edge, EdgeKey, Face, FaceKey, Loop, LoopKey, Vert, VertKey};
+use crate::{ComponentKey, Edge, EdgeKey, Face, FaceKey, Loop, LoopKey, Vert, VertKey};
 
 /// Stable-handle storage for the mesh's verts, edges, loops, and faces.
 #[derive(Default)]
@@ -14,6 +14,16 @@ pub struct Topology {
 }
 
 impl Topology {
+    /// Whether this topology contains the given vertex, edge, or face handle.
+    /// Missing and stale handles return false.
+    pub fn contains<K: Into<ComponentKey>>(&self, key: K) -> bool {
+        match key.into() {
+            ComponentKey::Vert(key) => self.verts.contains_key(key),
+            ComponentKey::Edge(key) => self.edges.contains_key(key),
+            ComponentKey::Face(key) => self.faces.contains_key(key),
+        }
+    }
+
     /// Creates empty topology with space for vertices and loops.
     /// Edges and faces grow as needed.
     pub fn with_capacity(vertex_capacity: usize, loop_capacity: usize) -> Self {

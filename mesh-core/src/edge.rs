@@ -24,10 +24,18 @@ impl<'a> EdgeRef<'a> {
     }
 
     pub fn verts(&self) -> [VertKey; 2] {
-        todo!()
+        self.topo.edges[self.key].verts
     }
 
     pub fn faces(&self) -> impl Iterator<Item = FaceKey> + '_ {
-        std::iter::empty::<FaceKey>()
+        let first = self.topo.edges[self.key].loop_;
+        let mut current = first;
+        std::iter::from_fn(move || {
+            let key = current?;
+            let loop_ = &self.topo.loops[key];
+            let next = loop_.radial_next;
+            current = (Some(next) != first).then_some(next);
+            Some(loop_.face)
+        })
     }
 }

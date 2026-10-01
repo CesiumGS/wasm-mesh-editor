@@ -23,7 +23,7 @@ pub use loop_::Loop;
 pub use mesh::{Mesh, MeshBuffers, MeshBuildError};
 pub use mesh_change::{AttributeChange, ListenerId, MeshChange, SelectionChange, TopologyChange};
 pub use mesh_component::{
-    ComponentKey, ComponentType, ComponentTypes, EdgeKey, FaceKey, LoopKey, VertKey,
+    ComponentKey, ComponentRef, ComponentType, ComponentTypes, EdgeKey, FaceKey, LoopKey, VertKey,
 };
 pub use selection::{Selection, SelectionBoundary, SelectionKind, SelectionView};
 pub use topology::Topology;

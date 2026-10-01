@@ -139,17 +139,32 @@ fn accessors_borrow_mesh_stores() {
 fn component_accessors_return_views_for_live_keys() {
     let mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
     for key in mesh.topology.verts.keys() {
+        assert!(mesh.topology().contains(key));
+        let Some(ComponentRef::Vert(component)) = mesh.component(key) else {
+            panic!("expected a vertex view");
+        };
+        assert_eq!(component.key(), key);
         let view = mesh.vert(key).unwrap();
         assert_eq!(view.key(), key);
         assert!(std::ptr::eq(view.topo, &mesh.topology));
         assert!(std::ptr::eq(view.attrs, &mesh.attributes));
     }
     for key in mesh.topology.edges.keys() {
+        assert!(mesh.topology().contains(key));
+        let Some(ComponentRef::Edge(component)) = mesh.component(ComponentKey::Edge(key)) else {
+            panic!("expected an edge view");
+        };
+        assert_eq!(component.key(), key);
         let view = mesh.edge(key).unwrap();
         assert_eq!(view.key(), key);
         assert!(std::ptr::eq(view.topo, &mesh.topology));
     }
     for key in mesh.topology.faces.keys() {
+        assert!(mesh.topology().contains(ComponentKey::Face(key)));
+        let Some(ComponentRef::Face(component)) = mesh.component(key) else {
+            panic!("expected a face view");
+        };
+        assert_eq!(component.key(), key);
         let view = mesh.face(key).unwrap();
         assert_eq!(view.key(), key);
         assert!(std::ptr::eq(view.topo, &mesh.topology));
@@ -163,6 +178,14 @@ fn component_accessors_reject_missing_and_removed_keys() {
     assert!(mesh.vert(VertKey::null()).is_none());
     assert!(mesh.edge(EdgeKey::null()).is_none());
     assert!(mesh.face(FaceKey::null()).is_none());
+    for key in [
+        ComponentKey::Vert(VertKey::null()),
+        ComponentKey::Edge(EdgeKey::null()),
+        ComponentKey::Face(FaceKey::null()),
+    ] {
+        assert!(!mesh.topology().contains(key));
+        assert!(mesh.component(key).is_none());
+    }
 
     let vert_key = mesh.topology.verts.keys().next().unwrap();
     let edge_key = mesh.topology.edges.keys().next().unwrap();
@@ -173,6 +196,14 @@ fn component_accessors_reject_missing_and_removed_keys() {
     assert!(mesh.vert(vert_key).is_none());
     assert!(mesh.edge(edge_key).is_none());
     assert!(mesh.face(face_key).is_none());
+    for key in [
+        ComponentKey::Vert(vert_key),
+        ComponentKey::Edge(edge_key),
+        ComponentKey::Face(face_key),
+    ] {
+        assert!(!mesh.topology().contains(key));
+        assert!(mesh.component(key).is_none());
+    }
 }
 
 #[test]

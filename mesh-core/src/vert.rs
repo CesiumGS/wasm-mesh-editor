@@ -23,7 +23,16 @@ impl<'a> VertRef<'a> {
     }
 
     pub fn edges(&self) -> impl Iterator<Item = EdgeKey> + '_ {
-        std::iter::empty::<EdgeKey>()
+        let first = self.topo.verts[self.key].edge;
+        let mut current = first;
+        std::iter::from_fn(move || {
+            let key = current?;
+            let edge = &self.topo.edges[key];
+            let side = usize::from(edge.verts[1] == self.key);
+            let next = edge.disk_next[side];
+            current = (Some(next) != first).then_some(next);
+            Some(key)
+        })
     }
 
     pub fn faces(&self) -> impl Iterator<Item = FaceKey> + '_ {
