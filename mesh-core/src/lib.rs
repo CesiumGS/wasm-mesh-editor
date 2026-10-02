@@ -25,6 +25,6 @@ pub use mesh_change::{AttributeChange, ListenerId, MeshChange, SelectionChange, 
 pub use mesh_component::{
     ComponentKey, ComponentRef, ComponentType, ComponentTypes, EdgeKey, FaceKey, LoopKey, VertKey,
 };
-pub use selection::{Selection, SelectionBoundary, SelectionKind, SelectionView};
+pub use selection::{Selection, SelectionBoundary, SelectionKind, SelectionStep, SelectionView};
 pub use topology::Topology;
 pub use vert::{Vert, VertRef};

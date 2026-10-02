@@ -2,7 +2,7 @@
 
 mod boundary;
 
-pub use boundary::SelectionBoundary;
+pub use boundary::{SelectionBoundary, SelectionStep};
 
 use std::collections::HashSet;
 
@@ -41,10 +41,6 @@ impl Default for SelectionState {
 }
 
 impl SelectionState {
-    /// Invalidate the boundary and its inner/outer vertex and face sets, allowing
-    /// them to be lazily recomputed when next requested. Selection changes call
-    /// this automatically; topology editing operations must call it as well.
-    /// Position-only edits do not change the boundary and need not invalidate it.
     pub(crate) fn invalidate_boundary(&mut self) {
         self.boundary = BoundaryCache::default();
     }
@@ -153,9 +149,7 @@ impl<'a> SelectionView<'a> {
         }
     }
 
-    /// A read-only view of the selection's boundary and its inner and outer rings.
-    /// The sets are computed lazily when requested and shared across calls to this
-    /// accessor until a selection change invalidates them.
+    /// Lazy boundary sets shared across views, independent of the selection mode.
     pub fn boundary(&self) -> SelectionBoundary<'a> {
         SelectionBoundary::new(self)
     }
@@ -227,17 +221,36 @@ impl<'a> Selection<'a> {
         self.state.faces.clear();
     }
 
-    /// Adds the current boundary's unselected edge-neighbors without changing the selection mode.
-    pub fn grow(&mut self) {
-        let verts: Vec<_> = self.view().boundary().outer_vertices().collect();
-        self.apply_action(&verts, Action::Select, ComponentTypes::VERTEX);
+    /// Grow the selection by one outer layer of the current selection mode.
+    /// Face-only mode edits faces; any vertex or edge mode edits vertices.
+    /// A fully selected connected component has no boundary and is unchanged.
+    pub fn grow(&mut self, step: SelectionStep) {
+        if self.state.level == ComponentTypes::FACE {
+            let faces: Vec<_> = self.view().boundary().outer_faces(step).collect();
+            self.apply_action(&faces, Action::Select, ComponentTypes::FACE);
+        } else if self
+            .state
+            .level
+            .intersects(ComponentTypes::VERTEX | ComponentTypes::EDGE)
+        {
+            let verts: Vec<_> = self.view().boundary().outer_vertices(step).collect();
+            self.apply_action(&verts, Action::Select, ComponentTypes::VERTEX);
+        }
     }
 
-    /// Removes the current boundary vertices without changing the selection mode.
-    /// A fully selected connected surface has no selection boundary and is unchanged.
-    pub fn shrink(&mut self) {
-        let verts: Vec<_> = self.view().boundary().vertices().collect();
-        self.apply_action(&verts, Action::Deselect, ComponentTypes::VERTEX);
+    /// Shrink the selection by one inner layer, using the same mode rules as [`Self::grow`].
+    pub fn shrink(&mut self, step: SelectionStep) {
+        if self.state.level == ComponentTypes::FACE {
+            let faces: Vec<_> = self.view().boundary().inner_faces(step).collect();
+            self.apply_action(&faces, Action::Deselect, ComponentTypes::FACE);
+        } else if self
+            .state
+            .level
+            .intersects(ComponentTypes::VERTEX | ComponentTypes::EDGE)
+        {
+            let verts: Vec<_> = self.view().boundary().inner_vertices(step).collect();
+            self.apply_action(&verts, Action::Deselect, ComponentTypes::VERTEX);
+        }
     }
 
     /// Takes a set of components by key and applies a selection action to them (select, remove, toggle).

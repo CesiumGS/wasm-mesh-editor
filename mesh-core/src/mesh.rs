@@ -92,7 +92,7 @@ impl Mesh {
         todo!()
     }
 
-    pub fn recompute_face_normals(&mut self, faces: &[FaceKey]) {
+    pub fn recompute_shading_normals(&mut self, faces: &[FaceKey]) {
         todo!()
     }
 

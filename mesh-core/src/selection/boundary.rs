@@ -4,40 +4,43 @@ use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use super::SelectionView;
-use crate::{FaceKey, FaceRef, VertKey, VertRef};
+use crate::{EdgeRef, FaceKey, FaceRef, VertKey, VertRef};
 
-/// The boundary sets stored for the lifetime of a selection. Each set is computed
-/// lazily when requested and invalidated when the selection changes.
-///
-/// A fully selected mesh has no boundary vertices, which is a valid computed
-/// result.
-#[derive(Default)]
-pub(super) struct BoundaryCache {
-    /// Selected vertices belonging to a face that has at least one unselected vertex.
-    pub(super) vertices: OnceLock<HashSet<VertKey>>,
-    /// Selected vertices adjacent to the boundary, excluding the boundary itself.
-    pub(super) inner_vertices: OnceLock<HashSet<VertKey>>,
-    /// Unselected vertices adjacent to the boundary.
-    pub(super) outer_vertices: OnceLock<HashSet<VertKey>>,
-    /// Faces touching one or more boundary vertices and one or more inner vertices.
-    pub(super) inner_faces: OnceLock<HashSet<FaceKey>>,
-    /// Faces touching one or more boundary vertices and one or more outer vertices.
-    pub(super) outer_faces: OnceLock<HashSet<FaceKey>>,
+/// How grow, shrink, and boundary queries determine what a neighbor is
+/// (i.e. whether neighbors are connected by an edge or share a face)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectionStep {
+    /// Vertices or faces sharing an edge.
+    Edge,
+    /// Vertices sharing a face, or faces sharing a vertex.
+    Face,
 }
 
-/// A view of a selection representing the vertices on its boundary, as well as
-/// the sets of vertices adjacent to the boundary (the "inner" and "outer" rings).
-/// This is a read-only view: it does not modify the selection itself, but can be
-/// used to implement grow and shrink operations, or by operations that need
-/// boundary information, such as recomputing vertex normals after translating
-/// a selection.
+#[derive(Default)]
+pub(super) struct BoundarySets<K> {
+    pub(super) inner: OnceLock<HashSet<K>>,
+    pub(super) outer: OnceLock<HashSet<K>>,
+}
+
+impl<K> BoundarySets<K> {
+    fn side(&self, selected: bool) -> &OnceLock<HashSet<K>> {
+        if selected { &self.inner } else { &self.outer }
+    }
+}
+
+/// Lazy sets shared across boundary views. Position edits leave them cached.
+#[derive(Default)]
+pub(super) struct BoundaryCache {
+    pub(super) edge_step_vertices: BoundarySets<VertKey>,
+    pub(super) face_step_vertices: BoundarySets<VertKey>,
+    pub(super) edge_step_faces: BoundarySets<FaceKey>,
+    pub(super) face_step_faces: BoundarySets<FaceKey>,
+    pub(super) mixed_faces: OnceLock<HashSet<FaceKey>>,
+}
+
+/// The selected (inner) and unselected (outer) sides of a selection boundary.
 ///
-/// The boundary and its rings are computed lazily when requested and reused
-/// until invalidated by a selection change. Translating vertices does not change
-/// which components belong to these sets, so position edits leave them cached.
-///
-/// The inner and outer rings use edge adjacency: a vertex must share an edge
-/// with a boundary vertex, not merely belong to the same face.
+/// Each set is lazily computed, and reused until the selection or topology changes.
 pub struct SelectionBoundary<'a> {
     selection: SelectionView<'a>,
     cache: &'a BoundaryCache,
@@ -55,138 +58,153 @@ impl<'a> SelectionBoundary<'a> {
         }
     }
 
-    /// The vertices on the boundary of the selection: any vertex that is selected
-    /// and belongs to a face that has at least one unselected vertex.
-    pub fn vertices(&self) -> impl Iterator<Item = VertKey> + '_ {
-        self.boundary_vertices().iter().copied()
+    /// Selected vertices adjacent to unselected vertices.
+    pub fn inner_vertices(&self, step: SelectionStep) -> impl Iterator<Item = VertKey> + '_ {
+        self.vertex_boundary(step, true).iter().copied()
     }
 
-    /// Selected vertices adjacent to the boundary (the inner ring), excluding
-    /// the boundary itself. These vertices remain selected after vertex-level shrink.
-    pub fn inner_vertices(&self) -> impl Iterator<Item = VertKey> + '_ {
-        self.vertex_ring(true).iter().copied()
+    /// Unselected vertices adjacent to selected vertices.
+    pub fn outer_vertices(&self, step: SelectionStep) -> impl Iterator<Item = VertKey> + '_ {
+        self.vertex_boundary(step, false).iter().copied()
     }
 
-    /// Unselected vertices adjacent to the boundary (the outer ring).
-    /// These are the vertices added by vertex-level grow.
-    pub fn outer_vertices(&self) -> impl Iterator<Item = VertKey> + '_ {
-        self.vertex_ring(false).iter().copied()
+    /// Selected faces adjacent to unselected faces.
+    pub fn inner_faces(&self, step: SelectionStep) -> impl Iterator<Item = FaceKey> + '_ {
+        self.face_boundary(step, true).iter().copied()
     }
 
-    /// The faces on the inner side of the selection boundary: faces touching
-    /// one or more boundary vertices and one or more inner vertices.
-    pub fn inner_faces(&self) -> impl Iterator<Item = FaceKey> + '_ {
-        self.cache
-            .inner_faces
-            .get_or_init(|| self.collect_faces(self.vertex_ring(true)))
-            .iter()
-            .copied()
+    /// Unselected faces adjacent to selected faces.
+    pub fn outer_faces(&self, step: SelectionStep) -> impl Iterator<Item = FaceKey> + '_ {
+        self.face_boundary(step, false).iter().copied()
     }
 
-    /// The faces on the outer side of the selection boundary: faces touching
-    /// one or more boundary vertices and one or more outer vertices.
-    pub fn outer_faces(&self) -> impl Iterator<Item = FaceKey> + '_ {
-        self.cache
-            .outer_faces
-            .get_or_init(|| self.collect_faces(self.vertex_ring(false)))
-            .iter()
-            .copied()
-    }
-
-    /// Lazily compute the boundary vertices when requested. A vertex is on the boundary
-    /// iff it is selected and belongs to a face that has at least one unselected vertex.
-    fn boundary_vertices(&self) -> &HashSet<VertKey> {
-        self.cache.vertices.get_or_init(|| {
-            let mut boundary = HashSet::new();
+    /// Faces with both selected and unselected vertices.
+    /// In addition to being useful intermediate state, this also identifies the set of faces whose normals
+    /// need updating in flat-shading mode (thus, it's public to the crate, but not externally).
+    pub(crate) fn mixed_faces(&self) -> &HashSet<FaceKey> {
+        self.cache.mixed_faces.get_or_init(|| {
+            let mut mixed = HashSet::new();
             let mut visited_faces = HashSet::new();
-            for key in self.selection.verts() {
-                let vertex = VertRef {
-                    topo: self.selection.topo,
-                    attrs: self.selection.attrs,
-                    key,
-                };
 
-                for face_key in vertex.faces() {
+            for vert_key in self.selection.verts() {
+                for face_key in self.vertex(vert_key).faces() {
                     if !visited_faces.insert(face_key) {
                         continue;
                     }
 
-                    let face = FaceRef {
-                        topo: self.selection.topo,
-                        attrs: self.selection.attrs,
-                        key: face_key,
-                    };
-
-                    if face.verts().any(|key| !self.selection.contains(key)) {
-                        boundary.extend(face.verts().filter(|&key| self.selection.contains(key)));
+                    if self
+                        .face(face_key)
+                        .verts()
+                        .all(|key| self.selection.contains(key))
+                    {
+                        continue;
                     }
+
+                    mixed.insert(face_key);
                 }
+            }
+
+            mixed
+        })
+    }
+
+    fn vertex_boundary(&self, step: SelectionStep, selected: bool) -> &HashSet<VertKey> {
+        let cache = match step {
+            SelectionStep::Edge => &self.cache.edge_step_vertices,
+            SelectionStep::Face => &self.cache.face_step_vertices,
+        };
+
+        cache.side(selected).get_or_init(|| {
+            let mut boundary = HashSet::new();
+
+            for key in self.selection.verts() {
+                for edge_key in self.vertex(key).edges() {
+                    let edge = &self.selection.topo.edges[edge_key];
+                    // When stepping by face, skip edges that are part of a face (i.e., not wire edges)
+                    if step == SelectionStep::Face && edge.loop_.is_some() {
+                        continue;
+                    }
+
+                    // If neighbor is selected, this vertex is not on the boundary
+                    let neighbor = edge.verts[usize::from(edge.verts[0] == key)];
+                    if self.selection.contains(neighbor) {
+                        continue;
+                    }
+
+                    boundary.insert(if selected { key } else { neighbor });
+                }
+            }
+
+            if step == SelectionStep::Edge {
+                return boundary;
+            }
+
+            for &face_key in self.mixed_faces() {
+                boundary.extend(
+                    self.face(face_key)
+                        .verts()
+                        .filter(|&key| self.selection.contains(key) == selected),
+                );
             }
 
             boundary
         })
     }
 
-    /// Lazily collect the neighbors of the boundary, excluding the boundary itself.
-    /// `selected` filters membership: `true` collects selected neighbors (the inner
-    /// ring), while `false` collects unselected neighbors (the outer ring).
-    fn vertex_ring(&self, selected: bool) -> &HashSet<VertKey> {
-        let cache = if selected {
-            &self.cache.inner_vertices
-        } else {
-            &self.cache.outer_vertices
+    fn face_boundary(&self, step: SelectionStep, selected: bool) -> &HashSet<FaceKey> {
+        let cache = match step {
+            SelectionStep::Edge => &self.cache.edge_step_faces,
+            SelectionStep::Face => &self.cache.face_step_faces,
         };
 
-        cache.get_or_init(|| {
-            let boundary = self.boundary_vertices();
-            let mut ring = HashSet::new();
+        cache.side(selected).get_or_init(|| {
+            let mut boundary = HashSet::new();
+            for key in self.selection.faces() {
+                let face = self.face(key);
+                let mut visit = |neighbor| {
+                    if self.selection.contains(neighbor) {
+                        return;
+                    }
 
-            for &key in boundary {
-                let vertex = VertRef {
-                    topo: self.selection.topo,
-                    attrs: self.selection.attrs,
-                    key,
+                    boundary.insert(if selected { key } else { neighbor });
                 };
 
-                ring.extend(vertex.neighbors().filter(|key| {
-                    !boundary.contains(key) && self.selection.contains(*key) == selected
-                }));
-            }
-
-            ring
-        })
-    }
-
-    /// Collect faces touching both a boundary vertex and a vertex in `included`.
-    /// Passing the inner vertices collects the inner faces; passing the outer
-    /// vertices collects the outer faces. Each face is collected once.
-    fn collect_faces(&self, included: &HashSet<VertKey>) -> HashSet<FaceKey> {
-        let mut faces = HashSet::new();
-        let mut visited = HashSet::new();
-
-        for key in self.vertices() {
-            let vertex = VertRef {
-                topo: self.selection.topo,
-                attrs: self.selection.attrs,
-                key,
-            };
-
-            for face_key in vertex.faces() {
-                if !visited.insert(face_key) {
+                if step == SelectionStep::Edge {
+                    for edge_key in face.edges() {
+                        let edge = EdgeRef {
+                            topo: self.selection.topo,
+                            key: edge_key,
+                        };
+                        for neighbor in edge.faces() {
+                            visit(neighbor);
+                        }
+                    }
                     continue;
                 }
 
-                let face = FaceRef {
-                    topo: self.selection.topo,
-                    attrs: self.selection.attrs,
-                    key: face_key,
-                };
-
-                if face.verts().any(|key| included.contains(&key)) {
-                    faces.insert(face_key);
+                for vert_key in face.verts() {
+                    for neighbor in self.vertex(vert_key).faces() {
+                        visit(neighbor);
+                    }
                 }
             }
+            boundary
+        })
+    }
+
+    fn vertex(&self, key: VertKey) -> VertRef<'a> {
+        VertRef {
+            topo: self.selection.topo,
+            attrs: self.selection.attrs,
+            key,
         }
-        faces
+    }
+
+    fn face(&self, key: FaceKey) -> FaceRef<'a> {
+        FaceRef {
+            topo: self.selection.topo,
+            attrs: self.selection.attrs,
+            key,
+        }
     }
 }

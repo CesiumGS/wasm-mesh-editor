@@ -36,30 +36,79 @@ fn quad_grid(columns: usize, rows: usize) -> Mesh {
 }
 
 #[test]
+fn edge_step_shrink_retains_opposite_quad_corner() {
+    for step in [SelectionStep::Edge, SelectionStep::Face] {
+        let mut mesh = quad_grid(1, 1);
+        let verts: Vec<_> = mesh.topology.verts.keys().collect();
+        mesh.selection_mut().select(&verts[..3]);
+        mesh.selection_mut().shrink(step);
+        let expected = if step == SelectionStep::Edge {
+            vec![verts[0]]
+        } else {
+            vec![]
+        };
+        assert_eq!(mesh.selection().verts().collect::<Vec<_>>(), expected);
+    }
+}
+
+#[test]
 fn boundary_cache_is_lazy_and_shared_across_accessor_calls() {
     let mut mesh = triangle();
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
     mesh.selection_mut().select(&verts[..1]);
     {
         let boundary = mesh.selection().boundary();
-        assert!(mesh.selection.boundary.vertices.get().is_none());
-        assert_eq!(boundary.vertices().count(), 1);
+        assert_boundary_cache_initialized(&mesh, false);
+        assert_eq!(boundary.inner_vertices(SelectionStep::Edge).count(), 1);
     }
     let cache = &mesh.selection.boundary;
-    assert_eq!(cache.vertices.get(), Some(&HashSet::from([verts[0]])));
-    assert!(cache.inner_vertices.get().is_none());
-    assert!(cache.outer_vertices.get().is_none());
-    assert!(cache.inner_faces.get().is_none());
-    assert!(cache.outer_faces.get().is_none());
+    assert_eq!(
+        cache.edge_step_vertices.inner.get(),
+        Some(&HashSet::from([verts[0]]))
+    );
+    assert_eq!(
+        boundary_cache_state(&mesh),
+        [true, false, false, false, false, false, false, false, false]
+    );
 
-    assert_eq!(mesh.selection().boundary().outer_faces().count(), 1);
-    assert_eq!(cache.outer_vertices.get().unwrap().len(), 2);
-    assert_eq!(cache.outer_faces.get().unwrap().len(), 1);
-    assert!(cache.inner_vertices.get().is_none());
-    assert!(cache.inner_faces.get().is_none());
-    assert_eq!(mesh.selection().boundary().inner_faces().count(), 0);
-    assert!(cache.inner_vertices.get().unwrap().is_empty());
-    assert!(cache.inner_faces.get().unwrap().is_empty());
+    let boundary = mesh.selection().boundary();
+    assert_eq!(boundary.inner_vertices(SelectionStep::Face).count(), 1);
+    assert_eq!(cache.mixed_faces.get().unwrap().len(), 1);
+    assert!(cache.face_step_vertices.outer.get().is_none());
+    assert!(std::ptr::eq(
+        boundary.mixed_faces(),
+        mesh.selection().boundary().mixed_faces()
+    ));
+    assert_eq!(boundary.outer_vertices(SelectionStep::Face).count(), 2);
+    assert_eq!(boundary.outer_faces(SelectionStep::Face).count(), 0);
+    assert!(cache.face_step_faces.outer.get().unwrap().is_empty());
+    assert!(cache.face_step_faces.inner.get().is_none());
+}
+
+#[test]
+fn boundary_queries_only_initialize_their_dependencies() {
+    for query in 0..8 {
+        let mut mesh = quad_grid(3, 3);
+        let face = mesh.topology.faces.keys().nth(4).unwrap();
+        mesh.selection_mut().set_level(ComponentTypes::FACE);
+        mesh.selection_mut().select(&[face]);
+        let boundary = mesh.selection().boundary();
+        match query {
+            0 => boundary.inner_vertices(SelectionStep::Edge).count(),
+            1 => boundary.outer_vertices(SelectionStep::Edge).count(),
+            2 => boundary.inner_vertices(SelectionStep::Face).count(),
+            3 => boundary.outer_vertices(SelectionStep::Face).count(),
+            4 => boundary.inner_faces(SelectionStep::Edge).count(),
+            5 => boundary.outer_faces(SelectionStep::Edge).count(),
+            6 => boundary.inner_faces(SelectionStep::Face).count(),
+            7 => boundary.outer_faces(SelectionStep::Face).count(),
+            _ => unreachable!(),
+        };
+        let mut expected = [false; 9];
+        expected[query] = true;
+        expected[8] = query == 2 || query == 3;
+        assert_eq!(boundary_cache_state(&mesh), expected, "query {query}");
+    }
 }
 
 #[test]
@@ -70,21 +119,32 @@ fn boundary_cache_preserves_mesh_send_and_sync() {
 
 fn populate_boundary_cache(mesh: &Mesh) {
     let boundary = mesh.selection().boundary();
-    boundary.vertices().count();
-    boundary.inner_vertices().count();
-    boundary.outer_vertices().count();
-    boundary.inner_faces().count();
-    boundary.outer_faces().count();
+    for step in [SelectionStep::Edge, SelectionStep::Face] {
+        boundary.inner_vertices(step).count();
+        boundary.outer_vertices(step).count();
+        boundary.inner_faces(step).count();
+        boundary.outer_faces(step).count();
+    }
     assert_boundary_cache_initialized(mesh, true);
 }
 
-fn assert_boundary_cache_initialized(mesh: &Mesh, expected: bool) {
+fn boundary_cache_state(mesh: &Mesh) -> [bool; 9] {
     let cache = &mesh.selection.boundary;
-    assert_eq!(cache.vertices.get().is_some(), expected);
-    assert_eq!(cache.inner_vertices.get().is_some(), expected);
-    assert_eq!(cache.outer_vertices.get().is_some(), expected);
-    assert_eq!(cache.inner_faces.get().is_some(), expected);
-    assert_eq!(cache.outer_faces.get().is_some(), expected);
+    [
+        cache.edge_step_vertices.inner.get().is_some(),
+        cache.edge_step_vertices.outer.get().is_some(),
+        cache.face_step_vertices.inner.get().is_some(),
+        cache.face_step_vertices.outer.get().is_some(),
+        cache.edge_step_faces.inner.get().is_some(),
+        cache.edge_step_faces.outer.get().is_some(),
+        cache.face_step_faces.inner.get().is_some(),
+        cache.face_step_faces.outer.get().is_some(),
+        cache.mixed_faces.get().is_some(),
+    ]
+}
+
+fn assert_boundary_cache_initialized(mesh: &Mesh, expected: bool) {
+    assert_eq!(boundary_cache_state(mesh), [expected; 9]);
 }
 
 #[test]
@@ -96,28 +156,55 @@ fn boundary_cache_invalidates_on_selection_edits() {
     mesh.selection_mut().select(&verts[..1]);
     assert_boundary_cache_initialized(&mesh, false);
     populate_boundary_cache(&mesh);
-    assert_eq!(mesh.selection().boundary().vertices().count(), 1);
+    assert_eq!(
+        mesh.selection()
+            .boundary()
+            .inner_vertices(SelectionStep::Face)
+            .count(),
+        1
+    );
 
-    mesh.selection_mut().grow();
+    mesh.selection_mut().grow(SelectionStep::Edge);
     assert_boundary_cache_initialized(&mesh, false);
     populate_boundary_cache(&mesh);
-    assert_eq!(mesh.selection().boundary().vertices().count(), 3);
+    assert_eq!(
+        mesh.selection()
+            .boundary()
+            .inner_vertices(SelectionStep::Face)
+            .count(),
+        3
+    );
 
-    mesh.selection_mut().shrink();
+    mesh.selection_mut().shrink(SelectionStep::Face);
     assert_boundary_cache_initialized(&mesh, false);
     populate_boundary_cache(&mesh);
-    assert_eq!(mesh.selection().boundary().vertices().count(), 0);
+    assert_eq!(
+        mesh.selection()
+            .boundary()
+            .inner_vertices(SelectionStep::Face)
+            .count(),
+        0
+    );
 
     mesh.selection_mut().set(&verts[..2]);
     assert_boundary_cache_initialized(&mesh, false);
     populate_boundary_cache(&mesh);
-    assert_eq!(mesh.selection().boundary().vertices().count(), 2);
+    assert_eq!(
+        mesh.selection()
+            .boundary()
+            .inner_vertices(SelectionStep::Face)
+            .count(),
+        2
+    );
 
     mesh.selection_mut().deselect(&verts[..1]);
     assert_boundary_cache_initialized(&mesh, false);
     populate_boundary_cache(&mesh);
     assert_eq!(
-        mesh.selection().boundary().vertices().collect::<Vec<_>>(),
+        mesh.selection()
+            .boundary()
+            .inner_vertices(SelectionStep::Face)
+            .collect::<Vec<_>>(),
         vec![verts[1]]
     );
 
@@ -125,21 +212,36 @@ fn boundary_cache_invalidates_on_selection_edits() {
     assert_boundary_cache_initialized(&mesh, false);
     populate_boundary_cache(&mesh);
     assert_eq!(
-        mesh.selection().boundary().vertices().collect::<Vec<_>>(),
+        mesh.selection()
+            .boundary()
+            .inner_vertices(SelectionStep::Face)
+            .collect::<Vec<_>>(),
         vec![verts[2]]
     );
 
     mesh.selection_mut().clear();
     assert_boundary_cache_initialized(&mesh, false);
     populate_boundary_cache(&mesh);
-    assert_eq!(mesh.selection().boundary().vertices().count(), 0);
+    assert_eq!(
+        mesh.selection()
+            .boundary()
+            .inner_vertices(SelectionStep::Face)
+            .count(),
+        0
+    );
 
     mesh.selection_mut().select(&verts[..1]);
     populate_boundary_cache(&mesh);
     mesh.selection_mut().set_level(ComponentTypes::FACE);
     assert_boundary_cache_initialized(&mesh, false);
     populate_boundary_cache(&mesh);
-    assert_eq!(mesh.selection().boundary().vertices().count(), 0);
+    assert_eq!(
+        mesh.selection()
+            .boundary()
+            .inner_vertices(SelectionStep::Face)
+            .count(),
+        0
+    );
 }
 
 #[test]
@@ -152,12 +254,24 @@ fn boundary_cache_invalidates_on_cascaded_vertex_changes() {
     mesh.selection_mut().select(&faces[..1]);
     assert_boundary_cache_initialized(&mesh, false);
     populate_boundary_cache(&mesh);
-    assert_eq!(mesh.selection().boundary().vertices().count(), 2);
+    assert_eq!(
+        mesh.selection()
+            .boundary()
+            .inner_vertices(SelectionStep::Face)
+            .count(),
+        2
+    );
 
     mesh.selection_mut().deselect(&faces[..1]);
     assert_boundary_cache_initialized(&mesh, false);
     populate_boundary_cache(&mesh);
-    assert_eq!(mesh.selection().boundary().vertices().count(), 0);
+    assert_eq!(
+        mesh.selection()
+            .boundary()
+            .inner_vertices(SelectionStep::Face)
+            .count(),
+        0
+    );
 }
 
 #[test]
@@ -180,24 +294,31 @@ fn boundary_cache_survives_no_ops_and_position_edits() {
     mesh.attributes.positions[verts[0]] += Vec3::Z;
     assert_boundary_cache_initialized(&mesh, true);
     assert_eq!(
-        mesh.selection().boundary().vertices().collect::<Vec<_>>(),
+        mesh.selection()
+            .boundary()
+            .inner_vertices(SelectionStep::Face)
+            .collect::<Vec<_>>(),
         vec![verts[0]]
     );
     assert_boundary_cache_initialized(&mesh, true);
 
     mesh.selection_mut().select(&verts);
     populate_boundary_cache(&mesh);
-    mesh.selection_mut().grow();
-    mesh.selection_mut().shrink();
-    assert_boundary_cache_initialized(&mesh, true);
-    assert_eq!(mesh.selection().boundary().vertices().count(), 0);
+    for step in [SelectionStep::Edge, SelectionStep::Face] {
+        mesh.selection_mut().grow(step);
+        mesh.selection_mut().shrink(step);
+        assert_boundary_cache_initialized(&mesh, true);
+        assert_eq!(mesh.selection().boundary().inner_vertices(step).count(), 0);
+    }
 
     mesh.selection_mut().clear();
     populate_boundary_cache(&mesh);
     mesh.selection_mut().clear();
-    mesh.selection_mut().grow();
-    mesh.selection_mut().shrink();
-    assert_boundary_cache_initialized(&mesh, true);
+    for step in [SelectionStep::Edge, SelectionStep::Face] {
+        mesh.selection_mut().grow(step);
+        mesh.selection_mut().shrink(step);
+        assert_boundary_cache_initialized(&mesh, true);
+    }
 }
 
 #[test]
@@ -206,24 +327,36 @@ fn boundary_cache_can_be_invalidated_after_topology_edits() {
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
     mesh.selection_mut().select(&verts[..1]);
     populate_boundary_cache(&mesh);
-    assert_eq!(mesh.selection().boundary().outer_vertices().count(), 2);
+    assert_eq!(
+        mesh.selection()
+            .boundary()
+            .outer_vertices(SelectionStep::Edge)
+            .count(),
+        2
+    );
 
     mesh.topology.insert_edge([verts[0], verts[3]]);
     mesh.selection.invalidate_boundary();
     assert_boundary_cache_initialized(&mesh, false);
-    assert_eq!(mesh.selection().boundary().outer_vertices().count(), 3);
+    assert_eq!(
+        mesh.selection()
+            .boundary()
+            .outer_vertices(SelectionStep::Edge)
+            .count(),
+        3
+    );
 }
 
 #[test]
 fn grow_adds_one_edge_ring_at_a_time() {
     let mut mesh = quad_grid(4, 4);
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
-    mesh.selection_mut().grow();
-    mesh.selection_mut().shrink();
+    mesh.selection_mut().grow(SelectionStep::Edge);
+    mesh.selection_mut().shrink(SelectionStep::Edge);
     assert!(mesh.selection().is_empty());
 
     mesh.selection_mut().select(&[verts[12]]);
-    mesh.selection_mut().grow();
+    mesh.selection_mut().grow(SelectionStep::Edge);
     assert_eq!(
         mesh.selection().verts().collect::<HashSet<_>>(),
         [7, 11, 12, 13, 17].map(|index| verts[index]).into()
@@ -232,12 +365,12 @@ fn grow_adds_one_edge_ring_at_a_time() {
     assert_eq!(mesh.selection().faces().count(), 0);
 
     for count in [13, 21, 25] {
-        mesh.selection_mut().grow();
+        mesh.selection_mut().grow(SelectionStep::Edge);
         assert_eq!(mesh.selection().verts().count(), count);
     }
     assert_eq!(mesh.selection().faces().count(), 16);
-    mesh.selection_mut().grow();
-    mesh.selection_mut().shrink();
+    mesh.selection_mut().grow(SelectionStep::Edge);
+    mesh.selection_mut().shrink(SelectionStep::Edge);
     assert_eq!(mesh.selection().verts().count(), 25);
     assert_eq!(mesh.selection().faces().count(), 16);
     assert_eq!(mesh.selection().level(), ComponentTypes::VERTEX);
@@ -249,17 +382,23 @@ fn shrink_removes_the_boundary_and_recomputes_it() {
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
     let selected = [6, 7, 8, 11, 12, 13, 16, 17, 18].map(|index| verts[index]);
     mesh.selection_mut().select(&selected);
-    mesh.selection_mut().shrink();
+    mesh.selection_mut().shrink(SelectionStep::Edge);
     assert_eq!(
         mesh.selection().verts().collect::<Vec<_>>(),
         vec![verts[12]]
     );
     assert_eq!(mesh.selection().edges().count(), 0);
     assert_eq!(mesh.selection().faces().count(), 0);
-    assert_eq!(mesh.selection().boundary().vertices().count(), 1);
-    mesh.selection_mut().shrink();
+    assert_eq!(
+        mesh.selection()
+            .boundary()
+            .inner_vertices(SelectionStep::Edge)
+            .count(),
+        1
+    );
+    mesh.selection_mut().shrink(SelectionStep::Edge);
     assert!(mesh.selection().is_empty());
-    mesh.selection_mut().shrink();
+    mesh.selection_mut().shrink(SelectionStep::Edge);
     assert!(mesh.selection().is_empty());
 }
 
@@ -269,33 +408,33 @@ fn boundary_of_empty_partial_and_full_selection() {
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
     let face = mesh.topology.faces.keys().next().unwrap();
 
-    let boundary = mesh.selection().boundary();
-    assert_eq!(boundary.vertices().count(), 0);
-    assert_eq!(boundary.inner_vertices().count(), 0);
-    assert_eq!(boundary.outer_vertices().count(), 0);
-    assert_eq!(boundary.inner_faces().count(), 0);
-    assert_eq!(boundary.outer_faces().count(), 0);
+    for step in [SelectionStep::Edge, SelectionStep::Face] {
+        for selected in [&verts[..0], &verts[..]] {
+            mesh.selection_mut().set(selected);
+            let boundary = mesh.selection().boundary();
+            for _ in 0..2 {
+                assert_eq!(boundary.inner_vertices(step).count(), 0);
+                assert_eq!(boundary.outer_vertices(step).count(), 0);
+                assert_eq!(boundary.inner_faces(step).count(), 0);
+                assert_eq!(boundary.outer_faces(step).count(), 0);
+                assert!(boundary.mixed_faces().is_empty());
+            }
+        }
 
-    mesh.selection_mut().select(&verts[..1]);
-    let boundary = mesh.selection().boundary();
-    assert_eq!(boundary.vertices().collect::<Vec<_>>(), vec![verts[0]]);
-    assert_eq!(boundary.inner_vertices().count(), 0);
-    assert_eq!(boundary.inner_faces().count(), 0);
-    assert_eq!(
-        boundary.outer_vertices().collect::<HashSet<_>>(),
-        HashSet::from([verts[1], verts[2]])
-    );
-    assert_eq!(boundary.outer_faces().collect::<Vec<_>>(), vec![face]);
-    assert_eq!(mesh.selection().len(), 1);
-
-    mesh.selection_mut().select(&verts[1..]);
-    let boundary = mesh.selection().boundary();
-    for _ in 0..2 {
-        assert_eq!(boundary.vertices().count(), 0);
-        assert_eq!(boundary.inner_vertices().count(), 0);
-        assert_eq!(boundary.outer_vertices().count(), 0);
-        assert_eq!(boundary.inner_faces().count(), 0);
-        assert_eq!(boundary.outer_faces().count(), 0);
+        mesh.selection_mut().set(&verts[..1]);
+        let boundary = mesh.selection().boundary();
+        assert_eq!(
+            boundary.inner_vertices(step).collect::<Vec<_>>(),
+            vec![verts[0]]
+        );
+        assert_eq!(boundary.inner_faces(step).count(), 0);
+        assert_eq!(
+            boundary.outer_vertices(step).collect::<HashSet<_>>(),
+            HashSet::from([verts[1], verts[2]])
+        );
+        assert_eq!(boundary.outer_faces(step).count(), 0);
+        assert_eq!(boundary.mixed_faces(), &HashSet::from([face]));
+        assert_eq!(mesh.selection().len(), 1);
     }
 }
 
@@ -308,35 +447,43 @@ fn boundary_rings_partition_a_selected_grid_patch() {
     mesh.selection_mut().select(&selected);
     let boundary = mesh.selection().boundary();
     let inner_faces: HashSet<_> = [5, 6, 9, 10].map(|index| faces[index]).into();
-    let outer_faces: HashSet<_> = faces
-        .iter()
-        .copied()
-        .filter(|key| !inner_faces.contains(key))
-        .collect();
-
-    for _ in 0..2 {
-        assert_eq!(boundary.outer_faces().collect::<HashSet<_>>(), outer_faces);
-        assert_eq!(boundary.inner_faces().collect::<HashSet<_>>(), inner_faces);
+    for step in [SelectionStep::Edge, SelectionStep::Face] {
+        let outer_faces: HashSet<_> = faces
+            .iter()
+            .enumerate()
+            .filter(|(index, key)| {
+                !inner_faces.contains(key)
+                    && (step == SelectionStep::Face || ![0, 3, 12, 15].contains(index))
+            })
+            .map(|(_, &key)| key)
+            .collect();
+        let outer_vertices: HashSet<_> = verts
+            .iter()
+            .enumerate()
+            .filter(|(index, key)| {
+                !selected.contains(key)
+                    && (step == SelectionStep::Face || ![0, 4, 20, 24].contains(index))
+            })
+            .map(|(_, &key)| key)
+            .collect();
         assert_eq!(
-            boundary.vertices().collect::<HashSet<_>>(),
+            boundary.outer_faces(step).collect::<HashSet<_>>(),
+            outer_faces
+        );
+        assert_eq!(
+            boundary.inner_faces(step).collect::<HashSet<_>>(),
+            inner_faces
+        );
+        assert_eq!(
+            boundary.inner_vertices(step).collect::<HashSet<_>>(),
             [6, 7, 8, 11, 13, 16, 17, 18]
                 .map(|index| verts[index])
                 .into()
         );
         assert_eq!(
-            boundary.inner_vertices().collect::<Vec<_>>(),
-            vec![verts[12]]
+            boundary.outer_vertices(step).collect::<HashSet<_>>(),
+            outer_vertices
         );
-        assert_eq!(
-            boundary.outer_vertices().collect::<HashSet<_>>(),
-            [1, 2, 3, 5, 9, 10, 14, 15, 19, 21, 22, 23]
-                .map(|index| verts[index])
-                .into()
-        );
-        assert_eq!(boundary.outer_faces().count(), 12);
-        assert_eq!(boundary.inner_faces().count(), 4);
-        assert_eq!(boundary.vertices().count(), 8);
-        assert_eq!(boundary.outer_vertices().count(), 12);
     }
     assert_eq!(
         mesh.selection().verts().collect::<HashSet<_>>(),
@@ -345,36 +492,34 @@ fn boundary_rings_partition_a_selected_grid_patch() {
 }
 
 #[test]
-fn boundary_uses_faces_but_rings_use_edges_on_polygons() {
+fn vertex_steps_differ_on_polygon_corners() {
     let mut mesh = quad_grid(1, 1);
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
     let face = mesh.topology.faces.keys().next().unwrap();
     mesh.selection_mut().select(&verts[..1]);
     let boundary = mesh.selection().boundary();
-    assert_eq!(boundary.inner_faces().count(), 0);
-    assert_eq!(boundary.outer_faces().collect::<Vec<_>>(), vec![face]);
+    assert_eq!(boundary.outer_faces(SelectionStep::Face).count(), 0);
+    assert_eq!(boundary.mixed_faces(), &HashSet::from([face]));
     assert_eq!(
-        boundary.outer_vertices().collect::<HashSet<_>>(),
+        boundary
+            .outer_vertices(SelectionStep::Edge)
+            .collect::<HashSet<_>>(),
         HashSet::from([verts[1], verts[2]])
     );
+    assert_eq!(
+        boundary
+            .outer_vertices(SelectionStep::Face)
+            .collect::<HashSet<_>>(),
+        HashSet::from([verts[1], verts[2], verts[3]])
+    );
 
-    mesh.selection_mut().grow();
-    let boundary = mesh.selection().boundary();
-    assert_eq!(
-        boundary.vertices().collect::<HashSet<_>>(),
-        HashSet::from([verts[0], verts[1], verts[2]])
-    );
-    assert_eq!(boundary.inner_vertices().count(), 0);
-    assert_eq!(
-        boundary.outer_vertices().collect::<Vec<_>>(),
-        vec![verts[3]]
-    );
-    mesh.selection_mut().shrink();
-    assert!(mesh.selection().is_empty());
+    mesh.selection_mut().grow(SelectionStep::Face);
+    assert_eq!(mesh.selection().verts().count(), 4);
+    assert!(mesh.selection().contains(face));
 }
 
 #[test]
-fn boundary_only_faces_belong_to_neither_face_ring() {
+fn selected_faces_need_no_interior_vertex_to_have_a_boundary() {
     let mut mesh = Mesh::from_buffers(MeshBuffers {
         positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z, -Vec3::Y, -Vec3::X],
         normals: None,
@@ -387,13 +532,17 @@ fn boundary_only_faces_belong_to_neither_face_ring() {
     let faces: Vec<_> = mesh.topology.faces.keys().collect();
     mesh.selection_mut().select(&verts[..3]);
     let boundary = mesh.selection().boundary();
-    assert_eq!(boundary.inner_vertices().count(), 0);
-    assert_eq!(boundary.inner_faces().count(), 0);
-    assert_eq!(
-        boundary.outer_faces().collect::<HashSet<_>>(),
-        faces[1..].iter().copied().collect()
-    );
-    assert_eq!(boundary.vertices().count(), 3);
+    for step in [SelectionStep::Edge, SelectionStep::Face] {
+        assert_eq!(
+            boundary.inner_faces(step).collect::<Vec<_>>(),
+            vec![faces[0]]
+        );
+        assert_eq!(
+            boundary.outer_faces(step).collect::<HashSet<_>>(),
+            faces[1..].iter().copied().collect()
+        );
+        assert_eq!(boundary.inner_vertices(step).count(), 3);
+    }
     assert!(mesh.selection().contains(faces[0]));
 }
 
@@ -439,47 +588,71 @@ fn boundary_handles_non_manifold_faces_wires_and_isolated_vertices() {
     mesh.selection_mut()
         .select(&[verts[0], verts[1], verts[2], verts[6]]);
     let boundary = mesh.selection().boundary();
-    assert_eq!(
-        boundary.vertices().collect::<HashSet<_>>(),
-        HashSet::from([verts[0], verts[1]])
-    );
-    assert_eq!(
-        boundary.inner_vertices().collect::<Vec<_>>(),
-        vec![verts[2]]
-    );
-    assert_eq!(
-        boundary.outer_vertices().collect::<HashSet<_>>(),
-        HashSet::from([verts[3], verts[4], verts[5]])
-    );
-    assert_eq!(boundary.inner_faces().collect::<Vec<_>>(), vec![faces[0]]);
-    assert_eq!(
-        boundary.outer_faces().collect::<HashSet<_>>(),
-        HashSet::from([faces[1], faces[2]])
-    );
-    assert_eq!(boundary.outer_faces().count(), 2);
+    for step in [SelectionStep::Edge, SelectionStep::Face] {
+        assert_eq!(
+            boundary.inner_vertices(step).collect::<HashSet<_>>(),
+            HashSet::from([verts[0], verts[1]])
+        );
+        assert_eq!(
+            boundary.outer_vertices(step).collect::<HashSet<_>>(),
+            HashSet::from([verts[3], verts[4], verts[5]])
+        );
+        assert_eq!(
+            boundary.inner_faces(step).collect::<Vec<_>>(),
+            vec![faces[0]]
+        );
+        assert_eq!(
+            boundary.outer_faces(step).collect::<HashSet<_>>(),
+            HashSet::from([faces[1], faces[2]])
+        );
+    }
 
-    mesh.selection_mut().shrink();
+    mesh.selection_mut().shrink(SelectionStep::Edge);
     assert_eq!(
         mesh.selection().verts().collect::<HashSet<_>>(),
         HashSet::from([verts[2], verts[6]])
     );
-    mesh.selection_mut().set(&verts[..5]);
-    assert_eq!(mesh.selection().boundary().vertices().count(), 0);
-    mesh.selection_mut().grow();
-    mesh.selection_mut().shrink();
-    assert_eq!(mesh.selection().verts().count(), 5);
-    assert!(!mesh.selection().contains(verts[5]));
+    for step in [SelectionStep::Edge, SelectionStep::Face] {
+        mesh.selection_mut().set(&verts[..5]);
+        assert_eq!(
+            mesh.selection()
+                .boundary()
+                .inner_vertices(step)
+                .collect::<Vec<_>>(),
+            vec![verts[0]]
+        );
+        assert!(mesh.selection().boundary().mixed_faces().is_empty());
+        mesh.selection_mut().grow(step);
+        mesh.selection_mut().shrink(step);
+        assert_eq!(mesh.selection().verts().count(), 6);
+        assert!(mesh.selection().contains(verts[5]));
 
-    mesh.selection_mut().set(&verts[5..]);
-    let boundary = mesh.selection().boundary();
-    assert_eq!(boundary.vertices().count(), 0);
-    assert_eq!(boundary.inner_vertices().count(), 0);
-    assert_eq!(boundary.outer_vertices().count(), 0);
-    assert_eq!(boundary.inner_faces().count(), 0);
-    assert_eq!(boundary.outer_faces().count(), 0);
-    mesh.selection_mut().grow();
-    mesh.selection_mut().shrink();
-    assert_eq!(mesh.selection().verts().count(), 2);
+        mesh.selection_mut().set(&verts[5..]);
+        let boundary = mesh.selection().boundary();
+        assert_eq!(
+            boundary.inner_vertices(step).collect::<Vec<_>>(),
+            vec![verts[5]]
+        );
+        assert_eq!(
+            boundary.outer_vertices(step).collect::<Vec<_>>(),
+            vec![verts[0]]
+        );
+        assert_eq!(boundary.inner_faces(step).count(), 0);
+        assert_eq!(boundary.outer_faces(step).count(), 0);
+        assert!(boundary.mixed_faces().is_empty());
+        mesh.selection_mut().grow(step);
+        assert_eq!(
+            mesh.selection().verts().collect::<HashSet<_>>(),
+            HashSet::from([verts[0], verts[5], verts[6]])
+        );
+        mesh.selection_mut().shrink(step);
+        assert_eq!(
+            mesh.selection().verts().collect::<HashSet<_>>(),
+            HashSet::from([verts[5], verts[6]])
+        );
+        mesh.selection_mut().shrink(step);
+        assert_eq!(mesh.selection().verts().collect::<Vec<_>>(), vec![verts[6]]);
+    }
 }
 
 #[test]
@@ -491,7 +664,7 @@ fn grow_preserves_each_selection_mode_and_propagates_components() {
         mesh.selection_mut().set_level(ComponentTypes::FACE);
         mesh.selection_mut().select(&[faces[4]]);
         mesh.selection_mut().set_level(level);
-        mesh.selection_mut().grow();
+        mesh.selection_mut().grow(SelectionStep::Edge);
         assert_eq!(mesh.selection().level(), level);
         assert_eq!(mesh.selection().verts().count(), 12, "{level:?}");
         assert_eq!(mesh.selection().edges().count(), 16, "{level:?}");
@@ -504,7 +677,7 @@ fn grow_preserves_each_selection_mode_and_propagates_components() {
 }
 
 #[test]
-fn shrink_preserves_each_mode_and_retains_unsupported_remnants() {
+fn shrink_uses_faces_only_in_face_only_mode() {
     for bits in 0..=ComponentTypes::all().bits() {
         let level = ComponentTypes::from_bits_retain(bits);
         let mut mesh = quad_grid(4, 4);
@@ -514,11 +687,11 @@ fn shrink_preserves_each_mode_and_retains_unsupported_remnants() {
         mesh.selection_mut()
             .select(&[faces[5], faces[6], faces[9], faces[10]]);
         mesh.selection_mut().set_level(level);
-        mesh.selection_mut().shrink();
+        mesh.selection_mut().shrink(SelectionStep::Edge);
         assert_eq!(mesh.selection().level(), level);
         assert_eq!(mesh.selection().edges().count(), 0, "{level:?}");
         assert_eq!(mesh.selection().faces().count(), 0, "{level:?}");
-        if !level.is_empty() {
+        if level.intersects(ComponentTypes::VERTEX | ComponentTypes::EDGE) {
             assert_eq!(
                 mesh.selection().verts().collect::<Vec<_>>(),
                 vec![verts[12]]
@@ -563,9 +736,9 @@ fn boundary_operations_preserve_unrelated_partial_edge_selections() {
             assert!(!mesh.selection().contains(faces[0]));
 
             if grow {
-                mesh.selection_mut().grow();
+                mesh.selection_mut().grow(SelectionStep::Edge);
             } else {
-                mesh.selection_mut().shrink();
+                mesh.selection_mut().shrink(SelectionStep::Edge);
             }
 
             let selection = mesh.selection();
@@ -590,12 +763,184 @@ fn boundary_operations_without_a_boundary_do_not_rebuild_selection() {
     let edges: Vec<_> = mesh.topology.edges.keys().collect();
     mesh.selection_mut().set_level(ComponentTypes::EDGE);
     mesh.selection_mut().select(&edges[..2]);
-    mesh.selection_mut().grow();
-    mesh.selection_mut().shrink();
+    for step in [SelectionStep::Edge, SelectionStep::Face] {
+        mesh.selection_mut().grow(step);
+        mesh.selection_mut().shrink(step);
+    }
     assert_eq!(mesh.selection().level(), ComponentTypes::EDGE);
     assert_eq!(mesh.selection().verts().count(), 3);
     assert_eq!(mesh.selection().edges().count(), 2);
     assert_eq!(mesh.selection().faces().count(), 0);
+}
+
+#[test]
+fn face_step_grow_adds_one_vertex_ring_at_a_time() {
+    let mut mesh = quad_grid(4, 4);
+    let verts: Vec<_> = mesh.topology.verts.keys().collect();
+    mesh.selection_mut().select(&[verts[12]]);
+    mesh.selection_mut().grow(SelectionStep::Face);
+    assert_eq!(
+        mesh.selection().verts().collect::<HashSet<_>>(),
+        [6, 7, 8, 11, 12, 13, 16, 17, 18]
+            .map(|index| verts[index])
+            .into()
+    );
+    mesh.selection_mut().grow(SelectionStep::Face);
+    assert_eq!(mesh.selection().verts().count(), 25);
+    assert_eq!(mesh.selection().faces().count(), 16);
+}
+
+#[test]
+fn face_step_includes_diagonally_adjacent_faces() {
+    for step in [SelectionStep::Edge, SelectionStep::Face] {
+        let mut mesh = quad_grid(3, 3);
+        let faces: Vec<_> = mesh.topology.faces.keys().collect();
+        mesh.selection_mut().set_level(ComponentTypes::FACE);
+        mesh.selection_mut().select(&[faces[4]]);
+        mesh.selection_mut().grow(step);
+        let expected: HashSet<_> = if step == SelectionStep::Edge {
+            [1, 3, 4, 5, 7].map(|index| faces[index]).into()
+        } else {
+            faces.iter().copied().collect()
+        };
+        assert_eq!(mesh.selection().faces().collect::<HashSet<_>>(), expected);
+
+        mesh.selection_mut().set(&faces[1..]);
+        mesh.selection_mut().shrink(step);
+        let expected: HashSet<_> = if step == SelectionStep::Edge {
+            [2, 4, 5, 6, 7, 8].map(|index| faces[index]).into()
+        } else {
+            [2, 5, 6, 7, 8].map(|index| faces[index]).into()
+        };
+        assert_eq!(mesh.selection().faces().collect::<HashSet<_>>(), expected);
+        assert_eq!(mesh.selection().level(), ComponentTypes::FACE);
+    }
+}
+
+#[test]
+fn boundary_sides_swap_when_selection_is_inverted() {
+    for level in [ComponentTypes::VERTEX, ComponentTypes::FACE] {
+        let mut mesh = quad_grid(2, 2);
+        mesh.selection_mut().set_level(level);
+        let components: Vec<_> = if level == ComponentTypes::VERTEX {
+            mesh.topology.verts.keys().map(ComponentKey::Vert).collect()
+        } else {
+            mesh.topology.faces.keys().map(ComponentKey::Face).collect()
+        };
+        for step in [SelectionStep::Edge, SelectionStep::Face] {
+            let sides = |mesh: &Mesh| -> (HashSet<ComponentKey>, HashSet<ComponentKey>) {
+                let boundary = mesh.selection().boundary();
+                if level == ComponentTypes::VERTEX {
+                    (
+                        boundary
+                            .inner_vertices(step)
+                            .map(ComponentKey::Vert)
+                            .collect(),
+                        boundary
+                            .outer_vertices(step)
+                            .map(ComponentKey::Vert)
+                            .collect(),
+                    )
+                } else {
+                    (
+                        boundary.inner_faces(step).map(ComponentKey::Face).collect(),
+                        boundary.outer_faces(step).map(ComponentKey::Face).collect(),
+                    )
+                }
+            };
+            for mask in 0..(1usize << components.len()) {
+                let selected: Vec<_> = components
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| mask & (1 << index) != 0)
+                    .map(|(_, &key)| key)
+                    .collect();
+                let unselected: Vec<_> = components
+                    .iter()
+                    .copied()
+                    .filter(|key| !selected.contains(key))
+                    .collect();
+                mesh.selection_mut().set(&selected);
+                let (inner, outer) = sides(&mesh);
+                assert!(inner.is_disjoint(&outer));
+                mesh.selection_mut().set(&unselected);
+                assert_eq!(sides(&mesh), (outer, inner), "{level:?} {step:?} {mask}");
+            }
+        }
+    }
+}
+
+#[test]
+fn unselected_faces_with_fully_selected_vertices_are_not_mixed() {
+    let mut mesh = quad_grid(3, 3);
+    let faces: Vec<_> = mesh.topology.faces.keys().collect();
+    let surrounding: Vec<_> = faces
+        .iter()
+        .copied()
+        .filter(|&key| key != faces[4])
+        .collect();
+    mesh.selection_mut().set_level(ComponentTypes::FACE);
+    mesh.selection_mut().select(&surrounding);
+    assert_eq!(mesh.selection().verts().count(), 16);
+    assert!(!mesh.selection().contains(faces[4]));
+
+    let boundary = mesh.selection().boundary();
+    assert!(boundary.mixed_faces().is_empty());
+    for step in [SelectionStep::Edge, SelectionStep::Face] {
+        assert_eq!(
+            boundary.outer_faces(step).collect::<Vec<_>>(),
+            vec![faces[4]]
+        );
+        assert_eq!(boundary.inner_vertices(step).count(), 0);
+        assert_eq!(boundary.outer_vertices(step).count(), 0);
+    }
+}
+
+#[test]
+fn translation_normal_sets_include_every_corner_of_changed_faces() {
+    let mut mesh = quad_grid(4, 4);
+    let verts: Vec<_> = mesh.topology.verts.keys().collect();
+    let selected = [6, 7, 8, 11, 12, 13, 16, 17, 18].map(|index| verts[index]);
+    mesh.selection_mut().select(&selected);
+    populate_boundary_cache(&mesh);
+    let boundary = mesh.selection().boundary();
+    let mixed = boundary.mixed_faces().clone();
+    let smooth: HashSet<_> = boundary
+        .inner_vertices(SelectionStep::Face)
+        .chain(boundary.outer_vertices(SelectionStep::Face))
+        .collect();
+    let mut mixed_vertices = HashSet::new();
+    for &key in &mixed {
+        mixed_vertices.extend(mesh.face(key).unwrap().verts());
+    }
+    assert_eq!(smooth, mixed_vertices);
+    assert_eq!(
+        smooth,
+        verts
+            .iter()
+            .copied()
+            .filter(|&key| key != verts[12])
+            .collect()
+    );
+    assert_eq!(mixed.len(), 12);
+    let previous_normals: Vec<_> = mesh
+        .topology
+        .faces
+        .keys()
+        .map(|key| (key, mesh.face(key).unwrap().normal()))
+        .collect();
+
+    for key in selected {
+        mesh.attributes.positions[key] += Vec3::Z;
+    }
+    let changed: HashSet<_> = previous_normals
+        .into_iter()
+        .filter(|&(key, normal)| mesh.face(key).unwrap().normal() != normal)
+        .map(|(key, _)| key)
+        .collect();
+    assert_eq!(changed, mixed);
+    assert_boundary_cache_initialized(&mesh, true);
+    assert_eq!(mesh.selection().boundary().mixed_faces(), &mixed);
 }
 
 #[test]
