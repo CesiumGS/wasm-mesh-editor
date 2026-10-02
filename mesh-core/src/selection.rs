@@ -203,17 +203,17 @@ impl<'a> Selection<'a> {
 
     /// Adds the given components to the current selection.
     pub fn select<K: SelectionKind>(&mut self, keys: &[K]) {
-        self.apply_action(keys, Action::Select);
+        self.apply_action(keys, Action::Select, self.state.level);
     }
 
     /// Removes the given components from the current selection.
     pub fn deselect<K: SelectionKind>(&mut self, keys: &[K]) {
-        self.apply_action(keys, Action::Deselect);
+        self.apply_action(keys, Action::Deselect, self.state.level);
     }
 
     /// Toggles the given components in the current selection.
     pub fn toggle<K: SelectionKind>(&mut self, keys: &[K]) {
-        self.apply_action(keys, Action::Toggle);
+        self.apply_action(keys, Action::Toggle, self.state.level);
     }
 
     /// Clears all selected components, regardless of the current mode.
@@ -227,41 +227,34 @@ impl<'a> Selection<'a> {
         self.state.faces.clear();
     }
 
-    /// Adds the current boundary's unselected edge-neighbors, then restores the mode.
-    /// Components unsupported by the restored mode are discarded as in [`Self::set_level`].
+    /// Adds the current boundary's unselected edge-neighbors without changing the selection mode.
     pub fn grow(&mut self) {
         let verts: Vec<_> = self.view().boundary().outer_vertices().collect();
-        self.apply_boundary_action(&verts, Action::Select);
+        self.apply_action(&verts, Action::Select, ComponentTypes::VERTEX);
     }
 
-    /// Removes the current boundary vertices, then restores the selection mode.
+    /// Removes the current boundary vertices without changing the selection mode.
     /// A fully selected connected surface has no selection boundary and is unchanged.
     pub fn shrink(&mut self) {
         let verts: Vec<_> = self.view().boundary().vertices().collect();
-        self.apply_boundary_action(&verts, Action::Deselect);
-    }
-
-    fn apply_boundary_action(&mut self, verts: &[VertKey], action: Action) {
-        if verts.is_empty() {
-            return;
-        }
-
-        let level = self.state.level;
-        self.set_level(ComponentTypes::VERTEX);
-        self.apply_action(verts, action);
-        self.set_level(level);
+        self.apply_action(&verts, Action::Deselect, ComponentTypes::VERTEX);
     }
 
     /// Takes a set of components by key and applies a selection action to them (select, remove, toggle).
     /// Selection actions apply not only to directly-selected components, but also propagate to sub- or super-components.
-    fn apply_action<K: SelectionKind>(&mut self, keys: &[K], action: Action) {
+    fn apply_action<K: SelectionKind>(
+        &mut self,
+        keys: &[K],
+        action: Action,
+        allowed_kinds: ComponentTypes,
+    ) {
         let mut delta = SelectionDelta::default();
         let mut seen_keys = HashSet::new();
 
         for &key in keys {
             let key = key.into();
             if !seen_keys.insert(key)
-                || !self.state.level.contains(key.kind().into())
+                || !allowed_kinds.contains(key.kind().into())
                 || !self.topo.contains(key)
             {
                 continue;

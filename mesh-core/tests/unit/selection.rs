@@ -504,7 +504,7 @@ fn grow_preserves_each_selection_mode_and_propagates_components() {
 }
 
 #[test]
-fn shrink_restores_each_mode_and_discards_unsupported_remnants() {
+fn shrink_preserves_each_mode_and_retains_unsupported_remnants() {
     for bits in 0..=ComponentTypes::all().bits() {
         let level = ComponentTypes::from_bits_retain(bits);
         let mut mesh = quad_grid(4, 4);
@@ -518,13 +518,68 @@ fn shrink_restores_each_mode_and_discards_unsupported_remnants() {
         assert_eq!(mesh.selection().level(), level);
         assert_eq!(mesh.selection().edges().count(), 0, "{level:?}");
         assert_eq!(mesh.selection().faces().count(), 0, "{level:?}");
-        if level.contains(ComponentTypes::VERTEX) {
+        if !level.is_empty() {
             assert_eq!(
                 mesh.selection().verts().collect::<Vec<_>>(),
                 vec![verts[12]]
             );
         } else {
             assert!(mesh.selection().is_empty(), "{level:?}");
+        }
+    }
+}
+
+#[test]
+fn boundary_operations_preserve_unrelated_partial_edge_selections() {
+    for level in [
+        ComponentTypes::EDGE,
+        ComponentTypes::EDGE | ComponentTypes::FACE,
+        ComponentTypes::VERTEX | ComponentTypes::EDGE,
+        ComponentTypes::all(),
+    ] {
+        for grow in [true, false] {
+            let mut mesh = Mesh::from_buffers(MeshBuffers {
+                positions: vec![
+                    Vec3::ZERO,
+                    Vec3::X,
+                    Vec3::Y,
+                    Vec3::Z,
+                    Vec3::Z + Vec3::X,
+                    Vec3::Z + Vec3::Y,
+                ],
+                normals: None,
+                uvs: None,
+                indices: vec![0, 1, 2, 3, 4, 5],
+                face_vertex_counts: None,
+            })
+            .unwrap();
+            let faces: Vec<_> = mesh.topology.faces.keys().collect();
+            let first_edges: Vec<_> = mesh.face(faces[0]).unwrap().edges().collect();
+            let second_edge = mesh.face(faces[1]).unwrap().edges().next().unwrap();
+            mesh.selection_mut().set_level(level);
+            mesh.selection_mut()
+                .select(&[first_edges[0], first_edges[1], second_edge]);
+            assert!(!mesh.selection().contains(first_edges[2]));
+            assert!(!mesh.selection().contains(faces[0]));
+
+            if grow {
+                mesh.selection_mut().grow();
+            } else {
+                mesh.selection_mut().shrink();
+            }
+
+            let selection = mesh.selection();
+            assert_eq!(selection.level(), level);
+            assert!(selection.contains(first_edges[0]));
+            assert!(selection.contains(first_edges[1]));
+            assert!(
+                !selection.contains(first_edges[2]),
+                "{level:?}, grow={grow}"
+            );
+            assert!(!selection.contains(faces[0]), "{level:?}, grow={grow}");
+            assert_eq!(selection.verts().count(), if grow { 6 } else { 3 });
+            assert_eq!(selection.edges().count(), if grow { 5 } else { 2 });
+            assert_eq!(selection.contains(faces[1]), grow);
         }
     }
 }
