@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use glam::{DVec3, Vec3};
 
 use crate::geometry::corner_angle;
-use crate::selection::SelectionState;
+use crate::selection::{SelectionBoundary, SelectionState};
 use crate::{
     Attributes, ComponentKey, ComponentRef, EdgeKey, EdgeRef, FaceKey, FaceRef, ListenerId,
     MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
@@ -95,8 +95,24 @@ impl Mesh {
     }
 
     /// Translate the currently selected vertices by `delta`.
+    /// TODO: provide richer options for recomputing normals flat (smooth, sharp edges, transforming custom normals or regions or smooth/flat)
     pub fn translate_selected(&mut self, delta: Vec3) {
-        todo!()
+        if delta == Vec3::ZERO || self.selection.verts.is_empty() {
+            return;
+        }
+
+        let Self {
+            topology,
+            attributes,
+            selection,
+            ..
+        } = self;
+        for &key in &selection.verts {
+            attributes.positions[key] += delta;
+        }
+
+        let boundary = SelectionBoundary::new(selection, topology);
+        Self::recompute_flat_normals(topology, attributes, boundary.mixed_faces().iter().copied());
     }
 
     /// Recompute flat normals on the selected faces.

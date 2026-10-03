@@ -3,8 +3,8 @@
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
-use super::SelectionView;
-use crate::{EdgeRef, FaceKey, FaceRef, VertKey, VertRef};
+use super::SelectionState;
+use crate::{FaceKey, Topology, VertKey};
 
 /// How grow, shrink, and boundary queries determine what a neighbor is
 /// (i.e. whether neighbors are connected by an edge or share a face)
@@ -42,19 +42,17 @@ pub(super) struct BoundaryCache {
 ///
 /// Each set is lazily computed, and reused until the selection or topology changes.
 pub struct SelectionBoundary<'a> {
-    selection: SelectionView<'a>,
+    selection: &'a SelectionState,
+    topo: &'a Topology,
     cache: &'a BoundaryCache,
 }
 
 impl<'a> SelectionBoundary<'a> {
-    pub(super) fn new(selection: &SelectionView<'a>) -> Self {
+    pub(crate) fn new(selection: &'a SelectionState, topo: &'a Topology) -> Self {
         Self {
-            selection: SelectionView {
-                state: selection.state,
-                topo: selection.topo,
-                attrs: selection.attrs,
-            },
-            cache: &selection.state.boundary,
+            selection,
+            topo,
+            cache: &selection.boundary,
         }
     }
 
@@ -86,16 +84,16 @@ impl<'a> SelectionBoundary<'a> {
             let mut mixed = HashSet::new();
             let mut visited_faces = HashSet::new();
 
-            for vert_key in self.selection.verts() {
-                for face_key in self.vertex(vert_key).faces() {
+            for &vert_key in &self.selection.verts {
+                for face_key in self.topo.vert_faces(vert_key) {
                     if !visited_faces.insert(face_key) {
                         continue;
                     }
 
                     if self
-                        .face(face_key)
-                        .verts()
-                        .all(|key| self.selection.contains(key))
+                        .topo
+                        .face_verts(face_key)
+                        .all(|key| self.selection.verts.contains(&key))
                     {
                         continue;
                     }
@@ -117,9 +115,9 @@ impl<'a> SelectionBoundary<'a> {
         cache.side(selected).get_or_init(|| {
             let mut boundary = HashSet::new();
 
-            for key in self.selection.verts() {
-                for edge_key in self.vertex(key).edges() {
-                    let edge = &self.selection.topo.edges[edge_key];
+            for &key in &self.selection.verts {
+                for edge_key in self.topo.vert_edges(key) {
+                    let edge = &self.topo.edges[edge_key];
                     // When stepping by face, skip edges that are part of a face (i.e., not wire edges)
                     if step == SelectionStep::Face && edge.loop_.is_some() {
                         continue;
@@ -127,7 +125,7 @@ impl<'a> SelectionBoundary<'a> {
 
                     // If neighbor is selected, this vertex is not on the boundary
                     let neighbor = edge.verts[usize::from(edge.verts[0] == key)];
-                    if self.selection.contains(neighbor) {
+                    if self.selection.verts.contains(&neighbor) {
                         continue;
                     }
 
@@ -141,9 +139,9 @@ impl<'a> SelectionBoundary<'a> {
 
             for &face_key in self.mixed_faces() {
                 boundary.extend(
-                    self.face(face_key)
-                        .verts()
-                        .filter(|&key| self.selection.contains(key) == selected),
+                    self.topo
+                        .face_verts(face_key)
+                        .filter(|key| self.selection.verts.contains(key) == selected),
                 );
             }
 
@@ -159,10 +157,9 @@ impl<'a> SelectionBoundary<'a> {
 
         cache.side(selected).get_or_init(|| {
             let mut boundary = HashSet::new();
-            for key in self.selection.faces() {
-                let face = self.face(key);
+            for &key in &self.selection.faces {
                 let mut visit = |neighbor| {
-                    if self.selection.contains(neighbor) {
+                    if self.selection.faces.contains(&neighbor) {
                         return;
                     }
 
@@ -170,41 +167,21 @@ impl<'a> SelectionBoundary<'a> {
                 };
 
                 if step == SelectionStep::Edge {
-                    for edge_key in face.edges() {
-                        let edge = EdgeRef {
-                            topo: self.selection.topo,
-                            key: edge_key,
-                        };
-                        for neighbor in edge.faces() {
+                    for edge_key in self.topo.face_edges(key) {
+                        for neighbor in self.topo.edge_faces(edge_key) {
                             visit(neighbor);
                         }
                     }
                     continue;
                 }
 
-                for vert_key in face.verts() {
-                    for neighbor in self.vertex(vert_key).faces() {
+                for vert_key in self.topo.face_verts(key) {
+                    for neighbor in self.topo.vert_faces(vert_key) {
                         visit(neighbor);
                     }
                 }
             }
             boundary
         })
-    }
-
-    fn vertex(&self, key: VertKey) -> VertRef<'a> {
-        VertRef {
-            topo: self.selection.topo,
-            attrs: self.selection.attrs,
-            key,
-        }
-    }
-
-    fn face(&self, key: FaceKey) -> FaceRef<'a> {
-        FaceRef {
-            topo: self.selection.topo,
-            attrs: self.selection.attrs,
-            key,
-        }
     }
 }

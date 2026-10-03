@@ -151,7 +151,7 @@ impl<'a> SelectionView<'a> {
 
     /// Lazy boundary sets shared across views, independent of the selection mode.
     pub fn boundary(&self) -> SelectionBoundary<'a> {
-        SelectionBoundary::new(self)
+        SelectionBoundary::new(self.state, self.topo)
     }
 }
 

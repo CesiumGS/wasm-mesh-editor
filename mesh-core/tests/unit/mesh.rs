@@ -539,6 +539,197 @@ fn face_normals_follow_position_edits_without_overwriting_shading_normals() {
 }
 
 #[test]
+fn translate_selected_updates_only_moved_positions_and_mixed_face_normals() {
+    let mut options = triangle_buffers();
+    options.positions.extend([Vec3::Z, -Vec3::X, -Vec3::Y]);
+    options.indices = vec![0, 1, 2, 1, 0, 3, 3, 4, 5];
+    options.normals = Some(vec![Vec3::X; 6]);
+    options.uvs = Some(vec![Vec2::ONE; 6]);
+    let mut mesh = Mesh::from_buffers(options).unwrap();
+    let faces: Vec<_> = mesh.topology.faces.keys().collect();
+    let vertices: Vec<_> = mesh.topology.verts.keys().collect();
+    mesh.selection_mut().set_level(ComponentTypes::FACE);
+    mesh.selection_mut().select(&[faces[0]]);
+    let selected: HashSet<_> = mesh.selection().selected().collect();
+    let positions = mesh.attributes.positions.clone();
+    assert_eq!(
+        mesh.selection().boundary().mixed_faces(),
+        &HashSet::from([faces[1]])
+    );
+    let cached_faces = mesh.selection().boundary().mixed_faces() as *const HashSet<FaceKey>;
+
+    for (step, expected_normal) in [(1.0, Vec3::Z), (2.0, Vec3::new(0.0, -1.0, 2.0).normalize())] {
+        mesh.translate_selected(Vec3::Y + Vec3::Z);
+        for (index, &key) in vertices.iter().enumerate() {
+            let expected = positions[key]
+                + if index < 3 {
+                    step * (Vec3::Y + Vec3::Z)
+                } else {
+                    Vec3::ZERO
+                };
+            assert_eq!(mesh.attributes.positions[key], expected);
+        }
+        for (key, corner) in &mesh.topology.loops {
+            let expected = if corner.face == faces[1] {
+                expected_normal
+            } else {
+                Vec3::X
+            };
+            assert!(mesh.attributes.normals[key].abs_diff_eq(expected, 1.0e-6));
+        }
+        assert!(std::ptr::eq(
+            cached_faces,
+            mesh.selection().boundary().mixed_faces()
+        ));
+        assert_eq!(
+            mesh.selection().selected().collect::<HashSet<_>>(),
+            selected
+        );
+        assert_eq!(mesh.selection().level(), ComponentTypes::FACE);
+        assert!(mesh.attributes.uvs.values().all(|&uv| uv == Vec2::ONE));
+        assert!(mesh.face_normals.is_empty());
+        assert_connectivity(&mesh);
+    }
+}
+
+#[test]
+fn translate_selected_updates_mixed_faces_without_selected_faces() {
+    for (level, expected_normal) in [
+        (ComponentTypes::VERTEX, Vec3::ONE.normalize()),
+        (ComponentTypes::EDGE, (Vec3::Y + Vec3::Z).normalize()),
+    ] {
+        let mut mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
+        let vertices: Vec<_> = mesh.topology.verts.keys().collect();
+        let face = mesh.topology.faces.keys().next().unwrap();
+        mesh.selection_mut().set_level(level);
+        if level == ComponentTypes::VERTEX {
+            mesh.selection_mut().select(&[vertices[0]]);
+        } else {
+            let edge = mesh.topology.face_edges(face).next().unwrap();
+            mesh.selection_mut().select(&[edge]);
+        }
+        assert_eq!(mesh.selection().faces().count(), 0);
+        let selected: HashSet<_> = mesh.selection().verts().collect();
+        let positions = mesh.attributes.positions.clone();
+
+        mesh.translate_selected(Vec3::Z);
+
+        for &key in &vertices {
+            let expected = positions[key]
+                + if selected.contains(&key) {
+                    Vec3::Z
+                } else {
+                    Vec3::ZERO
+                };
+            assert_eq!(mesh.attributes.positions[key], expected);
+        }
+        assert!(
+            mesh.attributes
+                .normals
+                .values()
+                .all(|&normal| normal.abs_diff_eq(expected_normal, 1.0e-6))
+        );
+        assert_connectivity(&mesh);
+    }
+}
+
+#[test]
+fn translate_selected_preserves_normals_for_noops_and_rigid_faces() {
+    for (selected_count, delta) in [(0, Vec3::Z), (1, Vec3::ZERO), (3, Vec3::Z)] {
+        let mut options = triangle_buffers();
+        options.normals = Some(vec![Vec3::X; 3]);
+        let mut mesh = Mesh::from_buffers(options).unwrap();
+        let vertices: Vec<_> = mesh.topology.verts.keys().collect();
+        mesh.selection_mut().select(&vertices[..selected_count]);
+        let positions = mesh.attributes.positions.clone();
+
+        mesh.translate_selected(delta);
+
+        for (index, &key) in vertices.iter().enumerate() {
+            let expected = positions[key]
+                + if index < selected_count {
+                    delta
+                } else {
+                    Vec3::ZERO
+                };
+            assert_eq!(mesh.attributes.positions[key], expected);
+        }
+        assert!(
+            mesh.attributes
+                .normals
+                .values()
+                .all(|&normal| normal == Vec3::X)
+        );
+        assert_connectivity(&mesh);
+    }
+
+    let mut empty = Mesh::new();
+    empty.translate_selected(Vec3::ONE);
+    assert!(empty.attributes.positions.is_empty());
+    assert!(empty.attributes.normals.is_empty());
+}
+
+#[test]
+fn translate_selected_moves_wire_and_isolated_vertices() {
+    let mut options = triangle_buffers();
+    options
+        .positions
+        .extend([Vec3::Z, 2.0 * Vec3::Z, 3.0 * Vec3::Z]);
+    let mut mesh = Mesh::from_buffers(options).unwrap();
+    let vertices: Vec<_> = mesh.topology.verts.keys().collect();
+    mesh.topology.insert_edge([vertices[3], vertices[4]]);
+    mesh.selection_mut().select(&[vertices[3], vertices[5]]);
+    let positions = mesh.attributes.positions.clone();
+    let normals = mesh.attributes.normals.clone();
+
+    mesh.translate_selected(Vec3::ONE);
+
+    for (index, &key) in vertices.iter().enumerate() {
+        let expected = positions[key]
+            + if index == 3 || index == 5 {
+                Vec3::ONE
+            } else {
+                Vec3::ZERO
+            };
+        assert_eq!(mesh.attributes.positions[key], expected);
+    }
+    assert_eq!(mesh.attributes.normals.len(), normals.len());
+    assert!(
+        mesh.attributes
+            .normals
+            .iter()
+            .all(|(key, &normal)| normal == normals[key])
+    );
+    assert!(mesh.selection().boundary().mixed_faces().is_empty());
+}
+
+#[test]
+fn translate_selected_updates_normals_when_faces_collapse_and_recover() {
+    let mut mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
+    let vertex = mesh.topology.verts.keys().nth(2).unwrap();
+    mesh.selection_mut().select(&[vertex]);
+
+    mesh.translate_selected(-Vec3::Y);
+    assert_eq!(mesh.attributes.positions[vertex], Vec3::ZERO);
+    assert!(
+        mesh.attributes
+            .normals
+            .values()
+            .all(|&normal| normal == Vec3::ZERO)
+    );
+
+    mesh.translate_selected(Vec3::Y);
+    assert_eq!(mesh.attributes.positions[vertex], Vec3::Y);
+    assert!(
+        mesh.attributes
+            .normals
+            .values()
+            .all(|&normal| normal == Vec3::Z)
+    );
+    assert_connectivity(&mesh);
+}
+
+#[test]
 fn recompute_flat_normals_updates_only_requested_faces() {
     let mut options = triangle_buffers();
     options.positions.push(Vec3::Z);
