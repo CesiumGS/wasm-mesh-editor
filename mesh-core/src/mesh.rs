@@ -2,8 +2,11 @@
 
 mod build;
 
-use glam::Vec3;
+use std::collections::HashMap;
 
+use glam::{DVec3, Vec3};
+
+use crate::geometry::corner_angle;
 use crate::selection::SelectionState;
 use crate::{
     Attributes, ComponentKey, ComponentRef, EdgeKey, EdgeRef, FaceKey, FaceRef, ListenerId,
@@ -18,6 +21,10 @@ pub struct Mesh {
     pub(crate) topology: Topology,
     pub(crate) attributes: Attributes,
     pub(crate) selection: SelectionState,
+
+    /// Face normals cached per smooth update; storage is reused across updates
+    /// just to avoid reallocating the storage on each update.
+    face_normals: HashMap<FaceKey, DVec3>,
 }
 
 impl Mesh {
@@ -92,8 +99,31 @@ impl Mesh {
         todo!()
     }
 
-    pub fn recompute_shading_normals(&mut self, faces: &[FaceKey]) {
-        todo!()
+    /// Recompute flat normals on the selected faces.
+    pub fn shade_flat(&mut self) {
+        let Self {
+            topology,
+            attributes,
+            selection,
+            ..
+        } = self;
+        Self::recompute_flat_normals(topology, attributes, selection.faces.iter().copied());
+    }
+
+    /// Recompute smooth normals at the selected vertices using all incident faces.
+    pub fn shade_smooth(&mut self) {
+        let Self {
+            topology,
+            attributes,
+            selection,
+            face_normals,
+        } = self;
+        Self::recompute_smooth_normals(
+            topology,
+            attributes,
+            face_normals,
+            selection.verts.iter().copied(),
+        );
     }
 
     pub fn selection(&self) -> SelectionView<'_> {
@@ -118,6 +148,71 @@ impl Mesh {
 
     pub fn remove_change_listener(&mut self, id: ListenerId) {
         todo!()
+    }
+
+    /// Write each face's normal to its corners. Keys must be live in this mesh.
+    /// Zero-area faces receive zero normals.
+    fn recompute_flat_normals(
+        topology: &Topology,
+        attributes: &mut Attributes,
+        faces: impl IntoIterator<Item = FaceKey>,
+    ) {
+        for key in faces {
+            let normal = FaceRef {
+                topo: topology,
+                attrs: attributes,
+                key,
+            }
+            .normal();
+            for loop_key in topology.face_loops(key) {
+                attributes.normals.insert(loop_key, normal);
+            }
+        }
+    }
+
+    /// Average all incident face normals, weighted by the angle at each corner.
+    /// Write the result to every corner at the requested vertices, with no sharp edges.
+    /// Keys must be live in this mesh; undefined normals become zero.
+    fn recompute_smooth_normals(
+        topology: &Topology,
+        attributes: &mut Attributes,
+        face_normals: &mut HashMap<FaceKey, DVec3>,
+        vertices: impl IntoIterator<Item = VertKey>,
+    ) {
+        face_normals.clear();
+
+        for key in vertices {
+            let origin = attributes.positions[key].as_dvec3();
+            let mut normal = DVec3::ZERO;
+
+            for loop_key in topology.vert_loops(key) {
+                let corner = &topology.loops[loop_key];
+                let face_normal = *face_normals.entry(corner.face).or_insert_with(|| {
+                    FaceRef {
+                        topo: topology,
+                        attrs: attributes,
+                        key: corner.face,
+                    }
+                    .normal()
+                    .as_dvec3()
+                    .normalize_or_zero()
+                });
+                if face_normal == DVec3::ZERO {
+                    continue;
+                }
+
+                let previous_vertex = topology.loops[corner.prev].vert;
+                let next_vertex = topology.loops[corner.next].vert;
+                let previous = attributes.positions[previous_vertex].as_dvec3() - origin;
+                let next = attributes.positions[next_vertex].as_dvec3() - origin;
+                normal += face_normal * corner_angle(previous, next, face_normal);
+            }
+
+            let normal = normal.normalize_or_zero().as_vec3();
+            for loop_key in topology.vert_loops(key) {
+                attributes.normals.insert(loop_key, normal);
+            }
+        }
     }
 }
 

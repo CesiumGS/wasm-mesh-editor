@@ -67,6 +67,77 @@ impl Topology {
         std::iter::empty::<FaceKey>()
     }
 
+    /// Incident edges in disk-cycle order. The vertex must be live.
+    pub(crate) fn vert_edges(&self, vertex: VertKey) -> impl Iterator<Item = EdgeKey> + '_ {
+        let first = self.verts[vertex].edge;
+        let mut current = first;
+        std::iter::from_fn(move || {
+            let key = current?;
+            let edge = &self.edges[key];
+            let side = usize::from(edge.verts[1] == vertex);
+            let next = edge.disk_next[side];
+            current = (Some(next) != first).then_some(next);
+            Some(key)
+        })
+    }
+
+    pub(crate) fn vert_neighbors(&self, vertex: VertKey) -> impl Iterator<Item = VertKey> + '_ {
+        self.vert_edges(vertex).map(move |key| {
+            let verts = self.edge_verts(key);
+            verts[usize::from(verts[0] == vertex)]
+        })
+    }
+
+    pub(crate) fn vert_faces(&self, vertex: VertKey) -> impl Iterator<Item = FaceKey> + '_ {
+        self.vert_loops(vertex).map(|key| self.loops[key].face)
+    }
+
+    /// Each face corner at this vertex, including disconnected fans.
+    pub(crate) fn vert_loops(&self, vertex: VertKey) -> impl Iterator<Item = LoopKey> + '_ {
+        self.vert_edges(vertex)
+            .flat_map(|key| self.edge_loops(key))
+            .filter(move |&key| self.loops[key].vert == vertex)
+    }
+
+    pub(crate) fn edge_verts(&self, edge: EdgeKey) -> [VertKey; 2] {
+        self.edges[edge].verts
+    }
+
+    pub(crate) fn edge_faces(&self, edge: EdgeKey) -> impl Iterator<Item = FaceKey> + '_ {
+        self.edge_loops(edge).map(|key| self.loops[key].face)
+    }
+
+    /// Radial-cycle corners, empty for a wire edge. The edge must be live.
+    pub(crate) fn edge_loops(&self, edge: EdgeKey) -> impl Iterator<Item = LoopKey> + '_ {
+        let first = self.edges[edge].loop_;
+        let mut current = first;
+        std::iter::from_fn(move || {
+            let key = current?;
+            let next = self.loops[key].radial_next;
+            current = (Some(next) != first).then_some(next);
+            Some(key)
+        })
+    }
+
+    pub(crate) fn face_verts(&self, face: FaceKey) -> impl Iterator<Item = VertKey> + '_ {
+        self.face_loops(face).map(|key| self.loops[key].vert)
+    }
+
+    pub(crate) fn face_edges(&self, face: FaceKey) -> impl Iterator<Item = EdgeKey> + '_ {
+        self.face_loops(face).map(|key| self.loops[key].edge)
+    }
+
+    /// Corners in boundary winding order. The face must be live.
+    pub(crate) fn face_loops(&self, face: FaceKey) -> impl Iterator<Item = LoopKey> + '_ {
+        let face = &self.faces[face];
+        let mut current = face.loop_;
+        (0..face.len).map(move |_| {
+            let key = current;
+            current = self.loops[key].next;
+            key
+        })
+    }
+
     pub(crate) fn insert_edge(&mut self, verts: [VertKey; 2]) -> EdgeKey {
         let edge = self.edges.insert_with_key(|key| Edge {
             verts,

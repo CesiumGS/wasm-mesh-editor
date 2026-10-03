@@ -8,6 +8,7 @@
 mod attributes;
 mod edge;
 mod face;
+mod geometry;
 mod loop_;
 mod mesh;
 mod mesh_change;

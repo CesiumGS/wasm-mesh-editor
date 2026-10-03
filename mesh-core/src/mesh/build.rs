@@ -206,6 +206,7 @@ pub(super) fn from_buffers(mut buffers: MeshBuffers) -> Result<Mesh, MeshBuildEr
         topology: Topology::with_capacity(vertex_count, loop_count),
         attributes: Attributes::with_capacity(vertex_count, loop_count, uv_count),
         selection: SelectionState::default(),
+        face_normals: Default::default(),
     };
 
     let verts: Vec<_> = buffers
