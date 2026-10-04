@@ -36,35 +36,35 @@ impl Topology {
     }
 
     pub fn vert_count(&self) -> usize {
-        todo!()
+        self.verts.len()
     }
 
     pub fn edge_count(&self) -> usize {
-        todo!()
+        self.edges.len()
     }
 
     pub fn loop_count(&self) -> usize {
-        todo!()
+        self.loops.len()
     }
 
     pub fn face_count(&self) -> usize {
-        todo!()
+        self.faces.len()
     }
 
     pub fn verts(&self) -> impl Iterator<Item = VertKey> + '_ {
-        std::iter::empty::<VertKey>()
+        self.verts.keys()
     }
 
     pub fn edges(&self) -> impl Iterator<Item = EdgeKey> + '_ {
-        std::iter::empty::<EdgeKey>()
+        self.edges.keys()
     }
 
     pub fn loops(&self) -> impl Iterator<Item = LoopKey> + '_ {
-        std::iter::empty::<LoopKey>()
+        self.loops.keys()
     }
 
     pub fn faces(&self) -> impl Iterator<Item = FaceKey> + '_ {
-        std::iter::empty::<FaceKey>()
+        self.faces.keys()
     }
 
     /// Incident edges in disk-cycle order. The vertex must be live.

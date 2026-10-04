@@ -21,6 +21,27 @@ fn triangle_buffers() -> MeshBuffers {
 
 fn assert_connectivity(mesh: &Mesh) {
     let topo = &mesh.topology;
+    assert_eq!(topo.vert_count(), topo.verts.len());
+    assert_eq!(topo.edge_count(), topo.edges.len());
+    assert_eq!(topo.loop_count(), topo.loops.len());
+    assert_eq!(topo.face_count(), topo.faces.len());
+    assert_eq!(
+        topo.verts().collect::<Vec<_>>(),
+        topo.verts.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        topo.edges().collect::<Vec<_>>(),
+        topo.edges.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        topo.loops().collect::<Vec<_>>(),
+        topo.loops.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        topo.faces().collect::<Vec<_>>(),
+        topo.faces.keys().collect::<Vec<_>>()
+    );
+
     for (vert_key, vert) in &topo.verts {
         let expected: HashSet<_> = topo
             .edges
@@ -77,6 +98,7 @@ fn assert_connectivity(mesh: &Mesh) {
             .map(|loop_| loop_.face)
             .collect();
         let vertex = mesh.vert(vert_key).unwrap();
+        assert_eq!(vertex.position(), mesh.attributes.positions[vert_key]);
         assert_eq!(
             vertex.edges().collect::<Vec<_>>(),
             topo.vert_edges(vert_key).collect::<Vec<_>>()
@@ -371,6 +393,41 @@ fn builds_triangle_cycles_positions_and_flat_normals() {
     assert!(mesh.selection.faces.is_empty());
     assert_eq!(mesh.selection.level, ComponentTypes::VERTEX);
     assert_connectivity(&mesh);
+}
+
+#[test]
+fn face_triangulation_follows_boundary_winding() {
+    for (indices, expected_triangles) in [
+        (vec![0, 1, 2], vec![[0, 1, 2]]),
+        (vec![0, 1, 2, 3], vec![[0, 1, 2], [0, 2, 3]]),
+        (vec![2, 3, 4, 0, 1], vec![[2, 3, 4], [2, 4, 0], [2, 0, 1]]),
+        (vec![4, 3, 2, 1, 0], vec![[4, 3, 2], [4, 2, 1], [4, 1, 0]]),
+    ] {
+        let mesh = Mesh::from_buffers(MeshBuffers {
+            positions: vec![
+                Vec3::ZERO,
+                Vec3::X,
+                Vec3::X + Vec3::Y,
+                Vec3::Y,
+                -Vec3::X + Vec3::Y,
+            ],
+            normals: None,
+            uvs: None,
+            face_vertex_counts: Some(vec![indices.len() as u32]),
+            indices,
+        })
+        .unwrap();
+        let vertices: Vec<_> = mesh.topology().verts().collect();
+        let face_key = mesh.topology().faces().next().unwrap();
+        let face = mesh.face(face_key).unwrap();
+        let expected: Vec<_> = expected_triangles
+            .into_iter()
+            .map(|triangle| triangle.map(|index| vertices[index]))
+            .collect();
+
+        assert_eq!(face.triangulation().collect::<Vec<_>>(), expected);
+        assert_eq!(face.triangulation().count(), face.verts().count() - 2);
+    }
 }
 
 #[test]

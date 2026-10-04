@@ -42,6 +42,6 @@ impl<'a> VertRef<'a> {
     }
 
     pub fn position(&self) -> Vec3 {
-        todo!()
+        self.attrs.positions[self.key]
     }
 }

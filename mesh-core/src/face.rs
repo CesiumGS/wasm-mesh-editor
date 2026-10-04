@@ -36,8 +36,17 @@ impl<'a> FaceRef<'a> {
         self.topo.face_loops(self.key)
     }
 
+    /// A triangle fan anchored at the first vertex, preserving boundary winding.
+    /// Not guaranteed to triangulate concave polygons correctly.
     pub fn triangulation(&self) -> impl Iterator<Item = [VertKey; 3]> + '_ {
-        std::iter::empty::<[VertKey; 3]>()
+        let mut vertices = self.verts();
+        let anchor = vertices.next().unwrap();
+        let mut previous = vertices.next().unwrap();
+        vertices.map(move |next| {
+            let triangle = [anchor, previous, next];
+            previous = next;
+            triangle
+        })
     }
 
     /// The face's geometric normal (distinct from the per-loop shading normals).
