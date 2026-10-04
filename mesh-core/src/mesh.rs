@@ -4,13 +4,14 @@ mod build;
 
 use std::collections::HashMap;
 
+use event_emitter::EventEmitter;
 use glam::{DVec3, Vec3};
 
 use crate::geometry::corner_angle;
 use crate::selection::{SelectionBoundary, SelectionState};
 use crate::{
-    Attributes, ComponentKey, ComponentRef, EdgeKey, EdgeRef, FaceKey, FaceRef, ListenerId,
-    MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
+    Attributes, ComponentKey, ComponentRef, EdgeKey, EdgeRef, FaceKey, FaceRef, MeshChange,
+    Selection, SelectionView, Topology, VertKey, VertRef,
 };
 
 pub use build::{MeshBuffers, MeshBuildError};
@@ -21,6 +22,7 @@ pub struct Mesh {
     pub(crate) topology: Topology,
     pub(crate) attributes: Attributes,
     pub(crate) selection: SelectionState,
+    changes: EventEmitter<MeshChange>,
 
     /// Face normals cached per smooth update; storage is reused across updates
     /// just to avoid reallocating the storage on each update.
@@ -133,6 +135,7 @@ impl Mesh {
             attributes,
             selection,
             face_normals,
+            ..
         } = self;
         Self::recompute_smooth_normals(
             topology,
@@ -158,12 +161,9 @@ impl Mesh {
         }
     }
 
-    pub fn add_change_listener(&mut self, listener: Box<dyn FnMut(&MeshChange)>) -> ListenerId {
-        todo!()
-    }
-
-    pub fn remove_change_listener(&mut self, id: ListenerId) {
-        todo!()
+    /// Returns the mesh change emitter for subscriptions.
+    pub fn changes(&self) -> &EventEmitter<MeshChange> {
+        &self.changes
     }
 
     /// Write each face's normal to its corners. Keys must be live in this mesh.

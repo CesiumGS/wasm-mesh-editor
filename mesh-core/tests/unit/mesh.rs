@@ -1,9 +1,11 @@
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use glam::Vec2;
 use slotmap::Key;
 
-use crate::ComponentTypes;
+use crate::{ComponentTypes, SelectionChange};
 
 use super::*;
 
@@ -197,6 +199,34 @@ fn new_and_default_create_empty_meshes_at_vertex_level() {
         assert!(mesh.selection.faces.is_empty());
         assert_eq!(mesh.selection.level, ComponentTypes::VERTEX);
         assert_connectivity(&mesh);
+    }
+}
+
+#[test]
+fn change_subscriptions_use_mesh_owned_emitter() {
+    for mut mesh in [
+        Mesh::new(),
+        Mesh::default(),
+        Mesh::from_buffers(triangle_buffers()).unwrap(),
+    ] {
+        let received = Rc::new(RefCell::new(0));
+        let subscription = mesh.changes().subscribe(&received, |received, change| {
+            assert!(matches!(change, MeshChange::Selection(_)));
+            *received += 1;
+        });
+        let change = MeshChange::Selection(SelectionChange::default());
+
+        mesh.changes.emit(&change);
+        assert_eq!(*received.borrow(), 1);
+        drop(subscription);
+        mesh.changes.emit(&change);
+        assert_eq!(*received.borrow(), 1);
+
+        let subscription = mesh.changes().subscribe(&received, |received, _| {
+            *received += 1;
+        });
+        drop(mesh);
+        drop(subscription);
     }
 }
 

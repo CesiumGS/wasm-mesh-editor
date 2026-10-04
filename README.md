@@ -11,6 +11,12 @@ A modular mesh-editing library for the web and native. Use it headless, or bring
 | `mesh-editor-core` | An orchestration layer for composing multiple meshes and overlays, and manager of global state (like edit mode, tools, etc.). |
 | `mesh-editor-wasm` | The `wasm-bindgen` boundary. Compiles the above crates into one `.wasm` (with shared linear memory) and exposes the API to JS. The only crate that knows about JS. |
 
+Small, reusable utility crates live under `utils/`:
+
+| Crate | Role |
+| --- | --- |
+| [event-emitter](utils/event-emitter/) | Synchronous events with automatic unsubscription on drop. |
+
 ## Prerequisites
 
 - [Rust](https://rustup.rs/) (stable; edition 2024 needs 1.85+)

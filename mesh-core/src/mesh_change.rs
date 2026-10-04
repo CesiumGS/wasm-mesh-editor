@@ -1,6 +1,6 @@
 //! Change events describing a single mesh mutation.
 
-use crate::{AttributeDomain, EdgeKey, FaceKey, LoopKey, VertKey};
+use crate::{AttributeDomain, ComponentKey, EdgeKey, FaceKey, LoopKey, PerComponentType, VertKey};
 
 pub enum MeshChange {
     Attributes(AttributeChange),
@@ -23,13 +23,8 @@ pub struct TopologyChange {
     pub removed_faces: Vec<FaceKey>,
 }
 
+#[derive(Default)]
 pub struct SelectionChange {
-    pub added_verts: Vec<VertKey>,
-    pub removed_verts: Vec<VertKey>,
-    pub added_edges: Vec<EdgeKey>,
-    pub removed_edges: Vec<EdgeKey>,
-    pub added_faces: Vec<FaceKey>,
-    pub removed_faces: Vec<FaceKey>,
+    pub added: PerComponentType<Vec<ComponentKey>>,
+    pub removed: PerComponentType<Vec<ComponentKey>>,
 }
-
-pub struct ListenerId(pub(crate) u64);

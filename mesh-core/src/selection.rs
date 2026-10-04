@@ -11,7 +11,7 @@ use boundary::BoundaryCache;
 use crate::mesh_component::PerComponentType;
 use crate::{
     Attributes, ComponentKey, ComponentRef, ComponentType, ComponentTypes, EdgeKey, FaceKey,
-    Topology, VertKey,
+    SelectionChange, Topology, VertKey,
 };
 
 /// A component kind that can be selected: the three handle types and
@@ -68,12 +68,6 @@ impl SelectionState {
         }
         changed
     }
-}
-
-#[derive(Default)]
-struct SelectionDelta {
-    added: PerComponentType<Vec<ComponentKey>>,
-    removed: PerComponentType<Vec<ComponentKey>>,
 }
 
 enum Action {
@@ -261,7 +255,7 @@ impl<'a> Selection<'a> {
         action: Action,
         allowed_kinds: ComponentTypes,
     ) {
-        let mut delta = SelectionDelta::default();
+        let mut delta = SelectionChange::default();
         let mut seen_keys = HashSet::new();
 
         for &key in keys {

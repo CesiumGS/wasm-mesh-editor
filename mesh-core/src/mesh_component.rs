@@ -23,7 +23,7 @@ pub enum ComponentType {
 
 /// One value for each mesh component type, indexed by [`ComponentType`].
 #[derive(Clone, Default)]
-pub(crate) struct PerComponentType<T> {
+pub struct PerComponentType<T> {
     verts: T,
     edges: T,
     faces: T,

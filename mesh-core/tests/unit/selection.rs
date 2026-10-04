@@ -112,9 +112,11 @@ fn boundary_queries_only_initialize_their_dependencies() {
 }
 
 #[test]
-fn boundary_cache_preserves_mesh_send_and_sync() {
+fn boundary_cache_preserves_mesh_data_send_and_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<Mesh>();
+    assert_send_sync::<SelectionState>();
+    assert_send_sync::<crate::Topology>();
+    assert_send_sync::<crate::Attributes>();
 }
 
 fn populate_boundary_cache(mesh: &Mesh) {
