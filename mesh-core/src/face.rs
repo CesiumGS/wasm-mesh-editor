@@ -36,7 +36,7 @@ impl<'a> FaceRef<'a> {
         self.topo.face_loops(self.key)
     }
 
-    pub fn triangulate(&self) -> impl Iterator<Item = [VertKey; 3]> + '_ {
+    pub fn triangulation(&self) -> impl Iterator<Item = [VertKey; 3]> + '_ {
         std::iter::empty::<[VertKey; 3]>()
     }
 
