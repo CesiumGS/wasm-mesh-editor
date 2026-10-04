@@ -1,6 +1,6 @@
 //! Face component and its composed view.
 
-use glam::{DVec3, Vec3};
+use glam::{DVec3, Vec2, Vec3};
 
 use crate::geometry::polygon_normal;
 use crate::{Attributes, EdgeKey, FaceKey, LoopKey, Topology, VertKey};
@@ -30,6 +30,30 @@ impl<'a> FaceRef<'a> {
 
     pub fn edges(&self) -> impl Iterator<Item = EdgeKey> + '_ {
         self.topo.face_edges(self.key)
+    }
+
+    /// One stored shading normal per corner, in the same winding order as [`Self::verts`].
+    /// These may differ from the geometric face normal returned by [`Self::normal`].
+    pub fn corner_normals(&self) -> impl Iterator<Item = Vec3> + '_ {
+        self.loops().map(|key| self.attrs.normals[key])
+    }
+
+    /// The stored shading normal at this vertex's corner, or `None` if it is not in the face.
+    pub fn corner_normal(&self, vertex: VertKey) -> Option<Vec3> {
+        let key = self.loops().find(|&key| self.topo.loops[key].vert == vertex)?;
+        Some(self.attrs.normals[key])
+    }
+
+    /// One UV per corner, in the same winding order as [`Self::verts`].
+    /// Missing UVs yield `None` without skipping corners.
+    pub fn corner_uvs(&self) -> impl Iterator<Item = Option<Vec2>> + '_ {
+        self.loops().map(|key| self.attrs.uvs.get(key).copied())
+    }
+
+    /// The UV at this vertex's corner, or `None` if it is not in the face or has no UV.
+    pub fn corner_uv(&self, vertex: VertKey) -> Option<Vec2> {
+        let key = self.loops().find(|&key| self.topo.loops[key].vert == vertex)?;
+        self.attrs.uvs.get(key).copied()
     }
 
     pub(crate) fn loops(&self) -> impl Iterator<Item = LoopKey> + '_ {

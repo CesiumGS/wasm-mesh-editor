@@ -1243,7 +1243,93 @@ fn copies_normalized_vertex_attributes_to_every_referencing_loop() {
         assert_eq!(mesh.attributes.normals[key], expected_normals[index]);
         assert_eq!(mesh.attributes.uvs[key], uvs[index]);
     }
+    for (face_key, indices) in mesh.topology().faces().zip([[2, 0, 1], [1, 0, 3]]) {
+        let face = mesh.face(face_key).unwrap();
+        assert_eq!(
+            face.verts().collect::<Vec<_>>(),
+            indices.map(|index| verts[index])
+        );
+        assert_eq!(
+            face.corner_normals().collect::<Vec<_>>(),
+            indices.map(|index| expected_normals[index])
+        );
+        assert_eq!(
+            face.corner_uvs().collect::<Vec<_>>(),
+            indices.map(|index| Some(uvs[index]))
+        );
+        for index in indices {
+            assert_eq!(
+                face.corner_normal(verts[index]),
+                Some(expected_normals[index])
+            );
+            assert_eq!(face.corner_uv(verts[index]), Some(uvs[index]));
+        }
+    }
     assert_connectivity(&mesh);
+}
+
+#[test]
+fn face_corner_attributes_preserve_seams_and_missing_uvs() {
+    let mut options = triangle_buffers();
+    options.positions.push(Vec3::Z);
+    options.indices = vec![0, 1, 2, 1, 0, 3];
+    let mut mesh = Mesh::from_buffers(options).unwrap();
+    let faces: Vec<_> = mesh.topology().faces().collect();
+
+    for (&face_key, normal) in faces.iter().zip([Vec3::Z, Vec3::Y]) {
+        let face = mesh.face(face_key).unwrap();
+        assert_eq!(face.corner_normals().collect::<Vec<_>>(), vec![normal; 3]);
+        assert_eq!(face.corner_uvs().collect::<Vec<_>>(), vec![None; 3]);
+    }
+
+    let first_corners: Vec<_> = mesh.topology.face_loops(faces[0]).collect();
+    let second_corner = mesh.topology.face_loops(faces[1]).next().unwrap();
+    assert_eq!(
+        mesh.topology.loops[first_corners[1]].vert,
+        mesh.topology.loops[second_corner].vert
+    );
+    mesh.attributes.uvs.insert(first_corners[0], Vec2::ZERO);
+    mesh.attributes.uvs.insert(first_corners[2], Vec2::X);
+    mesh.attributes.uvs.insert(second_corner, Vec2::ONE);
+
+    assert_eq!(
+        mesh.face(faces[0])
+            .unwrap()
+            .corner_uvs()
+            .collect::<Vec<_>>(),
+        vec![Some(Vec2::ZERO), None, Some(Vec2::X)]
+    );
+    assert_eq!(
+        mesh.face(faces[1])
+            .unwrap()
+            .corner_uvs()
+            .collect::<Vec<_>>(),
+        vec![Some(Vec2::ONE), None, None]
+    );
+
+    let shared_vertex = mesh.topology.loops[second_corner].vert;
+    let first_face = mesh.face(faces[0]).unwrap();
+    let second_face = mesh.face(faces[1]).unwrap();
+    assert_eq!(first_face.corner_normal(shared_vertex), Some(Vec3::Z));
+    assert_eq!(second_face.corner_normal(shared_vertex), Some(Vec3::Y));
+    assert_eq!(first_face.corner_uv(shared_vertex), None);
+    assert_eq!(second_face.corner_uv(shared_vertex), Some(Vec2::ONE));
+}
+
+#[test]
+fn face_corner_queries_reject_vertices_outside_face() {
+    let mut options = triangle_buffers();
+    options.positions.push(Vec3::Z);
+    options.uvs = Some(vec![Vec2::ONE; 4]);
+    let mesh = Mesh::from_buffers(options).unwrap();
+    let outside_vertex = mesh.topology().verts().nth(3).unwrap();
+    let face_key = mesh.topology().faces().next().unwrap();
+    let face = mesh.face(face_key).unwrap();
+
+    for vertex in [outside_vertex, VertKey::null()] {
+        assert_eq!(face.corner_normal(vertex), None);
+        assert_eq!(face.corner_uv(vertex), None);
+    }
 }
 
 #[test]
