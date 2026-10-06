@@ -15,7 +15,7 @@ Small, reusable utility crates live under `utils/`:
 
 | Crate | Role |
 | --- | --- |
-| [event-emitter](utils/event-emitter/) | Synchronous events with automatic unsubscription on drop. |
+| [event-emitter](utils/event-emitter/) | Queued broadcasts with shared read-only payloads and receiver-owned subscriptions. |
 
 ## Prerequisites
 

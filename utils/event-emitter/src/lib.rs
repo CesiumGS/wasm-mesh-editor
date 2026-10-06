@@ -1,9 +1,20 @@
-//! Single-threaded synchronous events with subscriptions that unregister on drop.
+//! Single-threaded queued broadcasts with shared, read-only event handles.
 //!
-//! Keep the [`Subscription`] for as long as notifications are wanted. An owner
-//! can expose `&EventEmitter<T>` for subscription while retaining exclusive
-//! access to [`EventEmitter::emit`]. No event payloads are queued or retained.
+//! Each subscriber owns an unbounded channel receiver. Emission moves the
+//! payload into shared storage and queues one handle per subscriber, without
+//! cloning the payload or calling consumer code. Drain receivers regularly:
+//! events remain alive until their last queued or received handle is dropped.
+//!
+//! ```
+//! use event_emitter::EventEmitter;
+//!
+//! let mut events = EventEmitter::new();
+//! let changes = events.subscribe();
+//! events.emit(vec![1, 2, 3]);
+//! let event = changes.try_recv().unwrap();
+//! assert_eq!(event.as_ref(), &[1, 2, 3]);
+//! ```
 
 mod event_emitter;
 
-pub use event_emitter::{EventEmitter, Subscription};
+pub use event_emitter::{Event, EventEmitter};

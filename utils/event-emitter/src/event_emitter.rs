@@ -1,19 +1,22 @@
-use std::cell::{Cell, RefCell};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
+use std::sync::mpsc::{self, Receiver, Sender};
 
-use slotmap::{DefaultKey, DenseSlotMap};
+/// An owning, shared handle that exposes read-only access to an event payload.
+///
+/// The payload is released when its last queued or received handle is dropped.
+pub struct Event<T>(Rc<T>);
 
-type Callback<T> = dyn FnMut(&T) + 'static;
-type ListenerList<T> = RefCell<DenseSlotMap<DefaultKey, Rc<Listener<T>>>>;
-
-struct Listener<T> {
-    callback: RefCell<Box<Callback<T>>>,
-    active: Cell<bool>,
+impl<T> AsRef<T> for Event<T> {
+    fn as_ref(&self) -> &T {
+        self.0.as_ref()
+    }
 }
 
-/// A single-threaded event emitter.
+/// A single-threaded broadcaster with an unbounded queue per subscriber.
+///
+/// Emission queues shared payload handles without invoking consumer code.
 pub struct EventEmitter<T> {
-    listeners: Rc<ListenerList<T>>,
+    senders: Vec<Sender<Event<T>>>,
 }
 
 impl<T> Default for EventEmitter<T> {
@@ -23,95 +26,33 @@ impl<T> Default for EventEmitter<T> {
 }
 
 impl<T> EventEmitter<T> {
-    /// Creates an emitter with no listeners.
+    /// Creates an emitter with no subscribers.
     pub fn new() -> Self {
         Self {
-            listeners: Rc::new(RefCell::new(DenseSlotMap::new())),
+            senders: Vec::new(),
         }
     }
 
-    /// Registers a callback with mutable access to a weakly held target.
+    /// Subscribes to future events in emission order.
     ///
-    /// Destroyed targets are skipped. Drop the subscription to explicitly unregister.
-    pub fn subscribe<Target, F>(
-        &self,
-        target: &Rc<RefCell<Target>>,
-        mut callback: F,
-    ) -> Subscription<T>
-    where
-        Target: 'static,
-        F: FnMut(&mut Target, &T) + 'static,
-    {
-        let target = Rc::downgrade(target);
-        self.subscribe_callback(move |event| {
-            if let Some(target) = target.upgrade() {
-                callback(&mut target.borrow_mut(), event);
-            }
-        })
+    /// The receiver does not borrow the emitter. Drain it regularly with
+    /// [`Receiver::try_iter`] or [`Receiver::try_recv`] to avoid a backlog.
+    /// Dropping it discards its queued handles and unsubscribes; its sender is
+    /// removed on the next emission.
+    pub fn subscribe(&mut self) -> Receiver<Event<T>> {
+        let (sender, receiver) = mpsc::channel();
+        self.senders.push(sender);
+        receiver
     }
 
-    /// Registers a standalone callback until the returned subscription is dropped,
-    /// no target is required.
-    pub fn subscribe_callback<F>(&self, callback: F) -> Subscription<T>
-    where
-        F: FnMut(&T) + 'static,
-    {
-        let listener = Rc::new(Listener {
-            callback: RefCell::new(Box::new(callback)),
-            active: Cell::new(true),
-        });
-        let key = self.listeners.borrow_mut().insert(listener);
-
-        Subscription {
-            listeners: Rc::downgrade(&self.listeners),
-            key,
-        }
-    }
-
-    /// Calls listeners synchronously in unspecified order.
+    /// Moves an event into shared storage and queues a handle for each subscriber.
     ///
-    /// Listeners removed before their turn are skipped. New listeners wait
-    /// until the next emission.
-    ///
-    /// # Panics
-    /// Panics if a target is already borrowed or a callback panics, stopping emission.
-    pub fn emit(&mut self, event: &T) {
-        let listeners: Vec<_> = self.listeners.borrow().values().cloned().collect();
-
-        for listener in listeners {
-            if listener.active.get() {
-                let mut callback = listener.callback.borrow_mut();
-                callback(event);
-            }
-        }
-    }
-}
-
-/// A subscription that unregisters its listener on drop.
-///
-/// Does not keep the emitter alive or interrupt a running callback.
-#[must_use = "dropping the subscription immediately unregisters the listener"]
-pub struct Subscription<T> {
-    listeners: Weak<ListenerList<T>>,
-    key: DefaultKey,
-}
-
-impl<T> Subscription<T> {
-    /// Unregisters the listener.
-    pub fn unsubscribe(self) {
-        drop(self);
-    }
-}
-
-impl<T> Drop for Subscription<T> {
-    fn drop(&mut self) {
-        let Some(listeners) = self.listeners.upgrade() else {
-            return;
-        };
-        let removed = listeners.borrow_mut().remove(self.key);
-        if let Some(listener) = removed {
-            listener.active.set(false);
-        }
+    /// The payload is not cloned. Returning does not mean consumers have
+    /// processed it. Disconnected subscribers are removed without an error.
+    pub fn emit(&mut self, event: T) {
+        let event = Rc::new(event);
+        self.senders
+            .retain(|sender| sender.send(Event(Rc::clone(&event))).is_ok());
     }
 }
 

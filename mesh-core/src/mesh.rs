@@ -3,8 +3,9 @@
 mod build;
 
 use std::collections::HashMap;
+use std::sync::mpsc::Receiver;
 
-use event_emitter::EventEmitter;
+use event_emitter::{Event, EventEmitter};
 use glam::{DVec3, Vec3};
 
 use crate::geometry::corner_angle;
@@ -161,9 +162,10 @@ impl Mesh {
         }
     }
 
-    /// Returns the mesh change emitter for subscriptions.
-    pub fn changes(&self) -> &EventEmitter<MeshChange> {
-        &self.changes
+    /// Subscribes to future mesh changes in emission order. Use
+    /// [`Receiver::try_iter`] or [`Receiver::try_recv`] to process changes. Drop it to unsubscribe.
+    pub fn subscribe(&mut self) -> Receiver<Event<MeshChange>> {
+        self.changes.subscribe()
     }
 
     /// Write each face's normal to its corners. Keys must be live in this mesh.

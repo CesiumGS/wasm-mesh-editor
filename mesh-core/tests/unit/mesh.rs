@@ -1,6 +1,5 @@
-use std::cell::RefCell;
 use std::collections::HashSet;
-use std::rc::Rc;
+use std::sync::mpsc::TryRecvError;
 
 use glam::Vec2;
 use slotmap::Key;
@@ -231,24 +230,26 @@ fn change_subscriptions_use_mesh_owned_emitter() {
         Mesh::default(),
         Mesh::from_buffers(triangle_buffers()).unwrap(),
     ] {
-        let received = Rc::new(RefCell::new(0));
-        let subscription = mesh.changes().subscribe(&received, |received, change| {
-            assert!(matches!(change, MeshChange::Selection(_)));
-            *received += 1;
-        });
-        let change = MeshChange::Selection(SelectionChange::default());
+        let first = mesh.subscribe();
+        let second = mesh.subscribe();
 
-        mesh.changes.emit(&change);
-        assert_eq!(*received.borrow(), 1);
-        drop(subscription);
-        mesh.changes.emit(&change);
-        assert_eq!(*received.borrow(), 1);
+        mesh.changes
+            .emit(MeshChange::Selection(SelectionChange::default()));
 
-        let subscription = mesh.changes().subscribe(&received, |received, _| {
-            *received += 1;
-        });
+        let first_event = first.try_recv().unwrap();
+        let second_event = second.try_recv().unwrap();
+        assert!(matches!(first_event.as_ref(), MeshChange::Selection(_)));
+        assert!(std::ptr::eq(first_event.as_ref(), second_event.as_ref()));
+        assert!(matches!(second.try_recv(), Err(TryRecvError::Empty)));
+        drop(first);
+
+        mesh.changes
+            .emit(MeshChange::Selection(SelectionChange::default()));
         drop(mesh);
-        drop(subscription);
+
+        let remaining = second.try_recv().unwrap();
+        assert!(matches!(remaining.as_ref(), MeshChange::Selection(_)));
+        assert!(matches!(second.try_recv(), Err(TryRecvError::Disconnected)));
     }
 }
 
