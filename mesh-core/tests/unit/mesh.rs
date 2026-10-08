@@ -4,7 +4,7 @@ use std::sync::mpsc::TryRecvError;
 use glam::Vec2;
 use slotmap::Key;
 
-use crate::{ComponentTypes, SelectionChange};
+use crate::{AttributeDomain, AttributeRef, ComponentTypes, SelectionChange, TopologyChange};
 
 use super::*;
 
@@ -15,6 +15,39 @@ fn triangle_buffers() -> MeshBuffers {
         uvs: None,
         indices: vec![0, 1, 2],
         face_vertex_counts: None,
+    }
+}
+
+fn assert_attribute_event(
+    changes: &Receiver<Event<MeshChange>>,
+    attribute: AttributeId,
+    verts: &[VertKey],
+    loops: &[LoopKey],
+) {
+    let event = changes.try_recv().unwrap();
+    let MeshChange::Attributes(delta) = event.as_ref() else {
+        panic!("expected an attribute change");
+    };
+
+    assert!(!event.as_ref().is_empty());
+    assert_eq!(delta.attribute, attribute);
+
+    match &delta.keys {
+        AttributeKeys::Vertices(keys) => {
+            assert_eq!(attribute.domain(), AttributeDomain::Vertex);
+            assert!(loops.is_empty());
+            assert_eq!(keys.len(), verts.len());
+            assert_eq!(**keys, verts.iter().copied().collect());
+        }
+        AttributeKeys::Loops(keys) => {
+            assert_eq!(attribute.domain(), AttributeDomain::Loop);
+            assert!(verts.is_empty());
+            assert_eq!(keys.len(), loops.len());
+            assert_eq!(
+                keys.iter().copied().collect::<HashSet<_>>(),
+                loops.iter().copied().collect()
+            );
+        }
     }
 }
 
@@ -232,6 +265,8 @@ fn change_subscriptions_use_mesh_owned_emitter() {
     ] {
         let first = mesh.subscribe();
         let second = mesh.subscribe();
+        assert!(matches!(first.try_recv(), Err(TryRecvError::Empty)));
+        assert!(matches!(second.try_recv(), Err(TryRecvError::Empty)));
 
         mesh.changes
             .emit(MeshChange::Selection(SelectionChange::default()));
@@ -254,6 +289,217 @@ fn change_subscriptions_use_mesh_owned_emitter() {
 }
 
 #[test]
+fn translation_events_share_vertex_snapshots_until_the_last_handle_is_dropped() {
+    let mut mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
+    let verts: Vec<_> = mesh.topology.verts().collect();
+    mesh.selection_mut().select(&verts);
+    let original = Rc::downgrade(&mesh.selection.verts);
+    let first = mesh.subscribe();
+    let second = mesh.subscribe();
+
+    mesh.translate_selected(Vec3::X);
+    mesh.translate_selected(Vec3::Y);
+    mesh.selection_mut().set(&verts[..1]);
+    mesh.translate_selected(Vec3::Z);
+    let current = Rc::downgrade(&mesh.selection.verts);
+
+    let position_events = |changes: &Receiver<Event<MeshChange>>| {
+        changes
+            .try_iter()
+            .filter(|event| {
+                matches!(
+                    event.as_ref(),
+                    MeshChange::Attributes(AttributeChange {
+                        attribute: AttributeId::Position,
+                        ..
+                    })
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let first_events = position_events(&first);
+    let second_events = position_events(&second);
+    assert_eq!(first_events.len(), 3);
+    assert_eq!(second_events.len(), 3);
+
+    for (index, (first_event, second_event)) in first_events.iter().zip(&second_events).enumerate()
+    {
+        assert!(std::ptr::eq(first_event.as_ref(), second_event.as_ref()));
+
+        let MeshChange::Attributes(change) = first_event.as_ref() else {
+            panic!("expected an attribute change");
+        };
+        let AttributeKeys::Vertices(keys) = &change.keys else {
+            panic!("expected vertex keys");
+        };
+
+        if index < 2 {
+            assert!(Rc::ptr_eq(keys, &original.upgrade().unwrap()));
+            assert!(!Rc::ptr_eq(keys, &mesh.selection.verts));
+            assert_eq!(**keys, verts.iter().copied().collect());
+        } else {
+            assert!(Rc::ptr_eq(keys, &mesh.selection.verts));
+            assert_eq!(**keys, HashSet::from([verts[0]]));
+        }
+    }
+
+    drop(first_events);
+    assert!(original.upgrade().is_some());
+
+    drop(second_events);
+    assert!(original.upgrade().is_none());
+    assert!(current.upgrade().is_some());
+
+    drop(mesh);
+    assert!(current.upgrade().is_none());
+}
+
+#[test]
+fn dropping_subscribers_releases_queued_vertex_snapshots() {
+    let mut mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
+    let verts: Vec<_> = mesh.topology.verts().collect();
+    mesh.selection_mut().select(&verts);
+    let snapshot = Rc::downgrade(&mesh.selection.verts);
+    let first = mesh.subscribe();
+    let second = mesh.subscribe();
+
+    mesh.translate_selected(Vec3::X);
+    mesh.selection_mut().clear();
+
+    drop(first);
+    assert!(snapshot.upgrade().is_some());
+
+    drop(second);
+    assert!(snapshot.upgrade().is_none());
+}
+
+#[test]
+fn attribute_lookup_borrows_typed_storage_and_identifies_domains() {
+    let mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
+    let attributes = mesh.attributes();
+
+    let AttributeRef::Position(positions) = attributes.get(AttributeId::Position) else {
+        panic!("expected position storage");
+    };
+
+    assert!(std::ptr::eq(positions, &attributes.positions));
+    assert_eq!(AttributeId::Position.domain(), AttributeDomain::Vertex);
+
+    let AttributeRef::Normal(normals) = attributes.get(AttributeId::Normal) else {
+        panic!("expected normal storage");
+    };
+
+    assert!(std::ptr::eq(normals, &attributes.normals));
+    assert_eq!(AttributeId::Normal.domain(), AttributeDomain::Loop);
+
+    let AttributeRef::Uv(uvs) = attributes.get(AttributeId::Uv) else {
+        panic!("expected UV storage");
+    };
+
+    assert!(std::ptr::eq(uvs, &attributes.uvs));
+    assert!(uvs.is_empty());
+    assert_eq!(AttributeId::Uv.domain(), AttributeDomain::Loop);
+}
+
+#[test]
+fn attribute_and_selection_changes_check_each_key_list_for_emptiness() {
+    let mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
+    let vertex = mesh.topology.verts().next().unwrap();
+    let edge = mesh.topology.edges().next().unwrap();
+    let face = mesh.topology.faces().next().unwrap();
+    let corner = mesh.topology.loops().next().unwrap();
+
+    for attribute in [AttributeId::Position, AttributeId::Normal, AttributeId::Uv] {
+        let empty_keys = || match attribute.domain() {
+            AttributeDomain::Vertex => AttributeKeys::Vertices(Rc::default()),
+            AttributeDomain::Loop => AttributeKeys::Loops(Rc::default()),
+        };
+        let mut change = AttributeChange {
+            attribute,
+            keys: empty_keys(),
+        };
+
+        assert!(change.is_empty());
+        assert!(
+            MeshChange::Attributes(AttributeChange {
+                attribute,
+                keys: empty_keys(),
+            })
+            .is_empty()
+        );
+
+        match &mut change.keys {
+            AttributeKeys::Vertices(verts) => {
+                Rc::make_mut(verts).insert(vertex);
+            }
+            AttributeKeys::Loops(loops) => Rc::make_mut(loops).push(corner),
+        }
+
+        assert!(!change.is_empty());
+        assert!(!MeshChange::Attributes(change).is_empty());
+    }
+
+    assert!(MeshChange::Selection(SelectionChange::default()).is_empty());
+
+    for key in [
+        ComponentKey::Vert(vertex),
+        ComponentKey::Edge(edge),
+        ComponentKey::Face(face),
+    ] {
+        for added in [true, false] {
+            let mut change = SelectionChange::default();
+
+            assert!(change.is_empty());
+
+            if added {
+                change.added[key.kind()].push(key);
+            } else {
+                change.removed[key.kind()].push(key);
+            }
+
+            assert!(!change.is_empty());
+            assert!(!MeshChange::Selection(change).is_empty());
+        }
+    }
+}
+
+#[test]
+fn topology_changes_check_each_key_list_for_emptiness() {
+    let mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
+    let vertex = mesh.topology.verts().next().unwrap();
+    let edge = mesh.topology.edges().next().unwrap();
+    let face = mesh.topology.faces().next().unwrap();
+    let empty = || TopologyChange {
+        added_verts: Vec::new(),
+        removed_verts: Vec::new(),
+        added_edges: Vec::new(),
+        removed_edges: Vec::new(),
+        added_faces: Vec::new(),
+        removed_faces: Vec::new(),
+    };
+
+    assert!(empty().is_empty());
+    assert!(MeshChange::Topology(empty()).is_empty());
+
+    for field in 0..6 {
+        let mut change = empty();
+
+        match field {
+            0 => change.added_verts.push(vertex),
+            1 => change.removed_verts.push(vertex),
+            2 => change.added_edges.push(edge),
+            3 => change.removed_edges.push(edge),
+            4 => change.added_faces.push(face),
+            5 => change.removed_faces.push(face),
+            _ => unreachable!(),
+        }
+
+        assert!(!change.is_empty());
+        assert!(!MeshChange::Topology(change).is_empty());
+    }
+}
+
+#[test]
 fn accessors_borrow_mesh_stores() {
     let mut mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
     assert!(std::ptr::eq(mesh.topology(), &mesh.topology));
@@ -272,7 +518,7 @@ fn accessors_borrow_mesh_stores() {
     assert!(std::ptr::eq(selection.topo, topology));
     assert!(std::ptr::eq(selection.attrs, attributes));
     assert!(std::ptr::eq(&*selection.state, state));
-    selection.state.verts.insert(vert_key);
+    std::rc::Rc::make_mut(&mut selection.state.verts).insert(vert_key);
     assert!(mesh.selection().state.verts.contains(&vert_key));
 }
 
@@ -627,6 +873,71 @@ fn face_normals_follow_position_edits_without_overwriting_shading_normals() {
 }
 
 #[test]
+fn translation_events_share_cached_loop_keys_and_preserve_old_snapshots() {
+    let mut options = triangle_buffers();
+    options
+        .positions
+        .extend([Vec3::Z, Vec3::X + Vec3::Z, Vec3::Y + Vec3::Z]);
+    options.indices.extend([3, 4, 5]);
+    let mut mesh = Mesh::from_buffers(options).unwrap();
+    let verts: Vec<_> = mesh.topology.verts().collect();
+    let faces: Vec<_> = mesh.topology.faces().collect();
+    mesh.selection_mut().select(&verts[..1]);
+    let changes = mesh.subscribe();
+
+    mesh.translate_selected(Vec3::Z);
+    let original = Rc::downgrade(mesh.selection().boundary().mixed_face_loops());
+    mesh.translate_selected(Vec3::Y);
+
+    mesh.selection_mut().set(&verts[3..4]);
+    mesh.translate_selected(Vec3::X);
+    let current = Rc::downgrade(mesh.selection().boundary().mixed_face_loops());
+
+    let events: Vec<_> = changes
+        .try_iter()
+        .filter(|event| {
+            matches!(
+                event.as_ref(),
+                MeshChange::Attributes(AttributeChange {
+                    attribute: AttributeId::Normal,
+                    ..
+                })
+            )
+        })
+        .collect();
+    assert_eq!(events.len(), 3);
+
+    for (index, event) in events.iter().enumerate() {
+        let MeshChange::Attributes(change) = event.as_ref() else {
+            panic!("expected an attribute change");
+        };
+        let AttributeKeys::Loops(keys) = &change.keys else {
+            panic!("expected loop keys");
+        };
+        let (snapshot, face) = if index < 2 {
+            (&original, faces[0])
+        } else {
+            (&current, faces[1])
+        };
+
+        assert!(Rc::ptr_eq(keys, &snapshot.upgrade().unwrap()));
+        assert_eq!(keys.len(), 3);
+        assert_eq!(
+            keys.iter().copied().collect::<HashSet<_>>(),
+            mesh.topology.face_loops(face).collect()
+        );
+    }
+
+    drop(mesh);
+    assert!(original.upgrade().is_some());
+    assert!(current.upgrade().is_some());
+
+    drop(events);
+    assert!(original.upgrade().is_none());
+    assert!(current.upgrade().is_none());
+}
+
+#[test]
 fn translate_selected_updates_only_moved_positions_and_mixed_face_normals() {
     let mut options = triangle_buffers();
     options.positions.extend([Vec3::Z, -Vec3::X, -Vec3::Y]);
@@ -645,9 +956,18 @@ fn translate_selected_updates_only_moved_positions_and_mixed_face_normals() {
         &HashSet::from([faces[1]])
     );
     let cached_faces = mesh.selection().boundary().mixed_faces() as *const HashSet<FaceKey>;
+    let changes = mesh.subscribe();
 
     for (step, expected_normal) in [(1.0, Vec3::Z), (2.0, Vec3::new(0.0, -1.0, 2.0).normalize())] {
         mesh.translate_selected(Vec3::Y + Vec3::Z);
+        assert_attribute_event(&changes, AttributeId::Position, &vertices[..3], &[]);
+        assert_attribute_event(
+            &changes,
+            AttributeId::Normal,
+            &[],
+            &mesh.topology.face_loops(faces[1]).collect::<Vec<_>>(),
+        );
+        assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
         for (index, &key) in vertices.iter().enumerate() {
             let expected = positions[key]
                 + if index < 3 {
@@ -730,9 +1050,19 @@ fn translate_selected_preserves_normals_for_noops_and_rigid_faces() {
         let vertices: Vec<_> = mesh.topology.verts.keys().collect();
         mesh.selection_mut().select(&vertices[..selected_count]);
         let positions = mesh.attributes.positions.clone();
+        let changes = mesh.subscribe();
 
         mesh.translate_selected(delta);
 
+        if selected_count != 0 && delta != Vec3::ZERO {
+            assert_attribute_event(
+                &changes,
+                AttributeId::Position,
+                &vertices[..selected_count],
+                &[],
+            );
+        }
+        assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
         for (index, &key) in vertices.iter().enumerate() {
             let expected = positions[key]
                 + if index < selected_count {
@@ -769,9 +1099,17 @@ fn translate_selected_moves_wire_and_isolated_vertices() {
     mesh.selection_mut().select(&[vertices[3], vertices[5]]);
     let positions = mesh.attributes.positions.clone();
     let normals = mesh.attributes.normals.clone();
+    let changes = mesh.subscribe();
 
     mesh.translate_selected(Vec3::ONE);
 
+    assert_attribute_event(
+        &changes,
+        AttributeId::Position,
+        &[vertices[3], vertices[5]],
+        &[],
+    );
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
     for (index, &key) in vertices.iter().enumerate() {
         let expected = positions[key]
             + if index == 3 || index == 5 {
@@ -946,9 +1284,11 @@ fn recompute_selected_normals_only_update_selected_components() {
     let mut mesh = Mesh::from_buffers(options).unwrap();
     let face = mesh.topology.faces.keys().next().unwrap();
     let vertex = mesh.topology.verts.keys().next().unwrap();
+    let changes = mesh.subscribe();
 
     mesh.shade_flat();
     mesh.shade_smooth();
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
     assert!(
         mesh.attributes
             .normals
@@ -958,7 +1298,15 @@ fn recompute_selected_normals_only_update_selected_components() {
 
     mesh.selection_mut().set_level(ComponentTypes::FACE);
     mesh.selection_mut().select(&[face, FaceKey::null()]);
+    let changes = mesh.subscribe();
     mesh.shade_flat();
+    assert_attribute_event(
+        &changes,
+        AttributeId::Normal,
+        &[],
+        &mesh.topology.face_loops(face).collect::<Vec<_>>(),
+    );
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
     for (key, corner) in &mesh.topology.loops {
         let expected = if corner.face == face {
             Vec3::Z
@@ -971,7 +1319,15 @@ fn recompute_selected_normals_only_update_selected_components() {
     mesh.selection_mut().set_level(ComponentTypes::VERTEX);
     mesh.selection_mut().set(&[vertex, VertKey::null()]);
     let previous_normals = mesh.attributes.normals.clone();
+    let changes = mesh.subscribe();
     mesh.shade_smooth();
+    assert_attribute_event(
+        &changes,
+        AttributeId::Normal,
+        &[],
+        &mesh.topology.vert_loops(vertex).collect::<Vec<_>>(),
+    );
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
     for (key, corner) in &mesh.topology.loops {
         let expected = if corner.vert == vertex {
             (Vec3::Y + Vec3::Z).normalize()

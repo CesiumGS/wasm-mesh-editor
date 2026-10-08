@@ -5,13 +5,15 @@ mod boundary;
 pub use boundary::{SelectionBoundary, SelectionStep};
 
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use boundary::BoundaryCache;
+use event_emitter::EventEmitter;
 
 use crate::mesh_component::PerComponentType;
 use crate::{
     Attributes, ComponentKey, ComponentRef, ComponentType, ComponentTypes, EdgeKey, FaceKey,
-    SelectionChange, Topology, VertKey,
+    MeshChange, SelectionChange, Topology, VertKey,
 };
 
 /// A component kind that can be selected: the three handle types and
@@ -21,7 +23,7 @@ pub trait SelectionKind: Copy + Into<ComponentKey> {}
 impl<T: Copy + Into<ComponentKey>> SelectionKind for T {}
 
 pub(crate) struct SelectionState {
-    pub(crate) verts: HashSet<VertKey>,
+    pub(crate) verts: Rc<HashSet<VertKey>>,
     pub(crate) edges: HashSet<EdgeKey>,
     pub(crate) faces: HashSet<FaceKey>,
     pub(crate) level: ComponentTypes,
@@ -31,7 +33,7 @@ pub(crate) struct SelectionState {
 impl Default for SelectionState {
     fn default() -> Self {
         Self {
-            verts: HashSet::new(),
+            verts: Rc::default(),
             edges: HashSet::new(),
             faces: HashSet::new(),
             level: ComponentTypes::VERTEX,
@@ -47,7 +49,13 @@ impl SelectionState {
 
     fn insert(&mut self, key: ComponentKey) -> bool {
         let changed = match key {
-            ComponentKey::Vert(key) => self.verts.insert(key),
+            ComponentKey::Vert(key) => {
+                if self.verts.contains(&key) {
+                    return false;
+                }
+
+                Rc::make_mut(&mut self.verts).insert(key)
+            }
             ComponentKey::Edge(key) => self.edges.insert(key),
             ComponentKey::Face(key) => self.faces.insert(key),
         };
@@ -59,7 +67,13 @@ impl SelectionState {
 
     fn remove(&mut self, key: ComponentKey) -> bool {
         let changed = match key {
-            ComponentKey::Vert(key) => self.verts.remove(&key),
+            ComponentKey::Vert(key) => {
+                if !self.verts.contains(&key) {
+                    return false;
+                }
+
+                Rc::make_mut(&mut self.verts).remove(&key)
+            }
             ComponentKey::Edge(key) => self.edges.remove(&key),
             ComponentKey::Face(key) => self.faces.remove(&key),
         };
@@ -98,6 +112,7 @@ pub struct Selection<'a> {
     pub(crate) state: &'a mut SelectionState,
     pub(crate) topo: &'a Topology,
     pub(crate) attrs: &'a Attributes,
+    pub(crate) changes: &'a mut EventEmitter<MeshChange>,
 }
 
 impl<'a> SelectionView<'a> {
@@ -180,70 +195,129 @@ impl<'a> Selection<'a> {
             .collect();
 
         self.state.level = level;
+
         self.set(&survivors);
     }
 
     /// Sets the current selection to the given components, replacing any existing selection.
     pub fn set<K: SelectionKind>(&mut self, keys: &[K]) {
-        self.clear();
-        self.select(keys);
+        let removed = self.clear_selection();
+
+        let mut delta = self.apply_action(keys, Action::Select, self.state.level);
+        delta.removed = removed;
+
+        if !delta.is_empty() {
+            self.changes.emit(MeshChange::Selection(delta));
+        }
     }
 
     /// Adds the given components to the current selection.
     pub fn select<K: SelectionKind>(&mut self, keys: &[K]) {
-        self.apply_action(keys, Action::Select, self.state.level);
+        let delta = self.apply_action(keys, Action::Select, self.state.level);
+
+        if !delta.is_empty() {
+            self.changes.emit(MeshChange::Selection(delta));
+        }
     }
 
     /// Removes the given components from the current selection.
     pub fn deselect<K: SelectionKind>(&mut self, keys: &[K]) {
-        self.apply_action(keys, Action::Deselect, self.state.level);
+        let delta = self.apply_action(keys, Action::Deselect, self.state.level);
+
+        if !delta.is_empty() {
+            self.changes.emit(MeshChange::Selection(delta));
+        }
     }
 
     /// Toggles the given components in the current selection.
     pub fn toggle<K: SelectionKind>(&mut self, keys: &[K]) {
-        self.apply_action(keys, Action::Toggle, self.state.level);
+        let delta = self.apply_action(keys, Action::Toggle, self.state.level);
+
+        if !delta.is_empty() {
+            self.changes.emit(MeshChange::Selection(delta));
+        }
     }
 
     /// Clears all selected components, regardless of the current mode.
     pub fn clear(&mut self) {
-        if !self.view().is_empty() {
-            self.state.invalidate_boundary();
+        let delta = SelectionChange {
+            removed: self.clear_selection(),
+            ..SelectionChange::default()
+        };
+
+        if !delta.is_empty() {
+            self.changes.emit(MeshChange::Selection(delta));
+        }
+    }
+
+    fn clear_selection(&mut self) -> PerComponentType<Vec<ComponentKey>> {
+        if self.view().is_empty() {
+            return PerComponentType::default();
         }
 
-        self.state.verts.clear();
-        self.state.edges.clear();
-        self.state.faces.clear();
+        self.state.invalidate_boundary();
+
+        let mut removed = PerComponentType::default();
+
+        removed[ComponentType::Vertex] = match Rc::get_mut(&mut self.state.verts) {
+            Some(verts) => verts.drain().map(ComponentKey::Vert).collect(),
+            None => {
+                let verts = std::mem::take(&mut self.state.verts);
+
+                verts.iter().copied().map(ComponentKey::Vert).collect()
+            }
+        };
+        removed[ComponentType::Edge] = self.state.edges.drain().map(ComponentKey::Edge).collect();
+        removed[ComponentType::Face] = self.state.faces.drain().map(ComponentKey::Face).collect();
+
+        removed
     }
 
     /// Grow the selection by one outer layer of the current selection mode.
     /// Face-only mode edits faces; any vertex or edge mode edits vertices.
     /// A fully selected connected component has no boundary and is unchanged.
     pub fn grow(&mut self, step: SelectionStep) {
-        if self.state.level == ComponentTypes::FACE {
+        let delta = if self.state.level == ComponentTypes::FACE {
             let faces: Vec<_> = self.view().boundary().outer_faces(step).collect();
-            self.apply_action(&faces, Action::Select, ComponentTypes::FACE);
+
+            self.apply_action(&faces, Action::Select, ComponentTypes::FACE)
         } else if self
             .state
             .level
             .intersects(ComponentTypes::VERTEX | ComponentTypes::EDGE)
         {
             let verts: Vec<_> = self.view().boundary().outer_vertices(step).collect();
-            self.apply_action(&verts, Action::Select, ComponentTypes::VERTEX);
+
+            self.apply_action(&verts, Action::Select, ComponentTypes::VERTEX)
+        } else {
+            return;
+        };
+
+        if !delta.is_empty() {
+            self.changes.emit(MeshChange::Selection(delta));
         }
     }
 
     /// Shrink the selection by one inner layer, using the same mode rules as [`Self::grow`].
     pub fn shrink(&mut self, step: SelectionStep) {
-        if self.state.level == ComponentTypes::FACE {
+        let delta = if self.state.level == ComponentTypes::FACE {
             let faces: Vec<_> = self.view().boundary().inner_faces(step).collect();
-            self.apply_action(&faces, Action::Deselect, ComponentTypes::FACE);
+
+            self.apply_action(&faces, Action::Deselect, ComponentTypes::FACE)
         } else if self
             .state
             .level
             .intersects(ComponentTypes::VERTEX | ComponentTypes::EDGE)
         {
             let verts: Vec<_> = self.view().boundary().inner_vertices(step).collect();
-            self.apply_action(&verts, Action::Deselect, ComponentTypes::VERTEX);
+
+            self.apply_action(&verts, Action::Deselect, ComponentTypes::VERTEX)
+        } else {
+            return;
+        };
+
+        if !delta.is_empty() {
+            self.changes.emit(MeshChange::Selection(delta));
         }
     }
 
@@ -254,12 +328,13 @@ impl<'a> Selection<'a> {
         keys: &[K],
         action: Action,
         allowed_kinds: ComponentTypes,
-    ) {
+    ) -> SelectionChange {
         let mut delta = SelectionChange::default();
         let mut seen_keys = HashSet::new();
 
         for &key in keys {
             let key = key.into();
+
             if !seen_keys.insert(key)
                 || !allowed_kinds.contains(key.kind().into())
                 || !self.topo.contains(key)
@@ -282,6 +357,8 @@ impl<'a> Selection<'a> {
 
         self.propagate_removals(&mut delta.removed);
         self.propagate_additions(&mut delta.added);
+
+        delta
     }
 
     /// Propagates deselection of directly-deselected components to their sub- and

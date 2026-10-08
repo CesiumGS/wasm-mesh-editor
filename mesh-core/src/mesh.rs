@@ -3,6 +3,7 @@
 mod build;
 
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 
 use event_emitter::{Event, EventEmitter};
@@ -11,8 +12,9 @@ use glam::{DVec3, Vec3};
 use crate::geometry::corner_angle;
 use crate::selection::{SelectionBoundary, SelectionState};
 use crate::{
-    Attributes, ComponentKey, ComponentRef, EdgeKey, EdgeRef, FaceKey, FaceRef, MeshChange,
-    Selection, SelectionView, Topology, VertKey, VertRef,
+    AttributeChange, AttributeId, AttributeKeys, Attributes, ComponentKey, ComponentRef, EdgeKey,
+    EdgeRef, FaceKey, FaceRef, LoopKey, MeshChange, Selection, SelectionView, Topology, VertKey,
+    VertRef,
 };
 
 pub use build::{MeshBuffers, MeshBuildError};
@@ -110,12 +112,21 @@ impl Mesh {
             selection,
             ..
         } = self;
-        for &key in &selection.verts {
+
+        for &key in selection.verts.iter() {
             attributes.positions[key] += delta;
         }
 
         let boundary = SelectionBoundary::new(selection, topology);
+        let loops = Rc::clone(boundary.mixed_face_loops());
         Self::recompute_flat_normals(topology, attributes, boundary.mixed_faces().iter().copied());
+
+        self.changes.emit(MeshChange::Attributes(AttributeChange {
+            attribute: AttributeId::Position,
+            keys: AttributeKeys::Vertices(Rc::clone(&selection.verts)),
+        }));
+
+        self.emit_normal_change(loops);
     }
 
     /// Recompute flat normals on the selected faces.
@@ -126,7 +137,16 @@ impl Mesh {
             selection,
             ..
         } = self;
+
         Self::recompute_flat_normals(topology, attributes, selection.faces.iter().copied());
+
+        let loops = selection
+            .faces
+            .iter()
+            .flat_map(|&key| topology.face_loops(key))
+            .collect();
+
+        self.emit_normal_change(Rc::new(loops));
     }
 
     /// Recompute smooth normals at the selected vertices using all incident faces.
@@ -138,12 +158,15 @@ impl Mesh {
             face_normals,
             ..
         } = self;
-        Self::recompute_smooth_normals(
+
+        let loops = Self::recompute_smooth_normals(
             topology,
             attributes,
             face_normals,
             selection.verts.iter().copied(),
         );
+
+        self.emit_normal_change(Rc::new(loops));
     }
 
     pub fn selection(&self) -> SelectionView<'_> {
@@ -159,13 +182,28 @@ impl Mesh {
             state: &mut self.selection,
             topo: &self.topology,
             attrs: &self.attributes,
+            changes: &mut self.changes,
         }
     }
 
     /// Subscribes to future mesh changes in emission order. Use
     /// [`Receiver::try_iter`] or [`Receiver::try_recv`] to process changes. Drop it to unsubscribe.
+    /// Read initial state from the mesh; construction and past changes are not replayed.
+    /// Notifications identify affected keys, whose current state may have changed again before processing.
+    /// Translation events share vertex and loop-key snapshots; selection edits leave queued snapshots intact.
     pub fn subscribe(&mut self) -> Receiver<Event<MeshChange>> {
         self.changes.subscribe()
+    }
+
+    fn emit_normal_change(&mut self, loops: Rc<Vec<LoopKey>>) {
+        let change = AttributeChange {
+            attribute: AttributeId::Normal,
+            keys: AttributeKeys::Loops(loops),
+        };
+
+        if !change.is_empty() {
+            self.changes.emit(MeshChange::Attributes(change));
+        }
     }
 
     /// Write each face's normal to its corners. Keys must be live in this mesh.
@@ -182,6 +220,7 @@ impl Mesh {
                 key,
             }
             .normal();
+
             for loop_key in topology.face_loops(key) {
                 attributes.normals.insert(loop_key, normal);
             }
@@ -190,14 +229,15 @@ impl Mesh {
 
     /// Average all incident face normals, weighted by the angle at each corner.
     /// Write the result to every corner at the requested vertices, with no sharp edges.
-    /// Keys must be live in this mesh; undefined normals become zero.
+    /// Keys must be live in this mesh; undefined normals become zero. Returns the written corner keys.
     fn recompute_smooth_normals(
         topology: &Topology,
         attributes: &mut Attributes,
         face_normals: &mut HashMap<FaceKey, DVec3>,
         vertices: impl IntoIterator<Item = VertKey>,
-    ) {
+    ) -> Vec<LoopKey> {
         face_normals.clear();
+        let mut loops = Vec::new();
 
         for key in vertices {
             let origin = attributes.positions[key].as_dvec3();
@@ -215,6 +255,7 @@ impl Mesh {
                     .as_dvec3()
                     .normalize_or_zero()
                 });
+
                 if face_normal == DVec3::ZERO {
                     continue;
                 }
@@ -223,14 +264,19 @@ impl Mesh {
                 let next_vertex = topology.loops[corner.next].vert;
                 let previous = attributes.positions[previous_vertex].as_dvec3() - origin;
                 let next = attributes.positions[next_vertex].as_dvec3() - origin;
+
                 normal += face_normal * corner_angle(previous, next, face_normal);
             }
 
             let normal = normal.normalize_or_zero().as_vec3();
+
             for loop_key in topology.vert_loops(key) {
                 attributes.normals.insert(loop_key, normal);
+                loops.push(loop_key);
             }
         }
+
+        loops
     }
 }
 

@@ -1,10 +1,11 @@
 //! The boundary of a selection.
 
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::sync::OnceLock;
 
 use super::SelectionState;
-use crate::{FaceKey, Topology, VertKey};
+use crate::{FaceKey, LoopKey, Topology, VertKey};
 
 /// How grow, shrink, and boundary queries determine what a neighbor is
 /// (i.e. whether neighbors are connected by an edge or share a face)
@@ -36,6 +37,7 @@ pub(super) struct BoundaryCache {
     pub(super) edge_step_faces: BoundarySets<FaceKey>,
     pub(super) face_step_faces: BoundarySets<FaceKey>,
     pub(super) mixed_faces: OnceLock<HashSet<FaceKey>>,
+    pub(super) mixed_face_loops: OnceLock<Rc<Vec<LoopKey>>>,
 }
 
 /// The selected (inner) and unselected (outer) sides of a selection boundary.
@@ -84,7 +86,7 @@ impl<'a> SelectionBoundary<'a> {
             let mut mixed = HashSet::new();
             let mut visited_faces = HashSet::new();
 
-            for &vert_key in &self.selection.verts {
+            for &vert_key in self.selection.verts.iter() {
                 for face_key in self.topo.vert_faces(vert_key) {
                     if !visited_faces.insert(face_key) {
                         continue;
@@ -106,6 +108,18 @@ impl<'a> SelectionBoundary<'a> {
         })
     }
 
+    /// Shared corner keys for every mixed face, including corners at unselected vertices.
+    pub(crate) fn mixed_face_loops(&self) -> &Rc<Vec<LoopKey>> {
+        self.cache.mixed_face_loops.get_or_init(|| {
+            Rc::new(
+                self.mixed_faces()
+                    .iter()
+                    .flat_map(|&key| self.topo.face_loops(key))
+                    .collect(),
+            )
+        })
+    }
+
     fn vertex_boundary(&self, step: SelectionStep, selected: bool) -> &HashSet<VertKey> {
         let cache = match step {
             SelectionStep::Edge => &self.cache.edge_step_vertices,
@@ -115,7 +129,7 @@ impl<'a> SelectionBoundary<'a> {
         cache.side(selected).get_or_init(|| {
             let mut boundary = HashSet::new();
 
-            for &key in &self.selection.verts {
+            for &key in self.selection.verts.iter() {
                 for edge_key in self.topo.vert_edges(key) {
                     let edge = &self.topo.edges[edge_key];
                     // When stepping by face, skip edges that are part of a face (i.e., not wire edges)

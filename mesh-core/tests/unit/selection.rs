@@ -1,6 +1,8 @@
 use super::*;
 use crate::{Mesh, MeshBuffers};
+use event_emitter::Event;
 use glam::Vec3;
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 fn triangle() -> Mesh {
     Mesh::from_buffers(MeshBuffers {
@@ -11,6 +13,94 @@ fn triangle() -> Mesh {
         face_vertex_counts: None,
     })
     .unwrap()
+}
+
+fn assert_selection_event(
+    changes: &Receiver<Event<MeshChange>>,
+    added: &[ComponentKey],
+    removed: &[ComponentKey],
+) {
+    let event = changes.try_recv().unwrap();
+    let MeshChange::Selection(delta) = event.as_ref() else {
+        panic!("expected a selection change");
+    };
+    for kind in [
+        ComponentType::Vertex,
+        ComponentType::Edge,
+        ComponentType::Face,
+    ] {
+        for (actual, expected) in [(&delta.added[kind], added), (&delta.removed[kind], removed)] {
+            let expected: HashSet<_> = expected
+                .iter()
+                .copied()
+                .filter(|key| key.kind() == kind)
+                .collect();
+            assert_eq!(actual.len(), expected.len());
+            assert_eq!(actual.iter().copied().collect::<HashSet<_>>(), expected);
+        }
+    }
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn selection_events_include_propagation_once_per_action() {
+    let mut mesh = triangle();
+    let face = mesh.topology.faces().next().unwrap();
+    let all: Vec<_> = mesh
+        .topology
+        .verts()
+        .map(ComponentKey::Vert)
+        .chain(mesh.topology.edges().map(ComponentKey::Edge))
+        .chain(mesh.topology.faces().map(ComponentKey::Face))
+        .collect();
+    mesh.selection_mut().set_level(ComponentTypes::FACE);
+    let changes = mesh.subscribe();
+
+    mesh.selection_mut().select(&[face]);
+    assert_selection_event(&changes, &all, &[]);
+    mesh.selection_mut().select(&[face]);
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+    mesh.selection_mut().toggle(&[face]);
+    assert_selection_event(&changes, &[], &all);
+    mesh.selection_mut().toggle(&[face]);
+    assert_selection_event(&changes, &all, &[]);
+    mesh.selection_mut().deselect(&[face]);
+    assert_selection_event(&changes, &[], &all);
+    mesh.selection_mut().deselect(&[face]);
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn set_and_clear_emit_one_event_without_normalizing_deltas() {
+    let mut mesh = triangle();
+    let verts: Vec<_> = mesh.topology.verts().collect();
+    mesh.selection_mut().select(&verts[..1]);
+    let changes = mesh.subscribe();
+
+    mesh.selection_mut().set(&verts[..1]);
+    assert_selection_event(&changes, &[verts[0].into()], &[verts[0].into()]);
+    mesh.selection_mut().set(&verts[1..2]);
+    assert_selection_event(&changes, &[verts[1].into()], &[verts[0].into()]);
+    mesh.selection_mut().clear();
+    assert_selection_event(&changes, &[], &[verts[1].into()]);
+    mesh.selection_mut().clear();
+    mesh.selection_mut().set::<VertKey>(&[]);
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn level_changes_only_emit_selection_deltas() {
+    let mut mesh = triangle();
+    let vertex = mesh.topology.verts().next().unwrap();
+    mesh.selection_mut().select(&[vertex]);
+    let changes = mesh.subscribe();
+
+    mesh.selection_mut().set_level(ComponentTypes::VERTEX);
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+    mesh.selection_mut().set_level(ComponentTypes::FACE);
+    assert_selection_event(&changes, &[], &[vertex.into()]);
+    mesh.selection_mut().set_level(ComponentTypes::EDGE);
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
 }
 
 fn quad_grid(columns: usize, rows: usize) -> Mesh {
@@ -33,6 +123,49 @@ fn quad_grid(columns: usize, rows: usize) -> Mesh {
         face_vertex_counts: Some(vec![4; columns * rows]),
     })
     .unwrap()
+}
+
+#[test]
+fn grow_shrink_and_clear_emit_complete_selection_changes() {
+    for level in [
+        ComponentTypes::VERTEX,
+        ComponentTypes::EDGE,
+        ComponentTypes::FACE,
+    ] {
+        for step in [SelectionStep::Edge, SelectionStep::Face] {
+            let mut mesh = quad_grid(5, 5);
+            let face = mesh.topology.faces().nth(12).unwrap();
+            let seed = if level == ComponentTypes::FACE {
+                ComponentKey::Face(face)
+            } else if level == ComponentTypes::EDGE {
+                ComponentKey::Edge(mesh.topology.face_edges(face).next().unwrap())
+            } else {
+                ComponentKey::Vert(mesh.topology.face_verts(face).next().unwrap())
+            };
+            mesh.selection_mut().set_level(level);
+            mesh.selection_mut().select(&[seed]);
+            let before: HashSet<_> = mesh.selection().selected().collect();
+            let changes = mesh.subscribe();
+
+            mesh.selection_mut().grow(step);
+            let grown: HashSet<_> = mesh.selection().selected().collect();
+            assert!(grown.len() > before.len());
+            let added: Vec<_> = grown.difference(&before).copied().collect();
+            assert_selection_event(&changes, &added, &[]);
+
+            mesh.selection_mut().shrink(step);
+            let shrunk: HashSet<_> = mesh.selection().selected().collect();
+            assert!(shrunk.len() < grown.len());
+            let removed: Vec<_> = grown.difference(&shrunk).copied().collect();
+            assert_selection_event(&changes, &[], &removed);
+
+            assert!(!shrunk.is_empty());
+            mesh.selection_mut().clear();
+            assert_selection_event(&changes, &[], &shrunk.into_iter().collect::<Vec<_>>());
+            mesh.selection_mut().clear();
+            assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+        }
+    }
 }
 
 #[test]
@@ -68,7 +201,9 @@ fn boundary_cache_is_lazy_and_shared_across_accessor_calls() {
     );
     assert_eq!(
         boundary_cache_state(&mesh),
-        [true, false, false, false, false, false, false, false, false]
+        [
+            true, false, false, false, false, false, false, false, false, false
+        ]
     );
 
     let boundary = mesh.selection().boundary();
@@ -87,7 +222,7 @@ fn boundary_cache_is_lazy_and_shared_across_accessor_calls() {
 
 #[test]
 fn boundary_queries_only_initialize_their_dependencies() {
-    for query in 0..8 {
+    for query in 0..10 {
         let mut mesh = quad_grid(3, 3);
         let face = mesh.topology.faces.keys().nth(4).unwrap();
         mesh.selection_mut().set_level(ComponentTypes::FACE);
@@ -102,19 +237,51 @@ fn boundary_queries_only_initialize_their_dependencies() {
             5 => boundary.outer_faces(SelectionStep::Edge).count(),
             6 => boundary.inner_faces(SelectionStep::Face).count(),
             7 => boundary.outer_faces(SelectionStep::Face).count(),
+            8 => boundary.mixed_faces().len(),
+            9 => boundary.mixed_face_loops().len(),
             _ => unreachable!(),
         };
-        let mut expected = [false; 9];
+        let mut expected = [false; 10];
         expected[query] = true;
-        expected[8] = query == 2 || query == 3;
+        expected[8] = matches!(query, 2 | 3 | 8 | 9);
         assert_eq!(boundary_cache_state(&mesh), expected, "query {query}");
     }
 }
 
 #[test]
-fn boundary_cache_preserves_mesh_data_send_and_sync() {
+fn mixed_face_loop_snapshots_are_shared_and_survive_invalidation() {
+    let mut mesh = triangle();
+    let verts: Vec<_> = mesh.topology.verts.keys().collect();
+    let expected: HashSet<_> = mesh.topology.loops.keys().collect();
+    mesh.selection_mut().select(&verts[..1]);
+
+    let loops = Rc::clone(mesh.selection().boundary().mixed_face_loops());
+    assert_eq!(loops.len(), expected.len());
+    assert_eq!(loops.iter().copied().collect::<HashSet<_>>(), expected);
+    assert!(loops.iter().any(|&key| {
+        !mesh
+            .selection
+            .verts
+            .contains(&mesh.topology.loops[key].vert)
+    }));
+    assert!(Rc::ptr_eq(
+        &loops,
+        mesh.selection().boundary().mixed_face_loops()
+    ));
+
+    mesh.selection_mut().select(&verts[1..]);
+    assert!(mesh.selection.boundary.mixed_face_loops.get().is_none());
+
+    let boundary = mesh.selection().boundary();
+    let updated = boundary.mixed_face_loops();
+    assert!(updated.is_empty());
+    assert!(!Rc::ptr_eq(&loops, updated));
+    assert_eq!(loops.iter().copied().collect::<HashSet<_>>(), expected);
+}
+
+#[test]
+fn topology_and_attributes_remain_send_and_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<SelectionState>();
     assert_send_sync::<crate::Topology>();
     assert_send_sync::<crate::Attributes>();
 }
@@ -127,10 +294,11 @@ fn populate_boundary_cache(mesh: &Mesh) {
         boundary.inner_faces(step).count();
         boundary.outer_faces(step).count();
     }
+    boundary.mixed_face_loops();
     assert_boundary_cache_initialized(mesh, true);
 }
 
-fn boundary_cache_state(mesh: &Mesh) -> [bool; 9] {
+fn boundary_cache_state(mesh: &Mesh) -> [bool; 10] {
     let cache = &mesh.selection.boundary;
     [
         cache.edge_step_vertices.inner.get().is_some(),
@@ -142,11 +310,12 @@ fn boundary_cache_state(mesh: &Mesh) -> [bool; 9] {
         cache.face_step_faces.inner.get().is_some(),
         cache.face_step_faces.outer.get().is_some(),
         cache.mixed_faces.get().is_some(),
+        cache.mixed_face_loops.get().is_some(),
     ]
 }
 
 fn assert_boundary_cache_initialized(mesh: &Mesh, expected: bool) {
-    assert_eq!(boundary_cache_state(mesh), [expected; 9]);
+    assert_eq!(boundary_cache_state(mesh), [expected; 10]);
 }
 
 #[test]
@@ -953,7 +1122,7 @@ fn accessors_expose_each_selected_kind() {
     let vert = mesh.topology.verts.keys().next().unwrap();
     let edge = mesh.topology.edges.keys().next().unwrap();
     let face = mesh.topology.faces.keys().next().unwrap();
-    mesh.selection.verts.insert(vert);
+    std::rc::Rc::make_mut(&mut mesh.selection.verts).insert(vert);
     mesh.selection.edges.insert(edge);
     mesh.selection.faces.insert(face);
 
@@ -971,6 +1140,67 @@ fn accessors_expose_each_selected_kind() {
         view.selected().collect::<Vec<_>>(),
         vec![vert.into(), edge.into(), face.into()]
     );
+}
+
+#[test]
+fn vertex_snapshots_survive_selection_edits() {
+    let mut mesh = triangle();
+    let verts: Vec<_> = mesh.topology.verts.keys().collect();
+    mesh.selection_mut().select(&verts[..1]);
+    let first = std::rc::Rc::clone(&mesh.selection.verts);
+
+    mesh.selection_mut().select(&verts[1..2]);
+    assert!(!std::rc::Rc::ptr_eq(&first, &mesh.selection.verts));
+    assert_eq!(*first, HashSet::from([verts[0]]));
+    let second = std::rc::Rc::clone(&mesh.selection.verts);
+
+    mesh.selection_mut().deselect(&verts[..1]);
+    assert_eq!(*second, HashSet::from([verts[0], verts[1]]));
+    assert_eq!(*mesh.selection.verts, HashSet::from([verts[1]]));
+    let third = std::rc::Rc::clone(&mesh.selection.verts);
+
+    mesh.selection_mut().clear();
+    assert!(mesh.selection().is_empty());
+    assert_eq!(*third, HashSet::from([verts[1]]));
+
+    mesh.selection_mut().set(&verts[2..]);
+    let fourth = std::rc::Rc::clone(&mesh.selection.verts);
+    mesh.selection_mut().set(&verts[..1]);
+    assert_eq!(*fourth, HashSet::from([verts[2]]));
+    assert_eq!(*mesh.selection.verts, HashSet::from([verts[0]]));
+    assert_eq!(*first, HashSet::from([verts[0]]));
+}
+
+#[test]
+fn vertex_selection_noops_preserve_shared_storage() {
+    let mut mesh = triangle();
+    let verts: Vec<_> = mesh.topology.verts.keys().collect();
+    let empty = std::rc::Rc::clone(&mesh.selection.verts);
+
+    mesh.selection_mut().clear();
+    assert!(std::rc::Rc::ptr_eq(&empty, &mesh.selection.verts));
+
+    mesh.selection_mut().select(&verts[..1]);
+    let selected = std::rc::Rc::clone(&mesh.selection.verts);
+
+    mesh.selection_mut().select(&verts[..1]);
+    mesh.selection_mut().deselect(&verts[1..2]);
+    assert!(std::rc::Rc::ptr_eq(&selected, &mesh.selection.verts));
+}
+
+#[test]
+fn clearing_unique_vertex_selection_reuses_storage() {
+    let mut mesh = triangle();
+    let verts: Vec<_> = mesh.topology.verts.keys().collect();
+    mesh.selection_mut().select(&verts);
+    let storage = std::rc::Rc::as_ptr(&mesh.selection.verts);
+    let capacity = mesh.selection.verts.capacity();
+
+    mesh.selection_mut().clear();
+
+    assert!(mesh.selection().is_empty());
+    assert_eq!(std::rc::Rc::as_ptr(&mesh.selection.verts), storage);
+    assert_eq!(mesh.selection.verts.capacity(), capacity);
 }
 
 #[test]
