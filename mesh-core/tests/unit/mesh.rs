@@ -4,7 +4,7 @@ use std::sync::mpsc::TryRecvError;
 use glam::Vec2;
 use slotmap::Key;
 
-use crate::{AttributeDomain, AttributeRef, ComponentTypes, SelectionChange, TopologyChange};
+use crate::{ComponentTypes, SelectionChange, TopologyChange};
 
 use super::*;
 
@@ -18,37 +18,29 @@ fn triangle_buffers() -> MeshBuffers {
     }
 }
 
-fn assert_attribute_event(
-    changes: &Receiver<Event<MeshChange>>,
-    attribute: AttributeId,
-    verts: &[VertKey],
-    loops: &[LoopKey],
-) {
+fn assert_position_event(changes: &Receiver<Event<MeshChange>>, verts: &[VertKey]) {
     let event = changes.try_recv().unwrap();
-    let MeshChange::Attributes(delta) = event.as_ref() else {
-        panic!("expected an attribute change");
+    let MeshChange::Attributes(AttributeChange::Position(keys)) = event.as_ref() else {
+        panic!("expected a position change");
     };
 
     assert!(!event.as_ref().is_empty());
-    assert_eq!(delta.attribute, attribute);
+    assert_eq!(keys.len(), verts.len());
+    assert_eq!(**keys, verts.iter().copied().collect());
+}
 
-    match &delta.keys {
-        AttributeKeys::Vertices(keys) => {
-            assert_eq!(attribute.domain(), AttributeDomain::Vertex);
-            assert!(loops.is_empty());
-            assert_eq!(keys.len(), verts.len());
-            assert_eq!(**keys, verts.iter().copied().collect());
-        }
-        AttributeKeys::Loops(keys) => {
-            assert_eq!(attribute.domain(), AttributeDomain::Loop);
-            assert!(verts.is_empty());
-            assert_eq!(keys.len(), loops.len());
-            assert_eq!(
-                keys.iter().copied().collect::<HashSet<_>>(),
-                loops.iter().copied().collect()
-            );
-        }
-    }
+fn assert_normal_event(changes: &Receiver<Event<MeshChange>>, loops: &[LoopKey]) {
+    let event = changes.try_recv().unwrap();
+    let MeshChange::Attributes(AttributeChange::Normal(keys)) = event.as_ref() else {
+        panic!("expected a normal change");
+    };
+
+    assert!(!event.as_ref().is_empty());
+    assert_eq!(keys.len(), loops.len());
+    assert_eq!(
+        keys.iter().copied().collect::<HashSet<_>>(),
+        loops.iter().copied().collect()
+    );
 }
 
 fn assert_connectivity(mesh: &Mesh) {
@@ -309,10 +301,7 @@ fn translation_events_share_vertex_snapshots_until_the_last_handle_is_dropped() 
             .filter(|event| {
                 matches!(
                     event.as_ref(),
-                    MeshChange::Attributes(AttributeChange {
-                        attribute: AttributeId::Position,
-                        ..
-                    })
+                    MeshChange::Attributes(AttributeChange::Position(_))
                 )
             })
             .collect::<Vec<_>>()
@@ -326,11 +315,8 @@ fn translation_events_share_vertex_snapshots_until_the_last_handle_is_dropped() 
     {
         assert!(std::ptr::eq(first_event.as_ref(), second_event.as_ref()));
 
-        let MeshChange::Attributes(change) = first_event.as_ref() else {
-            panic!("expected an attribute change");
-        };
-        let AttributeKeys::Vertices(keys) = &change.keys else {
-            panic!("expected vertex keys");
+        let MeshChange::Attributes(AttributeChange::Position(keys)) = first_event.as_ref() else {
+            panic!("expected a position change");
         };
 
         if index < 2 {
@@ -374,31 +360,37 @@ fn dropping_subscribers_releases_queued_vertex_snapshots() {
 }
 
 #[test]
-fn attribute_lookup_borrows_typed_storage_and_identifies_domains() {
-    let mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
+fn attribute_changes_identify_values_in_typed_storage() {
+    let mut options = triangle_buffers();
+    options.uvs = Some(vec![Vec2::ONE; 3]);
+    let mesh = Mesh::from_buffers(options).unwrap();
+    let vertex = mesh.topology().verts().next().unwrap();
+    let loops = Rc::new(mesh.topology().loops().collect());
     let attributes = mesh.attributes();
 
-    let AttributeRef::Position(positions) = attributes.get(AttributeId::Position) else {
-        panic!("expected position storage");
-    };
-
-    assert!(std::ptr::eq(positions, &attributes.positions));
-    assert_eq!(AttributeId::Position.domain(), AttributeDomain::Vertex);
-
-    let AttributeRef::Normal(normals) = attributes.get(AttributeId::Normal) else {
-        panic!("expected normal storage");
-    };
-
-    assert!(std::ptr::eq(normals, &attributes.normals));
-    assert_eq!(AttributeId::Normal.domain(), AttributeDomain::Loop);
-
-    let AttributeRef::Uv(uvs) = attributes.get(AttributeId::Uv) else {
-        panic!("expected UV storage");
-    };
-
-    assert!(std::ptr::eq(uvs, &attributes.uvs));
-    assert!(uvs.is_empty());
-    assert_eq!(AttributeId::Uv.domain(), AttributeDomain::Loop);
+    for change in [
+        AttributeChange::Position(Rc::new(HashSet::from([vertex]))),
+        AttributeChange::Normal(Rc::clone(&loops)),
+        AttributeChange::Uv(loops),
+    ] {
+        match change {
+            AttributeChange::Position(keys) => {
+                for &key in keys.iter() {
+                    assert_eq!(attributes.positions.get(key), Some(&Vec3::ZERO));
+                }
+            }
+            AttributeChange::Normal(keys) => {
+                for &key in keys.iter() {
+                    assert_eq!(attributes.normals.get(key), Some(&Vec3::Z));
+                }
+            }
+            AttributeChange::Uv(keys) => {
+                for &key in keys.iter() {
+                    assert_eq!(attributes.uvs.get(key), Some(&Vec2::ONE));
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -409,34 +401,31 @@ fn attribute_and_selection_changes_check_each_key_list_for_emptiness() {
     let face = mesh.topology.faces().next().unwrap();
     let corner = mesh.topology.loops().next().unwrap();
 
-    for attribute in [AttributeId::Position, AttributeId::Normal, AttributeId::Uv] {
-        let empty_keys = || match attribute.domain() {
-            AttributeDomain::Vertex => AttributeKeys::Vertices(Rc::default()),
-            AttributeDomain::Loop => AttributeKeys::Loops(Rc::default()),
-        };
-        let mut change = AttributeChange {
-            attribute,
-            keys: empty_keys(),
-        };
-
+    for change in [
+        AttributeChange::Position(Rc::default()),
+        AttributeChange::Normal(Rc::default()),
+        AttributeChange::Uv(Rc::default()),
+    ] {
         assert!(change.is_empty());
-        assert!(
-            MeshChange::Attributes(AttributeChange {
-                attribute,
-                keys: empty_keys(),
-            })
-            .is_empty()
-        );
 
-        match &mut change.keys {
-            AttributeKeys::Vertices(verts) => {
+        let mut event = MeshChange::Attributes(change);
+        assert!(event.is_empty());
+
+        let MeshChange::Attributes(change) = &mut event else {
+            unreachable!();
+        };
+
+        match change {
+            AttributeChange::Position(verts) => {
                 Rc::make_mut(verts).insert(vertex);
             }
-            AttributeKeys::Loops(loops) => Rc::make_mut(loops).push(corner),
+            AttributeChange::Normal(loops) | AttributeChange::Uv(loops) => {
+                Rc::make_mut(loops).push(corner);
+            }
         }
 
         assert!(!change.is_empty());
-        assert!(!MeshChange::Attributes(change).is_empty());
+        assert!(!event.is_empty());
     }
 
     assert!(MeshChange::Selection(SelectionChange::default()).is_empty());
@@ -898,21 +887,15 @@ fn translation_events_share_cached_loop_keys_and_preserve_old_snapshots() {
         .filter(|event| {
             matches!(
                 event.as_ref(),
-                MeshChange::Attributes(AttributeChange {
-                    attribute: AttributeId::Normal,
-                    ..
-                })
+                MeshChange::Attributes(AttributeChange::Normal(_))
             )
         })
         .collect();
     assert_eq!(events.len(), 3);
 
     for (index, event) in events.iter().enumerate() {
-        let MeshChange::Attributes(change) = event.as_ref() else {
-            panic!("expected an attribute change");
-        };
-        let AttributeKeys::Loops(keys) = &change.keys else {
-            panic!("expected loop keys");
+        let MeshChange::Attributes(AttributeChange::Normal(keys)) = event.as_ref() else {
+            panic!("expected a normal change");
         };
         let (snapshot, face) = if index < 2 {
             (&original, faces[0])
@@ -960,11 +943,9 @@ fn translate_selected_updates_only_moved_positions_and_mixed_face_normals() {
 
     for (step, expected_normal) in [(1.0, Vec3::Z), (2.0, Vec3::new(0.0, -1.0, 2.0).normalize())] {
         mesh.translate_selected(Vec3::Y + Vec3::Z);
-        assert_attribute_event(&changes, AttributeId::Position, &vertices[..3], &[]);
-        assert_attribute_event(
+        assert_position_event(&changes, &vertices[..3]);
+        assert_normal_event(
             &changes,
-            AttributeId::Normal,
-            &[],
             &mesh.topology.face_loops(faces[1]).collect::<Vec<_>>(),
         );
         assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
@@ -1055,12 +1036,7 @@ fn translate_selected_preserves_normals_for_noops_and_rigid_faces() {
         mesh.translate_selected(delta);
 
         if selected_count != 0 && delta != Vec3::ZERO {
-            assert_attribute_event(
-                &changes,
-                AttributeId::Position,
-                &vertices[..selected_count],
-                &[],
-            );
+            assert_position_event(&changes, &vertices[..selected_count]);
         }
         assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
         for (index, &key) in vertices.iter().enumerate() {
@@ -1103,12 +1079,7 @@ fn translate_selected_moves_wire_and_isolated_vertices() {
 
     mesh.translate_selected(Vec3::ONE);
 
-    assert_attribute_event(
-        &changes,
-        AttributeId::Position,
-        &[vertices[3], vertices[5]],
-        &[],
-    );
+    assert_position_event(&changes, &[vertices[3], vertices[5]]);
     assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
     for (index, &key) in vertices.iter().enumerate() {
         let expected = positions[key]
@@ -1300,10 +1271,8 @@ fn recompute_selected_normals_only_update_selected_components() {
     mesh.selection_mut().select(&[face, FaceKey::null()]);
     let changes = mesh.subscribe();
     mesh.shade_flat();
-    assert_attribute_event(
+    assert_normal_event(
         &changes,
-        AttributeId::Normal,
-        &[],
         &mesh.topology.face_loops(face).collect::<Vec<_>>(),
     );
     assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
@@ -1321,10 +1290,8 @@ fn recompute_selected_normals_only_update_selected_components() {
     let previous_normals = mesh.attributes.normals.clone();
     let changes = mesh.subscribe();
     mesh.shade_smooth();
-    assert_attribute_event(
+    assert_normal_event(
         &changes,
-        AttributeId::Normal,
-        &[],
         &mesh.topology.vert_loops(vertex).collect::<Vec<_>>(),
     );
     assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));

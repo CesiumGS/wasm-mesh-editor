@@ -3,9 +3,7 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::{
-    AttributeId, ComponentKey, ComponentType, EdgeKey, FaceKey, LoopKey, PerComponentType, VertKey,
-};
+use crate::{ComponentKey, ComponentType, EdgeKey, FaceKey, LoopKey, PerComponentType, VertKey};
 
 pub enum MeshChange {
     Attributes(AttributeChange),
@@ -25,27 +23,17 @@ impl MeshChange {
 
 /// Unlike TopologyChange and SelectionChange, AttributeChange shares affected keys through `Rc`, avoiding per-frame key copies during
 /// interactive edits such as translation (a hot path). Selection changes copy-on-write to these keys to preserve existing, unprocessed change events.
-pub struct AttributeChange {
-    pub attribute: AttributeId,
-    pub keys: AttributeKeys,
+pub enum AttributeChange {
+    Position(Rc<HashSet<VertKey>>),
+    Normal(Rc<Vec<LoopKey>>),
+    Uv(Rc<Vec<LoopKey>>),
 }
 
 impl AttributeChange {
     pub fn is_empty(&self) -> bool {
-        self.keys.is_empty()
-    }
-}
-
-pub enum AttributeKeys {
-    Vertices(Rc<HashSet<VertKey>>),
-    Loops(Rc<Vec<LoopKey>>),
-}
-
-impl AttributeKeys {
-    pub fn is_empty(&self) -> bool {
         match self {
-            Self::Vertices(verts) => verts.is_empty(),
-            Self::Loops(loops) => loops.is_empty(),
+            Self::Position(verts) => verts.is_empty(),
+            Self::Normal(loops) | Self::Uv(loops) => loops.is_empty(),
         }
     }
 }

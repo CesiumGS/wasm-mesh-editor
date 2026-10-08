@@ -12,9 +12,8 @@ use glam::{DVec3, Vec3};
 use crate::geometry::corner_angle;
 use crate::selection::{SelectionBoundary, SelectionState};
 use crate::{
-    AttributeChange, AttributeId, AttributeKeys, Attributes, ComponentKey, ComponentRef, EdgeKey,
-    EdgeRef, FaceKey, FaceRef, LoopKey, MeshChange, Selection, SelectionView, Topology, VertKey,
-    VertRef,
+    AttributeChange, Attributes, ComponentKey, ComponentRef, EdgeKey, EdgeRef, FaceKey, FaceRef,
+    LoopKey, MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
 };
 
 pub use build::{MeshBuffers, MeshBuildError};
@@ -121,10 +120,10 @@ impl Mesh {
         let loops = Rc::clone(boundary.mixed_face_loops());
         Self::recompute_flat_normals(topology, attributes, boundary.mixed_faces().iter().copied());
 
-        self.changes.emit(MeshChange::Attributes(AttributeChange {
-            attribute: AttributeId::Position,
-            keys: AttributeKeys::Vertices(Rc::clone(&selection.verts)),
-        }));
+        self.changes
+            .emit(MeshChange::Attributes(AttributeChange::Position(
+                Rc::clone(&selection.verts),
+            )));
 
         self.emit_normal_change(loops);
     }
@@ -196,10 +195,7 @@ impl Mesh {
     }
 
     fn emit_normal_change(&mut self, loops: Rc<Vec<LoopKey>>) {
-        let change = AttributeChange {
-            attribute: AttributeId::Normal,
-            keys: AttributeKeys::Loops(loops),
-        };
+        let change = AttributeChange::Normal(loops);
 
         if !change.is_empty() {
             self.changes.emit(MeshChange::Attributes(change));
