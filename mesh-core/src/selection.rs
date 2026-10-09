@@ -206,36 +206,28 @@ impl<'a> Selection<'a> {
         let mut delta = self.apply_action(keys, Action::Select, self.state.level);
         delta.removed = removed;
 
-        if !delta.is_empty() {
-            self.changes.emit(MeshChange::Selection(delta));
-        }
+        self.emit_change(delta);
     }
 
     /// Adds the given components to the current selection.
     pub fn select<K: SelectionKind>(&mut self, keys: &[K]) {
         let delta = self.apply_action(keys, Action::Select, self.state.level);
 
-        if !delta.is_empty() {
-            self.changes.emit(MeshChange::Selection(delta));
-        }
+        self.emit_change(delta);
     }
 
     /// Removes the given components from the current selection.
     pub fn deselect<K: SelectionKind>(&mut self, keys: &[K]) {
         let delta = self.apply_action(keys, Action::Deselect, self.state.level);
 
-        if !delta.is_empty() {
-            self.changes.emit(MeshChange::Selection(delta));
-        }
+        self.emit_change(delta);
     }
 
     /// Toggles the given components in the current selection.
     pub fn toggle<K: SelectionKind>(&mut self, keys: &[K]) {
         let delta = self.apply_action(keys, Action::Toggle, self.state.level);
 
-        if !delta.is_empty() {
-            self.changes.emit(MeshChange::Selection(delta));
-        }
+        self.emit_change(delta);
     }
 
     /// Clears all selected components, regardless of the current mode.
@@ -244,6 +236,12 @@ impl<'a> Selection<'a> {
             removed: self.clear_selection(),
             ..SelectionChange::default()
         };
+
+        self.emit_change(delta);
+    }
+
+    fn emit_change(&mut self, mut delta: SelectionChange) {
+        delta.normalize();
 
         if !delta.is_empty() {
             self.changes.emit(MeshChange::Selection(delta));
@@ -293,9 +291,7 @@ impl<'a> Selection<'a> {
             return;
         };
 
-        if !delta.is_empty() {
-            self.changes.emit(MeshChange::Selection(delta));
-        }
+        self.emit_change(delta);
     }
 
     /// Shrink the selection by one inner layer, using the same mode rules as [`Self::grow`].
@@ -316,9 +312,7 @@ impl<'a> Selection<'a> {
             return;
         };
 
-        if !delta.is_empty() {
-            self.changes.emit(MeshChange::Selection(delta));
-        }
+        self.emit_change(delta);
     }
 
     /// Takes a set of components by key and applies a selection action to them (select, remove, toggle).

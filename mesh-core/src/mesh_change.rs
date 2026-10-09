@@ -1,6 +1,6 @@
 //! Change events describing a single mesh mutation.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::{ComponentKey, ComponentType, EdgeKey, FaceKey, LoopKey, PerComponentType, VertKey};
@@ -58,6 +58,7 @@ impl TopologyChange {
     }
 }
 
+/// Selection events contain only net membership changes from a single operation.
 #[derive(Default)]
 pub struct SelectionChange {
     pub added: PerComponentType<Vec<ComponentKey>>,
@@ -65,6 +66,40 @@ pub struct SelectionChange {
 }
 
 impl SelectionChange {
+    /// Cancels opposing changes, including components changed more than once.
+    pub fn normalize(&mut self) {
+        let mut counts = HashMap::new();
+
+        for kind in [
+            ComponentType::Vertex,
+            ComponentType::Edge,
+            ComponentType::Face,
+        ] {
+            let added = &mut self.added[kind];
+            let removed = &mut self.removed[kind];
+
+            if added.is_empty() || removed.is_empty() {
+                continue;
+            }
+
+            for key in added.drain(..) {
+                *counts.entry(key).or_insert(0isize) += 1;
+            }
+
+            for key in removed.drain(..) {
+                *counts.entry(key).or_insert(0isize) -= 1;
+            }
+
+            for (key, count) in counts.drain() {
+                if count > 0 {
+                    added.push(key);
+                } else if count < 0 {
+                    removed.push(key);
+                }
+            }
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         [
             ComponentType::Vertex,

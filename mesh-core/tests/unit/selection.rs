@@ -71,20 +71,86 @@ fn selection_events_include_propagation_once_per_action() {
 }
 
 #[test]
-fn set_and_clear_emit_one_event_without_normalizing_deltas() {
+fn set_and_clear_emit_only_net_changes() {
     let mut mesh = triangle();
     let verts: Vec<_> = mesh.topology.verts().collect();
     mesh.selection_mut().select(&verts[..1]);
     let changes = mesh.subscribe();
 
     mesh.selection_mut().set(&verts[..1]);
-    assert_selection_event(&changes, &[verts[0].into()], &[verts[0].into()]);
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
     mesh.selection_mut().set(&verts[1..2]);
     assert_selection_event(&changes, &[verts[1].into()], &[verts[0].into()]);
     mesh.selection_mut().clear();
     assert_selection_event(&changes, &[], &[verts[1].into()]);
     mesh.selection_mut().clear();
     mesh.selection_mut().set::<VertKey>(&[]);
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn normalization_preserves_net_changes_after_repeated_transitions() {
+    let mesh = triangle();
+    let keys: [ComponentKey; 3] = [
+        mesh.topology.verts().next().unwrap().into(),
+        mesh.topology.edges().next().unwrap().into(),
+        mesh.topology.faces().next().unwrap().into(),
+    ];
+
+    for key in keys {
+        for (added_count, removed_count) in [(0, 0), (1, 0), (0, 1), (1, 1), (2, 1), (1, 2)] {
+            let mut delta = SelectionChange::default();
+            delta.added[key.kind()] = vec![key; added_count];
+            delta.removed[key.kind()] = vec![key; removed_count];
+
+            for _ in 0..2 {
+                delta.normalize();
+
+                assert_eq!(
+                    delta.added[key.kind()],
+                    vec![key; usize::from(added_count > removed_count)]
+                );
+                assert_eq!(
+                    delta.removed[key.kind()],
+                    vec![key; usize::from(removed_count > added_count)]
+                );
+                assert_eq!(delta.is_empty(), added_count == removed_count);
+            }
+        }
+    }
+}
+
+#[test]
+fn set_emits_only_changes_to_overlapping_selections() {
+    let mut mesh = triangle();
+    let edges: Vec<_> = mesh.topology.edges().collect();
+    mesh.selection_mut().set_level(ComponentTypes::EDGE);
+    mesh.selection_mut().select(&edges[..1]);
+    let before: HashSet<_> = mesh.selection().selected().collect();
+    let changes = mesh.subscribe();
+
+    mesh.selection_mut().set(&edges[1..2]);
+
+    let after: HashSet<_> = mesh.selection().selected().collect();
+    let added: Vec<_> = after.difference(&before).copied().collect();
+    let removed: Vec<_> = before.difference(&after).copied().collect();
+    assert_selection_event(&changes, &added, &removed);
+}
+
+#[test]
+fn rebuilds_preserving_selection_do_not_emit() {
+    let mut mesh = triangle();
+    let face = mesh.topology.faces().next().unwrap();
+    mesh.selection_mut().set_level(ComponentTypes::FACE);
+    mesh.selection_mut().select(&[face]);
+    let before: HashSet<_> = mesh.selection().selected().collect();
+    let changes = mesh.subscribe();
+
+    mesh.selection_mut().set(&[face]);
+    mesh.selection_mut().set_level(ComponentTypes::EDGE);
+    mesh.selection_mut().set_level(ComponentTypes::VERTEX);
+
+    assert_eq!(mesh.selection().selected().collect::<HashSet<_>>(), before);
     assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
 }
 
@@ -1326,8 +1392,11 @@ fn mixed_toggle_processes_removals_before_additions() {
     let verts = mesh.topology.edges[edge].verts;
     mesh.selection_mut().set_level(ComponentTypes::all());
     mesh.selection_mut().select(&verts[..1]);
+    let changes = mesh.subscribe();
+
     mesh.selection_mut()
         .toggle(&[ComponentKey::Vert(verts[0]), edge.into()]);
+    assert_selection_event(&changes, &[verts[1].into()], &[]);
     assert_eq!(
         mesh.selection().verts().collect::<HashSet<_>>(),
         HashSet::from(verts)
