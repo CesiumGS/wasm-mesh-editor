@@ -1,5 +1,6 @@
+use event_emitter::EventEmitter;
 use glam::Vec3;
-use mesh_core::{ComponentTypes, MeshBuffers};
+use mesh_core::{ComponentTypes, MeshBuffers, TopologyChange};
 use std::sync::mpsc::TryRecvError;
 
 use super::*;
@@ -85,7 +86,7 @@ fn new_packs_buffers_and_bidirectional_maps() {
     }
 
     assert!(buffers.full_refresh);
-    assert!(overlay.initial_upload_pending);
+    assert!(matches!(overlay.pending_upload, PendingChanges::Full));
     assert!(buffers.positions.dirty_ranges.is_empty());
     assert!(buffers.edges.dirty_ranges.is_empty());
     assert!(buffers.triangles.dirty_ranges.is_empty());
@@ -158,5 +159,218 @@ fn new_accepts_an_empty_mesh() {
     }
 
     assert!(overlay.buffers.full_refresh);
-    assert!(overlay.initial_upload_pending);
+    assert!(matches!(overlay.pending_upload, PendingChanges::Full));
+}
+
+#[test]
+fn update_delivers_initial_upload_once() {
+    for mut mesh in [Mesh::new(), mixed_face_mesh()] {
+        let mut overlay = TopologyOverlay::new(&mut mesh);
+
+        let buffers = overlay.update(&mesh).unwrap();
+        assert!(buffers.full_refresh);
+        assert!(buffers.positions.dirty_ranges.is_empty());
+        assert!(matches!(overlay.pending_upload, PendingChanges::None));
+        assert!(overlay.update(&mesh).is_none());
+        assert!(overlay.update(&mesh).is_none());
+    }
+}
+
+#[test]
+fn update_includes_changes_queued_before_initial_upload() {
+    let mut mesh = mixed_face_mesh();
+    let vertex = mesh.topology().verts().last().unwrap();
+    let mut overlay = TopologyOverlay::new(&mut mesh);
+
+    mesh.selection_mut().select(&[vertex]);
+    mesh.translate_selected(Vec3::X);
+
+    let buffers = overlay.update(&mesh).unwrap();
+    assert!(buffers.full_refresh);
+    assert_eq!(buffers.positions.data[5], [3.0, 3.0, 4.0, 0.0]);
+    assert_eq!(
+        buffers.selection[ComponentType::Vertex].data,
+        vec![0, 0, 0, 0, 0, 255]
+    );
+    assert!(buffers.positions.dirty_ranges.is_empty());
+    assert!(
+        buffers.selection[ComponentType::Vertex]
+            .dirty_ranges
+            .is_empty()
+    );
+    assert!(overlay.update(&mesh).is_none());
+}
+
+#[test]
+fn update_returns_partial_uploads_and_clears_previous_ranges() {
+    let mut mesh = mixed_face_mesh();
+    let vertex = mesh.topology().verts().last().unwrap();
+    let mut overlay = TopologyOverlay::new(&mut mesh);
+    overlay.update(&mesh).unwrap();
+
+    mesh.selection_mut().select(&[vertex]);
+
+    let buffers = overlay.update(&mesh).unwrap();
+    assert!(!buffers.full_refresh);
+    assert_eq!(buffers.selection[ComponentType::Vertex].data[5], 255);
+    assert_eq!(
+        buffers.selection[ComponentType::Vertex].dirty_ranges,
+        vec![5..6]
+    );
+    assert!(buffers.positions.dirty_ranges.is_empty());
+
+    mesh.translate_selected(Vec3::X);
+    mesh.translate_selected(Vec3::Y);
+
+    let buffers = overlay.update(&mesh).unwrap();
+    assert!(!buffers.full_refresh);
+    assert_eq!(buffers.positions.data[5], [3.0, 4.0, 4.0, 0.0]);
+    assert_eq!(buffers.positions.dirty_ranges, vec![5..6, 5..6]);
+    assert!(
+        buffers.selection[ComponentType::Vertex]
+            .dirty_ranges
+            .is_empty()
+    );
+
+    mesh.selection_mut().clear();
+
+    let buffers = overlay.update(&mesh).unwrap();
+    assert!(!buffers.full_refresh);
+    assert_eq!(buffers.selection[ComponentType::Vertex].data[5], 0);
+    assert!(buffers.positions.dirty_ranges.is_empty());
+    assert!(overlay.update(&mesh).is_none());
+    assert!(
+        overlay.buffers.selection[ComponentType::Vertex]
+            .dirty_ranges
+            .is_empty()
+    );
+}
+
+#[test]
+fn update_uses_current_selection_for_queued_changes() {
+    let mut mesh = mixed_face_mesh();
+    let faces: Vec<_> = mesh.topology().faces().collect();
+    mesh.selection_mut().set_level(ComponentTypes::FACE);
+    let mut overlay = TopologyOverlay::new(&mut mesh);
+    overlay.update(&mesh).unwrap();
+
+    mesh.selection_mut().select(&[faces[1]]);
+    mesh.selection_mut().clear();
+    mesh.selection_mut().select(&[faces[0]]);
+
+    let buffers = overlay.update(&mesh).unwrap();
+    assert!(!buffers.full_refresh);
+    assert_eq!(
+        buffers.selection[ComponentType::Vertex].data,
+        vec![255, 255, 255, 255, 0, 0]
+    );
+    assert_eq!(buffers.selection[ComponentType::Face].data, vec![255, 0]);
+
+    for (index, key) in mesh.topology().edges().enumerate() {
+        assert_eq!(
+            buffers.selection[ComponentType::Edge].data[index],
+            if mesh.selection().contains(key) {
+                255
+            } else {
+                0
+            }
+        );
+    }
+
+    for kind in [
+        ComponentType::Vertex,
+        ComponentType::Edge,
+        ComponentType::Face,
+    ] {
+        assert!(!buffers.selection[kind].dirty_ranges.is_empty());
+    }
+
+    assert!(overlay.update(&mesh).is_none());
+}
+
+#[test]
+fn update_ignores_shading_changes() {
+    let mut mesh = mixed_face_mesh();
+    let face = mesh.topology().faces().next().unwrap();
+    mesh.selection_mut().set_level(ComponentTypes::FACE);
+    mesh.selection_mut().select(&[face]);
+    let mut overlay = TopologyOverlay::new(&mut mesh);
+    overlay.update(&mesh).unwrap();
+
+    mesh.shade_flat();
+    mesh.shade_smooth();
+
+    assert!(overlay.update(&mesh).is_none());
+    assert!(matches!(overlay.pending_upload, PendingChanges::None));
+}
+
+#[test]
+fn update_rebuilds_buffers_and_maps_on_topology_events() {
+    let mut mesh = Mesh::new();
+    let mut overlay = TopologyOverlay::new(&mut mesh);
+    overlay.update(&mesh).unwrap();
+
+    let mut changes = EventEmitter::new();
+    overlay.mesh_changes = changes.subscribe();
+
+    for next_mesh in [mixed_face_mesh(), Mesh::new()] {
+        let removed_verts = mesh.topology().verts().collect();
+        let removed_edges = mesh.topology().edges().collect();
+        let removed_faces = mesh.topology().faces().collect();
+        mesh = next_mesh;
+
+        changes.emit(MeshChange::Topology(TopologyChange {
+            added_verts: mesh.topology().verts().collect(),
+            removed_verts,
+            added_edges: mesh.topology().edges().collect(),
+            removed_edges,
+            added_faces: mesh.topology().faces().collect(),
+            removed_faces,
+        }));
+
+        let mut selection_change = SelectionChange::default();
+        selection_change.added.verts = mesh.topology().verts().collect();
+        changes.emit(MeshChange::Selection(selection_change));
+
+        let buffers = overlay.update(&mesh).unwrap();
+        let topology = mesh.topology();
+        assert!(buffers.full_refresh);
+        assert_eq!(buffers.positions.data.len(), topology.vert_count());
+        assert_eq!(buffers.edges.data.len(), topology.edge_count());
+        assert_eq!(
+            buffers.triangles.data.len(),
+            topology.loop_count() - 2 * topology.face_count()
+        );
+        assert!(buffers.positions.dirty_ranges.is_empty());
+        assert!(
+            buffers.selection[ComponentType::Vertex]
+                .dirty_ranges
+                .is_empty()
+        );
+        assert_eq!(
+            overlay.vertex_key_to_buffer_index.len(),
+            topology.vert_count()
+        );
+        assert_eq!(
+            overlay.edge_key_to_buffer_index.len(),
+            topology.edge_count()
+        );
+        assert_eq!(
+            overlay.face_key_to_buffer_index.len(),
+            topology.face_count()
+        );
+        assert_eq!(
+            overlay.buffer_index_to_vertex_key,
+            topology.verts().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            overlay.buffer_index_to_edge_key,
+            topology.edges().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            overlay.buffer_index_to_face_key,
+            topology.faces().collect::<Vec<_>>()
+        );
+        assert!(overlay.update(&mesh).is_none());
+    }
 }
