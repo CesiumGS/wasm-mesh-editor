@@ -1,18 +1,18 @@
 use super::*;
 
 #[test]
-fn component_types_convert_individual_kinds() {
+fn component_mask_converts_individual_kinds() {
     for (kind, expected) in [
-        (ComponentType::Vertex, ComponentTypes::VERTEX),
-        (ComponentType::Edge, ComponentTypes::EDGE),
-        (ComponentType::Face, ComponentTypes::FACE),
+        (ComponentType::Vertex, ComponentMask::VERTEX),
+        (ComponentType::Edge, ComponentMask::EDGE),
+        (ComponentType::Face, ComponentMask::FACE),
     ] {
-        assert_eq!(ComponentTypes::from(kind), expected);
+        assert_eq!(ComponentMask::from(kind), expected);
     }
 }
 
 #[test]
-fn component_keys_index_independent_kind_values() {
+fn component_keys_report_their_kind() {
     use slotmap::Key;
 
     let keys = [
@@ -25,13 +25,7 @@ fn component_keys_index_independent_kind_values() {
         ComponentType::Edge,
         ComponentType::Face,
     ];
-    let mut values = PerComponentType::<Vec<ComponentKey>>::default();
     for (key, kind) in keys.into_iter().zip(kinds) {
         assert_eq!(key.kind(), kind);
-        values[key.kind()].push(key);
-    }
-    let reader = &values;
-    for (key, kind) in keys.into_iter().zip(kinds) {
-        assert_eq!(reader[kind], vec![key]);
     }
 }

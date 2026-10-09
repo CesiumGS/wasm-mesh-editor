@@ -1,9 +1,34 @@
 use event_emitter::EventEmitter;
 use glam::Vec3;
-use mesh_core::{ComponentTypes, MeshBuffers, TopologyChange};
+use mesh_core::{ComponentMask, MeshBuffers, TopologyChange};
 use std::sync::mpsc::TryRecvError;
 
 use super::*;
+
+#[test]
+fn selection_buffers_index_independent_component_kinds() {
+    let mut buffers = SelectionBuffers::default();
+    let values = [
+        (ComponentType::Vertex, 1),
+        (ComponentType::Edge, 2),
+        (ComponentType::Face, 3),
+    ];
+
+    for (kind, value) in values {
+        buffers[kind] = OverlayBuffer::new(vec![value]);
+    }
+
+    assert_eq!(buffers.verts.data, vec![1]);
+    assert_eq!(buffers.edges.data, vec![2]);
+    assert_eq!(buffers.faces.data, vec![3]);
+
+    let reader = &buffers;
+
+    for (kind, value) in values {
+        assert_eq!(reader[kind].data, vec![value]);
+        assert!(reader[kind].dirty_ranges.is_empty());
+    }
+}
 
 fn mixed_face_mesh() -> Mesh {
     Mesh::from_buffers(MeshBuffers {
@@ -96,7 +121,7 @@ fn new_packs_buffers_and_bidirectional_maps() {
 fn new_seeds_selection_and_subscribes_to_future_changes() {
     let mut mesh = mixed_face_mesh();
     let face = mesh.topology().faces().nth(1).unwrap();
-    mesh.selection_mut().set_level(ComponentTypes::FACE);
+    mesh.selection_mut().set_level(ComponentMask::FACE);
     mesh.selection_mut().select(&[face]);
 
     let overlay = TopologyOverlay::new(&mut mesh);
@@ -247,10 +272,10 @@ fn update_returns_partial_uploads_and_clears_previous_ranges() {
 }
 
 #[test]
-fn update_uses_current_selection_for_queued_changes() {
+fn update_replays_queued_selection_changes_in_order() {
     let mut mesh = mixed_face_mesh();
     let faces: Vec<_> = mesh.topology().faces().collect();
-    mesh.selection_mut().set_level(ComponentTypes::FACE);
+    mesh.selection_mut().set_level(ComponentMask::FACE);
     let mut overlay = TopologyOverlay::new(&mut mesh);
     overlay.update(&mesh).unwrap();
 
@@ -286,13 +311,74 @@ fn update_uses_current_selection_for_queued_changes() {
     }
 
     assert!(overlay.update(&mesh).is_none());
+
+    mesh.selection_mut().set(&[faces[1]]);
+
+    let buffers = overlay.update(&mesh).unwrap();
+    assert_eq!(
+        buffers.selection[ComponentType::Vertex].data,
+        vec![255, 255, 0, 0, 255, 0]
+    );
+    assert_eq!(buffers.selection[ComponentType::Face].data, vec![0, 255]);
+
+    mesh.selection_mut().clear();
+    mesh.selection_mut().select(&[faces[0]]);
+    mesh.selection_mut().clear();
+
+    let buffers = overlay.update(&mesh).unwrap();
+    assert!(!buffers.full_refresh);
+
+    for kind in [
+        ComponentType::Vertex,
+        ComponentType::Edge,
+        ComponentType::Face,
+    ] {
+        assert!(buffers.selection[kind].data.iter().all(|&value| value == 0));
+        assert!(!buffers.selection[kind].dirty_ranges.is_empty());
+    }
+
+    assert!(overlay.update(&mesh).is_none());
+}
+
+#[test]
+fn update_reports_nonempty_selection_deltas_even_when_keys_are_unmapped() {
+    use slotmap::Key;
+
+    let mut mesh = Mesh::new();
+    let mut overlay = TopologyOverlay::new(&mut mesh);
+    overlay.update(&mesh).unwrap();
+
+    let mut changes = EventEmitter::new();
+    overlay.mesh_changes = changes.subscribe();
+    changes.emit(MeshChange::Selection(SelectionChange::default()));
+    assert!(overlay.update(&mesh).is_none());
+
+    let mut change = SelectionChange::default();
+    change.added.verts.push(VertKey::null());
+    change.removed.edges.push(EdgeKey::null());
+    change.added.faces.push(FaceKey::null());
+    changes.emit(MeshChange::Selection(change));
+
+    let buffers = overlay.update(&mesh).unwrap();
+    assert!(!buffers.full_refresh);
+
+    for kind in [
+        ComponentType::Vertex,
+        ComponentType::Edge,
+        ComponentType::Face,
+    ] {
+        assert!(buffers.selection[kind].data.is_empty());
+        assert!(buffers.selection[kind].dirty_ranges.is_empty());
+    }
+
+    assert!(overlay.update(&mesh).is_none());
 }
 
 #[test]
 fn update_ignores_shading_changes() {
     let mut mesh = mixed_face_mesh();
     let face = mesh.topology().faces().next().unwrap();
-    mesh.selection_mut().set_level(ComponentTypes::FACE);
+    mesh.selection_mut().set_level(ComponentMask::FACE);
     mesh.selection_mut().select(&[face]);
     let mut overlay = TopologyOverlay::new(&mut mesh);
     overlay.update(&mesh).unwrap();

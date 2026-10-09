@@ -22,10 +22,11 @@ pub use edge::{Edge, EdgeRef};
 pub use face::{Face, FaceRef};
 pub use loop_::Loop;
 pub use mesh::{Mesh, MeshBuffers, MeshBuildError};
-pub use mesh_change::{AttributeChange, MeshChange, SelectionChange, TopologyChange};
+pub use mesh_change::{
+    AttributeChange, MeshChange, SelectionChange, SelectionKeys, TopologyChange,
+};
 pub use mesh_component::{
-    ComponentKey, ComponentRef, ComponentType, ComponentTypes, EdgeKey, FaceKey, LoopKey,
-    PerComponentType, VertKey,
+    ComponentKey, ComponentMask, ComponentRef, ComponentType, EdgeKey, FaceKey, LoopKey, VertKey,
 };
 pub use selection::{Selection, SelectionBoundary, SelectionKind, SelectionStep, SelectionView};
 pub use topology::Topology;

@@ -4,4 +4,4 @@
 
 mod topologyoverlay;
 
-pub use topologyoverlay::{OverlayBuffer, OverlayBuffers, TopologyOverlay};
+pub use topologyoverlay::{OverlayBuffer, OverlayBuffers, SelectionBuffers, TopologyOverlay};

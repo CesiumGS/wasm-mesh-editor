@@ -10,10 +10,9 @@ use std::rc::Rc;
 use boundary::BoundaryCache;
 use event_emitter::EventEmitter;
 
-use crate::mesh_component::PerComponentType;
 use crate::{
-    Attributes, ComponentKey, ComponentRef, ComponentType, ComponentTypes, EdgeKey, FaceKey,
-    MeshChange, SelectionChange, Topology, VertKey,
+    Attributes, ComponentKey, ComponentMask, ComponentRef, ComponentType, EdgeKey, FaceKey,
+    MeshChange, SelectionChange, SelectionKeys, Topology, VertKey,
 };
 
 /// A component kind that can be selected: the three handle types and
@@ -26,7 +25,7 @@ pub(crate) struct SelectionState {
     pub(crate) verts: Rc<HashSet<VertKey>>,
     pub(crate) edges: HashSet<EdgeKey>,
     pub(crate) faces: HashSet<FaceKey>,
-    pub(crate) level: ComponentTypes,
+    pub(crate) level: ComponentMask,
     boundary: BoundaryCache,
 }
 
@@ -36,7 +35,7 @@ impl Default for SelectionState {
             verts: Rc::default(),
             edges: HashSet::new(),
             faces: HashSet::new(),
-            level: ComponentTypes::VERTEX,
+            level: ComponentMask::VERTEX,
             boundary: BoundaryCache::default(),
         }
     }
@@ -117,7 +116,7 @@ pub struct Selection<'a> {
 
 impl<'a> SelectionView<'a> {
     /// The component kinds that accept direct selection input.
-    pub fn level(&self) -> ComponentTypes {
+    pub fn level(&self) -> ComponentMask {
         self.state.level
     }
 
@@ -180,10 +179,10 @@ impl<'a> Selection<'a> {
     }
 
     /// Sets the component kinds that accept direct selection input.
-    /// Combine kinds with `|`, such as `ComponentTypes::VERTEX | ComponentTypes::EDGE`.
+    /// Combine kinds with `|`, such as `ComponentMask::VERTEX | ComponentMask::EDGE`.
     /// Other kinds may still be selected indirectly by downward or upward propagation.
     /// Changing the mode rebuilds the selection from selected components in the new mode.
-    pub fn set_level(&mut self, level: ComponentTypes) {
+    pub fn set_level(&mut self, level: ComponentMask) {
         if self.state.level == level {
             return;
         }
@@ -248,45 +247,45 @@ impl<'a> Selection<'a> {
         }
     }
 
-    fn clear_selection(&mut self) -> PerComponentType<Vec<ComponentKey>> {
+    fn clear_selection(&mut self) -> SelectionKeys {
         if self.view().is_empty() {
-            return PerComponentType::default();
+            return SelectionKeys::default();
         }
 
         self.state.invalidate_boundary();
 
-        let mut removed = PerComponentType::default();
-
-        removed[ComponentType::Vertex] = match Rc::get_mut(&mut self.state.verts) {
-            Some(verts) => verts.drain().map(ComponentKey::Vert).collect(),
+        let verts = match Rc::get_mut(&mut self.state.verts) {
+            Some(verts) => verts.drain().collect(),
             None => {
                 let verts = std::mem::take(&mut self.state.verts);
 
-                verts.iter().copied().map(ComponentKey::Vert).collect()
+                verts.iter().copied().collect()
             }
         };
-        removed[ComponentType::Edge] = self.state.edges.drain().map(ComponentKey::Edge).collect();
-        removed[ComponentType::Face] = self.state.faces.drain().map(ComponentKey::Face).collect();
 
-        removed
+        SelectionKeys {
+            verts,
+            edges: self.state.edges.drain().collect(),
+            faces: self.state.faces.drain().collect(),
+        }
     }
 
     /// Grow the selection by one outer layer of the current selection mode.
     /// Face-only mode edits faces; any vertex or edge mode edits vertices.
     /// A fully selected connected component has no boundary and is unchanged.
     pub fn grow(&mut self, step: SelectionStep) {
-        let delta = if self.state.level == ComponentTypes::FACE {
+        let delta = if self.state.level == ComponentMask::FACE {
             let faces: Vec<_> = self.view().boundary().outer_faces(step).collect();
 
-            self.apply_action(&faces, Action::Select, ComponentTypes::FACE)
+            self.apply_action(&faces, Action::Select, ComponentMask::FACE)
         } else if self
             .state
             .level
-            .intersects(ComponentTypes::VERTEX | ComponentTypes::EDGE)
+            .intersects(ComponentMask::VERTEX | ComponentMask::EDGE)
         {
             let verts: Vec<_> = self.view().boundary().outer_vertices(step).collect();
 
-            self.apply_action(&verts, Action::Select, ComponentTypes::VERTEX)
+            self.apply_action(&verts, Action::Select, ComponentMask::VERTEX)
         } else {
             return;
         };
@@ -296,18 +295,18 @@ impl<'a> Selection<'a> {
 
     /// Shrink the selection by one inner layer, using the same mode rules as [`Self::grow`].
     pub fn shrink(&mut self, step: SelectionStep) {
-        let delta = if self.state.level == ComponentTypes::FACE {
+        let delta = if self.state.level == ComponentMask::FACE {
             let faces: Vec<_> = self.view().boundary().inner_faces(step).collect();
 
-            self.apply_action(&faces, Action::Deselect, ComponentTypes::FACE)
+            self.apply_action(&faces, Action::Deselect, ComponentMask::FACE)
         } else if self
             .state
             .level
-            .intersects(ComponentTypes::VERTEX | ComponentTypes::EDGE)
+            .intersects(ComponentMask::VERTEX | ComponentMask::EDGE)
         {
             let verts: Vec<_> = self.view().boundary().inner_vertices(step).collect();
 
-            self.apply_action(&verts, Action::Deselect, ComponentTypes::VERTEX)
+            self.apply_action(&verts, Action::Deselect, ComponentMask::VERTEX)
         } else {
             return;
         };
@@ -321,7 +320,7 @@ impl<'a> Selection<'a> {
         &mut self,
         keys: &[K],
         action: Action,
-        allowed_kinds: ComponentTypes,
+        allowed_kinds: ComponentMask,
     ) -> SelectionChange {
         let mut delta = SelectionChange::default();
         let mut seen_keys = HashSet::new();
@@ -343,9 +342,9 @@ impl<'a> Selection<'a> {
             };
 
             if should_select && self.state.insert(key) {
-                delta.added[key.kind()].push(key);
+                delta.added.push(key);
             } else if !should_select && self.state.remove(key) {
-                delta.removed[key.kind()].push(key);
+                delta.removed.push(key);
             }
         }
 
@@ -369,16 +368,16 @@ impl<'a> Selection<'a> {
     /// Example 2: deselecting one vertex of a fully selected triangle deselects
     /// its two incident edges and the face. However, the other two vertices and the
     /// opposite edge remain selected.
-    fn propagate_removals(&mut self, removed: &mut PerComponentType<Vec<ComponentKey>>) {
+    fn propagate_removals(&mut self, removed: &mut SelectionKeys) {
         let mut upward_sources = removed.clone();
         let mut possible_orphans = HashSet::new();
         let mut lower_components = Vec::new();
         let mut upper_components = Vec::new();
 
         // Propagate removals downward through the component hierarchy
-        for (lower_kind, upper_kind) in Self::COMPONENT_KIND_PAIRS.into_iter().rev() {
+        for (_, upper_kind) in Self::COMPONENT_KIND_PAIRS.into_iter().rev() {
             possible_orphans.clear();
-            for &key in &removed[upper_kind] {
+            for key in removed.iter(upper_kind) {
                 ComponentRef::new(key, self.topo, self.attrs).lower(&mut lower_components);
                 possible_orphans.extend(
                     lower_components
@@ -394,7 +393,7 @@ impl<'a> Selection<'a> {
                     .any(|&key| self.view().contains(key))
                     && self.state.remove(key)
                 {
-                    removed[lower_kind].push(key);
+                    removed.push(key);
                 }
             }
         }
@@ -410,20 +409,20 @@ impl<'a> Selection<'a> {
     /// Importantly, selection changes that propagate downwards don't then participate in upward propagation. Only the initial selection does that...
     ///
     /// Example 2: selecting three edges of a quad propagates down to select all four vertices of the quad. However, the face itself will remain unselected.
-    fn propagate_additions(&mut self, added: &mut PerComponentType<Vec<ComponentKey>>) {
+    fn propagate_additions(&mut self, added: &mut SelectionKeys) {
         let mut upward_sources = added.clone();
         let mut lower_components = Vec::new();
 
         // Propagate additions downward through the component hierarchy
-        for (lower_kind, upper_kind) in Self::COMPONENT_KIND_PAIRS.into_iter().rev() {
-            for index in 0..added[upper_kind].len() {
+        for (_, upper_kind) in Self::COMPONENT_KIND_PAIRS.into_iter().rev() {
+            for index in 0..added.len(upper_kind) {
                 // Get the lower components of the current upper component (e.g. the vertices of an added edge)
-                let upper_key = added[upper_kind][index];
+                let upper_key = added.get(upper_kind, index).unwrap();
                 ComponentRef::new(upper_key, self.topo, self.attrs).lower(&mut lower_components);
 
                 for &key in &lower_components {
                     if self.state.insert(key) {
-                        added[lower_kind].push(key);
+                        added.push(key);
                     }
                 }
             }
@@ -440,17 +439,17 @@ impl<'a> Selection<'a> {
     fn propagate_upward(
         &mut self,
         action: PropagationAction,
-        selection_changes: &mut PerComponentType<Vec<ComponentKey>>,
-        upward_sources: &mut PerComponentType<Vec<ComponentKey>>,
+        selection_changes: &mut SelectionKeys,
+        upward_sources: &mut SelectionKeys,
     ) {
         let should_select = matches!(action, PropagationAction::Select);
         let mut upper_components_to_check = HashSet::new();
         let mut lower_components = Vec::new();
         let mut upper_components = Vec::new();
 
-        for (lower_kind, upper_kind) in Self::COMPONENT_KIND_PAIRS {
+        for (lower_kind, _) in Self::COMPONENT_KIND_PAIRS {
             upper_components_to_check.clear();
-            for &key in &upward_sources[lower_kind] {
+            for key in upward_sources.iter(lower_kind) {
                 ComponentRef::new(key, self.topo, self.attrs).upper(&mut upper_components);
 
                 upper_components_to_check.extend(
@@ -479,8 +478,8 @@ impl<'a> Selection<'a> {
                 };
 
                 if changed {
-                    selection_changes[upper_kind].push(key);
-                    upward_sources[upper_kind].push(key);
+                    selection_changes.push(key);
+                    upward_sources.push(key);
                 }
             }
         }

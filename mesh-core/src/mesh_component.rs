@@ -1,7 +1,5 @@
 //! Component handles, kinds, and composed component views.
 
-use std::ops::{Index, IndexMut};
-
 use slotmap::new_key_type;
 
 use crate::{Attributes, EdgeRef, FaceRef, Topology, VertRef};
@@ -21,47 +19,17 @@ pub enum ComponentType {
     Face,
 }
 
-/// One value for each mesh component type, indexed by [`ComponentType`].
-#[derive(Clone, Default)]
-pub struct PerComponentType<T> {
-    verts: T,
-    edges: T,
-    faces: T,
-}
-
-impl<T> Index<ComponentType> for PerComponentType<T> {
-    type Output = T;
-
-    fn index(&self, kind: ComponentType) -> &Self::Output {
-        match kind {
-            ComponentType::Vertex => &self.verts,
-            ComponentType::Edge => &self.edges,
-            ComponentType::Face => &self.faces,
-        }
-    }
-}
-
-impl<T> IndexMut<ComponentType> for PerComponentType<T> {
-    fn index_mut(&mut self, kind: ComponentType) -> &mut Self::Output {
-        match kind {
-            ComponentType::Vertex => &mut self.verts,
-            ComponentType::Edge => &mut self.edges,
-            ComponentType::Face => &mut self.faces,
-        }
-    }
-}
-
 bitflags::bitflags! {
     /// A set of component kinds.
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-    pub struct ComponentTypes: u8 {
+    pub struct ComponentMask: u8 {
         const VERTEX = 0b001;
         const EDGE = 0b010;
         const FACE = 0b100;
     }
 }
 
-impl From<ComponentType> for ComponentTypes {
+impl From<ComponentType> for ComponentMask {
     fn from(kind: ComponentType) -> Self {
         match kind {
             ComponentType::Vertex => Self::VERTEX,

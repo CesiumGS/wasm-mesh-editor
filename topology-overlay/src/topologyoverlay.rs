@@ -1,10 +1,10 @@
-use std::ops::Range;
+use std::ops::{Index, IndexMut, Range};
 use std::sync::mpsc::Receiver;
 
 use event_emitter::Event;
 use mesh_core::{
     AttributeChange, ComponentKey, ComponentType, EdgeKey, FaceKey, Mesh, MeshChange,
-    PerComponentType, SelectionChange, VertKey,
+    SelectionChange, VertKey,
 };
 use slotmap::{Key, SecondaryMap};
 
@@ -26,6 +26,36 @@ impl<T> OverlayBuffer<T> {
     }
 }
 
+/// Selection buffers by component kind: 0 unselected, 255 selected.
+#[derive(Default)]
+pub struct SelectionBuffers {
+    pub verts: OverlayBuffer<u8>,
+    pub edges: OverlayBuffer<u8>,
+    pub faces: OverlayBuffer<u8>,
+}
+
+impl Index<ComponentType> for SelectionBuffers {
+    type Output = OverlayBuffer<u8>;
+
+    fn index(&self, kind: ComponentType) -> &Self::Output {
+        match kind {
+            ComponentType::Vertex => &self.verts,
+            ComponentType::Edge => &self.edges,
+            ComponentType::Face => &self.faces,
+        }
+    }
+}
+
+impl IndexMut<ComponentType> for SelectionBuffers {
+    fn index_mut(&mut self, kind: ComponentType) -> &mut Self::Output {
+        match kind {
+            ComponentType::Vertex => &mut self.verts,
+            ComponentType::Edge => &mut self.edges,
+            ComponentType::Face => &mut self.faces,
+        }
+    }
+}
+
 /// Mesh data packed for rendering.
 #[derive(Default)]
 pub struct OverlayBuffers {
@@ -36,7 +66,7 @@ pub struct OverlayBuffers {
     /// Three position indices and a face index per triangle (RGBA32UI).
     pub triangles: OverlayBuffer<[u32; 4]>,
     /// Selection by vertex, edge, or face index: 0 unselected, 255 selected.
-    pub selection: PerComponentType<OverlayBuffer<u8>>,
+    pub selection: SelectionBuffers,
     /// Upload all buffers and refresh picking maps, regardless of dirty ranges.
     /// True on the first update and after topology edits.
     pub full_refresh: bool,
@@ -81,10 +111,11 @@ impl OverlayBuffers {
         }
 
         let selected = mesh.selection();
-        let mut selection = PerComponentType::default();
-        selection[ComponentType::Vertex] = OverlayBuffer::new(vec![0; vertices.len()]);
-        selection[ComponentType::Edge] = OverlayBuffer::new(vec![0; edges.len()]);
-        selection[ComponentType::Face] = OverlayBuffer::new(vec![0; faces.len()]);
+        let mut selection = SelectionBuffers {
+            verts: OverlayBuffer::new(vec![0; vertices.len()]),
+            edges: OverlayBuffer::new(vec![0; edges.len()]),
+            faces: OverlayBuffer::new(vec![0; faces.len()]),
+        };
 
         // Generally speaking, these loops do nothing (since TopologyOverlay is usually created over a new mesh, with nothing selected yet)
         for key in selected.verts() {
@@ -216,7 +247,7 @@ impl TopologyOverlay {
                 MeshChange::Attributes(AttributeChange::Position(keys)) => {
                     self.update_positions(mesh, keys.iter().copied());
                 }
-                MeshChange::Selection(change) => self.update_selection(mesh, change),
+                MeshChange::Selection(change) => self.update_selection(change),
                 _ => {}
             }
         }
@@ -238,32 +269,47 @@ impl TopologyOverlay {
         }
     }
 
-    fn update_selection(&mut self, mesh: &Mesh, change: &SelectionChange) {
-        let selected = mesh.selection();
-        let keys = [
-            ComponentType::Vertex,
-            ComponentType::Edge,
-            ComponentType::Face,
-        ]
-        .into_iter()
-        .flat_map(|kind| change.added[kind].iter().chain(&change.removed[kind]));
+    fn update_selection(&mut self, change: &SelectionChange) {
+        for (keys, value) in [(&change.added, 255), (&change.removed, 0)] {
+            Self::set_selection(
+                &mut self.buffers.selection[ComponentType::Vertex],
+                &keys.verts,
+                &self.vertex_key_to_buffer_index,
+                value,
+            );
+            Self::set_selection(
+                &mut self.buffers.selection[ComponentType::Edge],
+                &keys.edges,
+                &self.edge_key_to_buffer_index,
+                value,
+            );
+            Self::set_selection(
+                &mut self.buffers.selection[ComponentType::Face],
+                &keys.faces,
+                &self.face_key_to_buffer_index,
+                value,
+            );
+        }
 
+        if !change.is_empty() {
+            self.pending_upload.request_partial();
+        }
+    }
+
+    fn set_selection<K: Key>(
+        buffer: &mut OverlayBuffer<u8>,
+        keys: &[K],
+        indices: &SecondaryMap<K, u32>,
+        value: u8,
+    ) {
         for &key in keys {
-            let index = match key {
-                ComponentKey::Vert(key) => self.vertex_key_to_buffer_index.get(key),
-                ComponentKey::Edge(key) => self.edge_key_to_buffer_index.get(key),
-                ComponentKey::Face(key) => self.face_key_to_buffer_index.get(key),
-            };
-
-            let Some(&index) = index else {
+            let Some(&index) = indices.get(key) else {
                 continue;
             };
 
             let index = index as usize;
-            let buffer = &mut self.buffers.selection[key.kind()];
-            buffer.data[index] = if selected.contains(key) { 255 } else { 0 };
+            buffer.data[index] = value;
             buffer.dirty_ranges.push(index..index + 1);
-            self.pending_upload.request_partial();
         }
     }
 
