@@ -110,8 +110,10 @@ dependencies = [
 name = "topology-overlay"
 version = "0.1.0"
 dependencies = [
+ "event-emitter",
  "glam",
  "mesh-core",
+ "slotmap",
 ]
 
 [[package]]

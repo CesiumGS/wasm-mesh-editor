@@ -6,5 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+event-emitter = { path = "../utils/event-emitter" }
 mesh-core = { path = "../mesh-core" }
 glam.workspace = true
+slotmap.workspace = true
