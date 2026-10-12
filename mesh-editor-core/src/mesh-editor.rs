@@ -1,5 +1,5 @@
 use mesh_core::Mesh;
-use slotmap::new_key_type;
+use slotmap::{SlotMap, new_key_type};
 use topology_overlay::{OverlayBuffers, TopologyOverlay};
 
 use crate::{EditMode, Tool, ToolAccessor, ToolHandle, ToolId};
@@ -11,12 +11,16 @@ new_key_type! {
 
 /// Owns registered meshes and coordinates their overlays and active tool.
 pub struct MeshEditor {
-    _private: (),
+    meshes: SlotMap<MeshKey, Mesh>,
+    mesh_keys: Vec<MeshKey>,
+    active_meshes: Vec<MeshKey>,
+    mode: EditMode,
+    active_tool: Option<ToolId>,
 }
 
 impl Default for MeshEditor {
     fn default() -> Self {
-        todo!()
+        Self::new()
     }
 }
 
@@ -24,11 +28,17 @@ impl Default for MeshEditor {
 impl MeshEditor {
     /// Creates an editor with no meshes or active tool, in `EditMode::NONE`.
     pub fn new() -> Self {
-        todo!()
+        Self {
+            meshes: SlotMap::with_key(),
+            mesh_keys: Vec::new(),
+            active_meshes: Vec::new(),
+            mode: EditMode::NONE,
+            active_tool: None,
+        }
     }
 
     pub fn mode(&self) -> EditMode {
-        todo!()
+        self.mode
     }
 
     /// Applies the mode to active meshes and updates tool compatibility.
@@ -47,24 +57,24 @@ impl MeshEditor {
     }
 
     pub fn has_mesh(&self, key: MeshKey) -> bool {
-        todo!()
+        self.meshes.contains_key(key)
     }
 
     /// Returns a read-only view of a registered mesh.
     pub fn mesh(&self, key: MeshKey) -> Option<&Mesh> {
-        todo!()
+        self.meshes.get(key)
     }
 
     pub fn mesh_keys(&self) -> &[MeshKey] {
-        todo!()
+        &self.mesh_keys
     }
 
     pub fn active_meshes(&self) -> &[MeshKey] {
-        todo!()
+        &self.active_meshes
     }
 
     pub fn is_mesh_active(&self, key: MeshKey) -> bool {
-        todo!()
+        self.active_meshes.contains(&key)
     }
 
     /// Applies the current mode to this mesh. Returns `None` for an unknown key.
@@ -83,7 +93,7 @@ impl MeshEditor {
     }
 
     pub fn active_tool(&self) -> Option<ToolId> {
-        todo!()
+        self.active_tool
     }
 
     /// Borrows the active tool and constructs its mesh context.
@@ -142,3 +152,7 @@ impl MeshEditor {
         todo!()
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/mesh-editor.rs"]
+mod tests;
