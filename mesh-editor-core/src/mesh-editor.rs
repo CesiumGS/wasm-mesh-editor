@@ -4,6 +4,11 @@ use topology_overlay::{OverlayBuffers, TopologyOverlay};
 
 use crate::{EditMode, Tool, ToolAccessor, ToolHandle, ToolId};
 
+#[path = "mesh-editor/errors.rs"]
+mod errors;
+
+pub use errors::MeshNotFound;
+
 new_key_type! {
     /// Identifies a mesh registered with an editor.
     pub struct MeshKey;
@@ -39,13 +44,24 @@ impl MeshEditor {
         }
     }
 
+    /// Returns the editing policy, including component visibility for the renderer.
     pub fn mode(&self) -> EditMode {
         self.mode
     }
 
-    /// Applies the mode to active meshes and updates tool compatibility.
+    /// Applies the mode's selection level to active meshes.
     pub fn set_mode(&mut self, mode: EditMode) {
-        todo!()
+        if self.mode == mode {
+            return;
+        }
+
+        self.mode = mode;
+
+        for &key in &self.active_meshes {
+            self.meshes[key]
+                .selection_mut()
+                .set_level(mode.selection_level);
+        }
     }
 
     /// Registers a mesh and builds its topology overlay. The mesh starts inactive.
@@ -91,14 +107,28 @@ impl MeshEditor {
         self.active_meshes.contains(&key)
     }
 
-    /// Applies the current mode to this mesh. Returns `None` for an unknown key.
-    pub fn set_mesh_active(&mut self, key: MeshKey) -> Option<()> {
-        todo!()
+    /// Applies the current mode to this mesh. Returns [`MeshNotFound`] for an unknown key.
+    pub fn set_mesh_active(&mut self, key: MeshKey) -> Result<(), MeshNotFound> {
+        let mesh = self.meshes.get_mut(key).ok_or(MeshNotFound { key })?;
+
+        if self.active_meshes.contains(&key) {
+            return Ok(());
+        }
+
+        mesh.selection_mut().set_level(self.mode.selection_level);
+        self.active_meshes.push(key);
+
+        Ok(())
     }
 
-    /// Stops editing this mesh. Returns `None` for an unknown key.
-    pub fn set_mesh_inactive(&mut self, key: MeshKey) -> Option<()> {
-        todo!()
+    /// Stops editing this mesh without changing its selection or selection level.
+    /// Returns [`MeshNotFound`] for an unknown key.
+    pub fn set_mesh_inactive(&mut self, key: MeshKey) -> Result<(), MeshNotFound> {
+        self.meshes.get(key).ok_or(MeshNotFound { key })?;
+
+        self.active_meshes.retain(|&mesh_key| mesh_key != key);
+
+        Ok(())
     }
 
     /// Registers a tool with this editor. The tool starts inactive.

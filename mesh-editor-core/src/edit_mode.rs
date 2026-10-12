@@ -3,6 +3,7 @@ use mesh_core::ComponentMask;
 /// Which components are visible and directly selectable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EditMode {
+    /// Component visibility policy for the renderer.
     pub renderable_components: ComponentMask,
     pub selection_level: ComponentMask,
 }

@@ -1,3 +1,5 @@
+use std::sync::mpsc::TryRecvError;
+
 use mesh_core::{ComponentMask, MeshBuffers};
 use slotmap::Key;
 
@@ -51,7 +53,11 @@ fn empty_editor_rejects_unknown_mesh_keys() {
             assert!(!editor.is_mesh_active(key));
             assert!(editor.overlay(key).is_none());
             assert!(editor.remove_mesh(key).is_none());
+            assert_eq!(editor.set_mesh_active(key), Err(MeshNotFound { key }));
+            assert_eq!(editor.set_mesh_inactive(key), Err(MeshNotFound { key }));
         }
+
+        assert_empty_editor(&editor);
     }
 }
 
@@ -131,7 +137,10 @@ fn remove_mesh_preserves_remaining_meshes_and_active_keys() {
 
     assert_eq!(editor.mesh_keys(), &[first, middle, last]);
 
-    editor.active_meshes.extend([first, middle, last]);
+    for key in [first, middle, last] {
+        editor.set_mesh_active(key).unwrap();
+    }
+
     assert!(editor.remove_mesh(middle).is_some());
 
     assert_eq!(editor.mesh_keys(), &[first, last]);
@@ -156,6 +165,7 @@ fn removed_mesh_key_cannot_access_or_remove_replacement() {
     let replacement = editor.add_mesh(Mesh::new());
 
     assert_ne!(removed, replacement);
+    editor.set_mesh_active(replacement).unwrap();
 
     for key in [MeshKey::null(), removed] {
         assert!(!editor.has_mesh(key));
@@ -163,10 +173,201 @@ fn removed_mesh_key_cannot_access_or_remove_replacement() {
         assert!(!editor.is_mesh_active(key));
         assert!(editor.overlay(key).is_none());
         assert!(editor.remove_mesh(key).is_none());
+        assert_eq!(editor.set_mesh_active(key), Err(MeshNotFound { key }));
+        assert_eq!(editor.set_mesh_inactive(key), Err(MeshNotFound { key }));
     }
 
     assert_eq!(editor.mesh_keys(), &[replacement]);
+    assert_eq!(editor.active_meshes(), &[replacement]);
     assert!(editor.has_mesh(replacement));
     assert!(editor.mesh(replacement).is_some());
     assert!(editor.overlay(replacement).is_some());
+}
+
+#[test]
+fn activation_applies_current_mode_and_repeated_calls_are_noops() {
+    let mut editor = MeshEditor::new();
+    let mut mesh = triangle_mesh();
+
+    mesh.selection_mut().set_level(ComponentMask::FACE);
+    editor.set_mode(EditMode::EDGE);
+
+    let first = editor.add_mesh(mesh);
+    let second = editor.add_mesh(triangle_mesh());
+
+    assert_eq!(
+        editor.mesh(first).unwrap().selection().level(),
+        ComponentMask::FACE
+    );
+    assert_eq!(editor.set_mesh_active(first), Ok(()));
+    assert_eq!(editor.set_mesh_active(second), Ok(()));
+
+    let changes = editor.meshes[first].subscribe();
+
+    assert_eq!(editor.set_mesh_active(first), Ok(()));
+    editor.set_mode(EditMode::EDGE);
+
+    assert_eq!(editor.active_meshes(), &[first, second]);
+
+    for key in [first, second] {
+        assert!(editor.is_mesh_active(key));
+        assert_eq!(
+            editor.mesh(key).unwrap().selection().level(),
+            ComponentMask::EDGE
+        );
+    }
+
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn deactivation_preserves_selection_and_reactivation_applies_latest_mode() {
+    let mut editor = MeshEditor::new();
+    let mut mesh = triangle_mesh();
+    let vertex = mesh.topology().verts().next().unwrap();
+
+    mesh.selection_mut().set_level(ComponentMask::VERTEX);
+    mesh.selection_mut().select(&[vertex]);
+
+    let changes = mesh.subscribe();
+    let key = editor.add_mesh(mesh);
+
+    editor.set_mode(EditMode::VERTEX);
+    editor.set_mesh_active(key).unwrap();
+
+    assert_eq!(editor.set_mesh_inactive(key), Ok(()));
+    assert_eq!(editor.set_mesh_inactive(key), Ok(()));
+    editor.set_mode(EditMode::FACE);
+
+    assert!(editor.active_meshes().is_empty());
+    assert!(!editor.is_mesh_active(key));
+    assert!(editor.overlay(key).is_some());
+
+    let selection = editor.mesh(key).unwrap().selection();
+
+    assert_eq!(selection.level(), ComponentMask::VERTEX);
+    assert_eq!(selection.len(), 1);
+    assert!(selection.contains(vertex));
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+
+    editor.set_mesh_active(key).unwrap();
+
+    assert_eq!(editor.active_meshes(), &[key]);
+    assert_eq!(
+        editor.mesh(key).unwrap().selection().level(),
+        ComponentMask::FACE
+    );
+    assert!(editor.mesh(key).unwrap().selection().is_empty());
+}
+
+#[test]
+fn mode_changes_apply_only_to_active_meshes() {
+    let mut editor = MeshEditor::new();
+    let [first, second, inactive] =
+        [triangle_mesh(), triangle_mesh(), triangle_mesh()].map(|mut mesh| {
+            let vertex = mesh.topology().verts().next().unwrap();
+
+            mesh.selection_mut().set_level(ComponentMask::VERTEX);
+            mesh.selection_mut().select(&[vertex]);
+
+            editor.add_mesh(mesh)
+        });
+
+    editor.set_mode(EditMode::VERTEX);
+    editor.set_mesh_active(first).unwrap();
+    editor.set_mesh_active(second).unwrap();
+
+    for mode in [EditMode::EDGE, EditMode::NONE] {
+        editor.set_mode(mode);
+
+        assert_eq!(editor.mode(), mode);
+        assert_eq!(editor.active_meshes(), &[first, second]);
+
+        for key in [first, second] {
+            let selection = editor.mesh(key).unwrap().selection();
+
+            assert_eq!(selection.level(), mode.selection_level);
+            assert!(selection.is_empty());
+        }
+
+        let selection = editor.mesh(inactive).unwrap().selection();
+
+        assert_eq!(selection.level(), ComponentMask::VERTEX);
+        assert_eq!(selection.len(), 1);
+    }
+}
+
+#[test]
+fn deactivation_preserves_other_active_meshes_and_key_order() {
+    let mut editor = MeshEditor::new();
+    let first = editor.add_mesh(Mesh::new());
+    let middle = editor.add_mesh(Mesh::new());
+    let last = editor.add_mesh(Mesh::new());
+
+    for key in [first, middle, last] {
+        editor.set_mesh_active(key).unwrap();
+    }
+
+    assert_eq!(editor.set_mesh_inactive(middle), Ok(()));
+    assert_eq!(editor.active_meshes(), &[first, last]);
+    assert_eq!(editor.mesh_keys(), &[first, middle, last]);
+    assert!(!editor.is_mesh_active(middle));
+
+    editor.set_mesh_active(middle).unwrap();
+
+    assert_eq!(editor.active_meshes(), &[first, last, middle]);
+}
+
+#[test]
+fn rendering_policy_is_exposed_without_changing_selection() {
+    let mut editor = MeshEditor::new();
+    let mode = EditMode {
+        renderable_components: ComponentMask::empty(),
+        selection_level: ComponentMask::VERTEX.union(ComponentMask::EDGE),
+    };
+
+    editor.set_mode(mode);
+
+    assert_eq!(editor.mode(), mode);
+    assert!(editor.active_meshes().is_empty());
+
+    let mut mesh = triangle_mesh();
+    let vertex = mesh.topology().verts().next().unwrap();
+
+    mesh.selection_mut().set_level(mode.selection_level);
+    mesh.selection_mut().select(&[vertex]);
+
+    let changes = mesh.subscribe();
+    let key = editor.add_mesh(mesh);
+
+    editor.set_mesh_active(key).unwrap();
+
+    let mode = EditMode {
+        renderable_components: ComponentMask::FACE,
+        ..mode
+    };
+
+    editor.set_mode(mode);
+
+    assert_eq!(editor.mode(), mode);
+
+    let selection = editor.mesh(key).unwrap().selection();
+
+    assert_eq!(selection.level(), mode.selection_level);
+    assert_eq!(selection.len(), 1);
+    assert!(selection.contains(vertex));
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn mesh_not_found_reports_the_missing_key() {
+    let mut editor = MeshEditor::new();
+    let key = MeshKey::null();
+    let error: crate::MeshNotFound = editor.set_mesh_active(key).unwrap_err();
+
+    assert_eq!(error.key, key);
+
+    let error: &dyn std::error::Error = &error;
+
+    assert_eq!(error.to_string(), format!("mesh {key:?} is not registered"));
 }
