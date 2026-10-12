@@ -45,6 +45,7 @@ name = "mesh-editor-core"
 version = "0.1.0"
 dependencies = [
  "mesh-core",
+ "slotmap",
  "topology-overlay",
 ]
 
