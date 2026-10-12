@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod access;
 mod context;
@@ -11,10 +12,24 @@ pub use input::PointerInput;
 
 use crate::EditMode;
 
-/// Identifies an editor-owned tool. Identity storage is deferred.
+/// Identifies a registered tool uniquely across editors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ToolId {
-    _private: (),
+    value: usize,
+}
+
+impl ToolId {
+    pub(crate) fn new() -> Self {
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
+
+        let value = NEXT_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .expect("tool ID space exhausted");
+
+        Self { value }
+    }
 }
 
 /// Identifies an editor-owned tool while retaining its concrete type.
@@ -24,6 +39,13 @@ pub struct ToolHandle<ToolType: Tool> {
 }
 
 impl<ToolType: Tool> ToolHandle<ToolType> {
+    pub(crate) fn new(id: ToolId) -> Self {
+        Self {
+            id,
+            marker: PhantomData,
+        }
+    }
+
     /// Returns the ID used for activation and input dispatch.
     pub fn id(&self) -> ToolId {
         self.id

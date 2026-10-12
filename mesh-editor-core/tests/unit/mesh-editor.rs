@@ -1,9 +1,62 @@
+use std::any::Any;
 use std::sync::mpsc::TryRecvError;
 
 use mesh_core::{ComponentMask, MeshBuffers};
 use slotmap::Key;
 
+use crate::{PointerInput, ToolContext};
+
 use super::*;
+
+struct TestTool<Value> {
+    value: Value,
+}
+
+impl<Value: 'static> Tool for TestTool<Value> {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn supports_edit_mode(&self, _mode: EditMode) -> bool {
+        panic!("unexpected tool callback");
+    }
+
+    fn activate(&mut self, _context: &mut ToolContext<'_>) {
+        panic!("unexpected tool callback");
+    }
+
+    fn deactivate(&mut self, _context: &mut ToolContext<'_>) {
+        panic!("unexpected tool callback");
+    }
+
+    fn pointer_down(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+        panic!("unexpected tool callback");
+    }
+
+    fn pointer_up(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+        panic!("unexpected tool callback");
+    }
+
+    fn pointer_move(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+        panic!("unexpected tool callback");
+    }
+
+    fn pointer_click(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+        panic!("unexpected tool callback");
+    }
+
+    fn confirm(&mut self, _context: &mut ToolContext<'_>) {
+        panic!("unexpected tool callback");
+    }
+
+    fn cancel(&mut self, _context: &mut ToolContext<'_>) {
+        panic!("unexpected tool callback");
+    }
+
+    fn update(&mut self, _context: &mut ToolContext<'_>, _delta_seconds: f64) {
+        panic!("unexpected tool callback");
+    }
+}
 
 fn triangle_mesh() -> Mesh {
     Mesh::from_buffers(MeshBuffers {
@@ -370,4 +423,100 @@ fn mesh_not_found_reports_the_missing_key() {
     let error: &dyn std::error::Error = &error;
 
     assert_eq!(error.to_string(), format!("mesh {key:?} is not registered"));
+}
+
+#[test]
+fn tool_registration_and_configuration_preserve_active_tool() {
+    let mut editor = MeshEditor::new();
+    let first = editor.add_tool(TestTool { value: 1_u32 });
+
+    assert_eq!(editor.active_tool(), None);
+    assert_eq!(editor.tool_config_mut(&first).unwrap().value, 1);
+
+    editor.tool_config_mut(&first).unwrap().value = 10;
+    editor.active_tool = Some(first.id());
+
+    let second = editor.add_tool(TestTool { value: 2_u32 });
+
+    assert_ne!(first.id(), second.id());
+    assert_eq!(editor.active_tool(), Some(first.id()));
+    assert_eq!(editor.tool_config_mut(&first).unwrap().value, 10);
+    assert_eq!(editor.tool_config_mut(&second).unwrap().value, 2);
+
+    editor.tool_config_mut(&first).unwrap().value = 11;
+    editor.tool_config_mut(&second).unwrap().value = 20;
+
+    assert_eq!(editor.tool_config_mut(&first).unwrap().value, 11);
+    assert_eq!(editor.tool_config_mut(&second).unwrap().value, 20);
+    assert_eq!(editor.active_tool(), Some(first.id()));
+}
+
+#[test]
+fn tool_configuration_supports_multiple_concrete_types() {
+    let mut editor = MeshEditor::new();
+    let number = editor.add_tool(TestTool { value: 3_u32 });
+    let text = editor.add_tool(TestTool {
+        value: String::from("tool"),
+    });
+
+    editor
+        .tool_config_mut(&text)
+        .unwrap()
+        .value
+        .push_str(" config");
+
+    assert_ne!(number.id(), text.id());
+    assert_eq!(editor.tool_config_mut(&number).unwrap().value, 3);
+    assert_eq!(editor.tool_config_mut(&text).unwrap().value, "tool config");
+
+    let mismatched = ToolHandle::<TestTool<String>>::new(number.id());
+
+    assert!(editor.tool_config_mut(&mismatched).is_none());
+    assert_eq!(editor.tool_config_mut(&number).unwrap().value, 3);
+}
+
+#[test]
+fn tool_handles_cannot_configure_foreign_editors() {
+    let mut first_editor = MeshEditor::new();
+    let mut second_editor = MeshEditor::new();
+    let first = first_editor.add_tool(TestTool { value: 1_u32 });
+    let second = second_editor.add_tool(TestTool { value: 2_u32 });
+
+    assert_ne!(first.id(), second.id());
+    assert!(first_editor.tool_config_mut(&second).is_none());
+    assert!(second_editor.tool_config_mut(&first).is_none());
+
+    let mut moved_editor = first_editor;
+
+    assert_eq!(moved_editor.tool_config_mut(&first).unwrap().value, 1);
+    assert!(moved_editor.tool_config_mut(&second).is_none());
+    assert_eq!(second_editor.tool_config_mut(&second).unwrap().value, 2);
+
+    drop(moved_editor);
+
+    let mut new_editor = MeshEditor::new();
+    let new_handle = new_editor.add_tool(TestTool { value: 3_u32 });
+
+    assert_ne!(first.id(), new_handle.id());
+    assert!(new_editor.tool_config_mut(&first).is_none());
+    assert_eq!(new_editor.tool_config_mut(&new_handle).unwrap().value, 3);
+}
+
+#[test]
+fn tool_configuration_rejects_missing_ids() {
+    let mut editor = MeshEditor::new();
+    let missing = ToolHandle::<TestTool<u32>>::new(ToolId::new());
+
+    assert!(editor.tool_config_mut(&missing).is_none());
+
+    let removed = editor.add_tool(TestTool { value: 1_u32 });
+
+    editor.tools.remove(&removed.id()).unwrap();
+
+    let replacement = editor.add_tool(TestTool { value: 2_u32 });
+
+    assert_ne!(removed.id(), replacement.id());
+    assert!(editor.tool_config_mut(&removed).is_none());
+    assert!(editor.tool_config_mut(&missing).is_none());
+    assert_eq!(editor.tool_config_mut(&replacement).unwrap().value, 2);
 }

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use mesh_core::Mesh;
 use slotmap::{SecondaryMap, SlotMap, new_key_type};
 use topology_overlay::{OverlayBuffers, TopologyOverlay};
@@ -21,6 +23,7 @@ pub struct MeshEditor {
     mesh_keys: Vec<MeshKey>,
     active_meshes: Vec<MeshKey>,
     mode: EditMode,
+    tools: HashMap<ToolId, Box<dyn Tool>>,
     active_tool: Option<ToolId>,
 }
 
@@ -40,6 +43,7 @@ impl MeshEditor {
             mesh_keys: Vec::new(),
             active_meshes: Vec::new(),
             mode: EditMode::NONE,
+            tools: HashMap::new(),
             active_tool: None,
         }
     }
@@ -133,7 +137,11 @@ impl MeshEditor {
 
     /// Registers a tool with this editor. The tool starts inactive.
     pub fn add_tool<ToolType: Tool>(&mut self, tool: ToolType) -> ToolHandle<ToolType> {
-        todo!()
+        let id = ToolId::new();
+
+        self.tools.insert(id, Box::new(tool));
+
+        ToolHandle::new(id)
     }
 
     pub fn active_tool(&self) -> Option<ToolId> {
@@ -171,7 +179,10 @@ impl MeshEditor {
         &mut self,
         handle: &ToolHandle<ToolType>,
     ) -> Option<&mut ToolType> {
-        todo!()
+        self.tools
+            .get_mut(&handle.id())?
+            .as_any_mut()
+            .downcast_mut::<ToolType>()
     }
 
     /// Selects a registered tool, or clears the active tool with `None`.
