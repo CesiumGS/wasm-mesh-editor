@@ -192,13 +192,58 @@ fn update_delivers_initial_upload_once() {
     for mut mesh in [Mesh::new(), mixed_face_mesh()] {
         let mut overlay = TopologyOverlay::new(&mut mesh);
 
+        assert!(overlay.buffers().full_refresh);
+        assert_eq!(
+            overlay.buffers().positions.data.len(),
+            mesh.topology().vert_count()
+        );
+
         let buffers = overlay.update(&mesh).unwrap();
         assert!(buffers.full_refresh);
         assert!(buffers.positions.dirty_ranges.is_empty());
+        let returned = std::ptr::from_ref(buffers);
+
+        assert!(std::ptr::eq(returned, overlay.buffers()));
+        assert!(std::ptr::eq(returned, overlay.buffers()));
         assert!(matches!(overlay.pending_upload, PendingChanges::None));
         assert!(overlay.update(&mesh).is_none());
+        assert!(!overlay.buffers().full_refresh);
+        assert!(std::ptr::eq(returned, overlay.buffers()));
+        assert_eq!(
+            overlay.buffers().positions.data.len(),
+            mesh.topology().vert_count()
+        );
         assert!(overlay.update(&mesh).is_none());
     }
+}
+
+#[test]
+fn buffers_preserves_data_between_updates() {
+    let mut mesh = mixed_face_mesh();
+    let vertex = mesh.topology().verts().last().unwrap();
+    let mut overlay = TopologyOverlay::new(&mut mesh);
+
+    overlay.update(&mesh).unwrap();
+    mesh.selection_mut().select(&[vertex]);
+    overlay.update(&mesh).unwrap();
+    mesh.selection_mut().clear();
+
+    for _ in 0..2 {
+        let buffers = overlay.buffers();
+
+        assert!(!buffers.full_refresh);
+        assert_eq!(buffers.selection.verts.data[5], 255);
+        assert_eq!(buffers.selection.verts.dirty_ranges, vec![5..6]);
+        assert!(buffers.positions.dirty_ranges.is_empty());
+    }
+
+    overlay.update(&mesh).unwrap();
+
+    assert_eq!(overlay.buffers().selection.verts.data[5], 0);
+    assert!(overlay.update(&mesh).is_none());
+    assert_eq!(overlay.buffers().selection.verts.data[5], 0);
+    assert!(overlay.buffers().selection.verts.dirty_ranges.is_empty());
+    assert!(!overlay.buffers().full_refresh);
 }
 
 #[test]

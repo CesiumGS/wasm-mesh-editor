@@ -230,6 +230,11 @@ impl TopologyOverlay {
         Some(&self.buffers)
     }
 
+    /// Borrows the packed buffers. Queued mesh changes are applied by [`Self::update`].
+    pub fn buffers(&self) -> &OverlayBuffers {
+        &self.buffers
+    }
+
     /// Returns the mesh key for a buffer index, or `None` if out of bounds.
     /// Faces use the triangle's face index. Indices can change after topology edits.
     pub fn component_key(&self, _kind: ComponentType, _index: u32) -> Option<ComponentKey> {

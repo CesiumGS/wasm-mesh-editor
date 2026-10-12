@@ -34,7 +34,6 @@ impl Default for MeshEditor {
     }
 }
 
-#[allow(unused_variables)]
 impl MeshEditor {
     /// Creates an editor with no meshes or active tool, in `EditMode::NONE`.
     pub fn new() -> Self {
@@ -235,9 +234,18 @@ impl MeshEditor {
         Ok(())
     }
 
-    /// Advances the active tool and updates overlays. Called by the host's frame loop.
+    /// Advances the active tool, then updates all registered overlays.
+    /// Called by the consumer's render loop.
     pub fn update(&mut self, delta_seconds: f64) {
-        todo!()
+        if let Some(mut tool_accessor) = self.active_tool_mut() {
+            tool_accessor
+                .tool
+                .update(&mut tool_accessor.context, delta_seconds);
+        }
+
+        for (key, overlay) in &mut self.overlays {
+            overlay.update(&self.meshes[key]);
+        }
     }
 
     /// Returns an overlay for read-only queries such as picking-key lookup.
@@ -245,10 +253,10 @@ impl MeshEditor {
         self.overlays.get(key)
     }
 
-    /// Returns this mesh's overlay changes from the latest update, if any.
-    /// Consume borrowed data before the next update.
+    /// Returns this mesh's packed overlay buffers, or `None` for an unknown key.
+    /// Mesh changes are applied during [`Self::update`].
     pub fn overlay_buffers(&self, key: MeshKey) -> Option<&OverlayBuffers> {
-        todo!()
+        Some(self.overlays.get(key)?.buffers())
     }
 
     fn cancel_active_tool(&mut self) {
