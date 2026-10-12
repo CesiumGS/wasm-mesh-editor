@@ -1,4 +1,6 @@
 use std::any::Any;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 
 use mesh_core::{ComponentMask, MeshBuffers};
@@ -56,6 +58,114 @@ impl<Value: 'static> Tool for TestTool<Value> {
     fn update(&mut self, _context: &mut ToolContext<'_>, _delta_seconds: f64) {
         panic!("unexpected tool callback");
     }
+}
+
+#[derive(Debug)]
+struct ToolCall {
+    name: &'static str,
+    action: &'static str,
+    mode: EditMode,
+    meshes: Vec<(MeshKey, ComponentMask)>,
+}
+
+struct RecordingTool {
+    name: &'static str,
+    calls: Rc<RefCell<Vec<ToolCall>>>,
+    supported_mode: Option<EditMode>,
+    clear_selection_on_cancel: bool,
+}
+
+impl RecordingTool {
+    fn new(name: &'static str, calls: &Rc<RefCell<Vec<ToolCall>>>) -> Self {
+        Self {
+            name,
+            calls: Rc::clone(calls),
+            supported_mode: None,
+            clear_selection_on_cancel: false,
+        }
+    }
+
+    fn record(&self, action: &'static str, context: &ToolContext<'_>) {
+        let meshes = context
+            .active_meshes()
+            .iter()
+            .map(|&key| (key, context.mesh(key).unwrap().selection().level()))
+            .collect();
+
+        self.calls.borrow_mut().push(ToolCall {
+            name: self.name,
+            action,
+            mode: context.mode(),
+            meshes,
+        });
+    }
+}
+
+impl Tool for RecordingTool {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn supports_edit_mode(&self, mode: EditMode) -> bool {
+        self.supported_mode
+            .is_none_or(|supported| supported == mode)
+    }
+
+    fn activate(&mut self, context: &mut ToolContext<'_>) {
+        self.record("activate", context);
+    }
+
+    fn deactivate(&mut self, context: &mut ToolContext<'_>) {
+        self.record("deactivate", context);
+    }
+
+    fn pointer_down(&mut self, context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+        self.record("pointer_down", context);
+        true
+    }
+
+    fn pointer_up(&mut self, context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+        self.record("pointer_up", context);
+        false
+    }
+
+    fn pointer_move(&mut self, context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+        self.record("pointer_move", context);
+        true
+    }
+
+    fn pointer_click(&mut self, context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+        self.record("pointer_click", context);
+        false
+    }
+
+    fn confirm(&mut self, context: &mut ToolContext<'_>) {
+        self.record("confirm", context);
+    }
+
+    fn cancel(&mut self, context: &mut ToolContext<'_>) {
+        self.record("cancel", context);
+
+        if self.clear_selection_on_cancel {
+            for &key in context.active_meshes() {
+                context.mesh_mut(key).unwrap().selection_mut().clear();
+            }
+        }
+    }
+
+    fn update(&mut self, _context: &mut ToolContext<'_>, _delta_seconds: f64) {
+        panic!("unexpected tool update");
+    }
+}
+
+fn assert_tool_calls(calls: &RefCell<Vec<ToolCall>>, expected: &[(&str, &str)]) {
+    let calls: Vec<_> = calls
+        .borrow()
+        .iter()
+        .map(|call| (call.name, call.action))
+        .collect();
+
+    assert_eq!(calls, expected);
 }
 
 fn triangle_mesh() -> Mesh {
@@ -519,4 +629,386 @@ fn tool_configuration_rejects_missing_ids() {
     assert!(editor.tool_config_mut(&removed).is_none());
     assert!(editor.tool_config_mut(&missing).is_none());
     assert_eq!(editor.tool_config_mut(&replacement).unwrap().value, 2);
+}
+
+#[test]
+fn tool_switching_cancels_then_deactivates_before_activating_replacement() {
+    let mut editor = MeshEditor::new();
+    let mesh = editor.add_mesh(triangle_mesh());
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let first = editor.add_tool(RecordingTool::new("first", &calls));
+    let second = editor.add_tool(RecordingTool::new("second", &calls));
+
+    editor.set_mode(EditMode::VERTEX);
+    editor.set_mesh_active(mesh).unwrap();
+
+    assert!(editor.active_tool_mut().is_none());
+    assert_eq!(editor.set_active_tool(None), Ok(()));
+    assert_eq!(editor.set_active_tool(Some(first.id())), Ok(()));
+    assert_eq!(editor.set_active_tool(Some(first.id())), Ok(()));
+    assert_eq!(editor.set_active_tool(Some(second.id())), Ok(()));
+    assert_eq!(editor.active_tool(), Some(second.id()));
+    assert_eq!(editor.set_active_tool(None), Ok(()));
+    assert_eq!(editor.set_active_tool(None), Ok(()));
+
+    assert_tool_calls(
+        &calls,
+        &[
+            ("first", "activate"),
+            ("first", "cancel"),
+            ("first", "deactivate"),
+            ("second", "activate"),
+            ("second", "cancel"),
+            ("second", "deactivate"),
+        ],
+    );
+
+    for call in calls.borrow().iter() {
+        assert_eq!(call.mode, EditMode::VERTEX);
+        assert_eq!(call.meshes, vec![(mesh, ComponentMask::VERTEX)]);
+    }
+
+    assert_eq!(editor.active_tool(), None);
+    assert!(editor.active_tool_mut().is_none());
+}
+
+#[test]
+fn invalid_tool_requests_leave_the_active_tool_untouched() {
+    let mut editor = MeshEditor::new();
+    let mut other_editor = MeshEditor::new();
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let current = editor.add_tool(RecordingTool::new("current", &calls));
+    let foreign = other_editor.add_tool(RecordingTool::new("foreign", &calls));
+    let mut incompatible = RecordingTool::new("incompatible", &calls);
+
+    incompatible.supported_mode = Some(EditMode::FACE);
+
+    let incompatible = editor.add_tool(incompatible);
+
+    editor.set_mode(EditMode::VERTEX);
+    editor.set_active_tool(Some(current.id())).unwrap();
+    calls.borrow_mut().clear();
+
+    for id in [foreign.id(), ToolId::new()] {
+        assert_eq!(
+            editor.set_active_tool(Some(id)),
+            Err(ToolActivationError::NotFound { id })
+        );
+    }
+
+    assert_eq!(
+        editor.set_active_tool(Some(incompatible.id())),
+        Err(ToolActivationError::IncompatibleMode {
+            id: incompatible.id(),
+            mode: EditMode::VERTEX
+        })
+    );
+    assert_eq!(editor.active_tool(), Some(current.id()));
+    assert!(calls.borrow().is_empty());
+
+    editor.active_tool_mut().unwrap().confirm();
+    assert_tool_calls(&calls, &[("current", "confirm")]);
+}
+
+#[test]
+fn retained_tool_ids_only_dispatch_to_their_active_tool() {
+    let mut editor = MeshEditor::new();
+    let mut other_editor = MeshEditor::new();
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let first = editor.add_tool(RecordingTool::new("first", &calls));
+    let second = editor.add_tool(RecordingTool::new("second", &calls));
+    let foreign = other_editor.add_tool(RecordingTool::new("foreign", &calls));
+
+    assert!(editor.tool_mut(first.id()).is_none());
+    editor.set_active_tool(Some(first.id())).unwrap();
+    calls.borrow_mut().clear();
+
+    assert!(editor.tool_mut(second.id()).is_none());
+    assert!(editor.tool_mut(foreign.id()).is_none());
+    assert!(editor.tool_mut(ToolId::new()).is_none());
+    editor.tool_mut(first.id()).unwrap().confirm();
+    editor.active_tool_mut().unwrap().cancel();
+
+    assert_tool_calls(&calls, &[("first", "confirm"), ("first", "cancel")]);
+
+    editor.set_active_tool(Some(second.id())).unwrap();
+    calls.borrow_mut().clear();
+
+    assert!(editor.tool_mut(first.id()).is_none());
+    editor.tool_mut(second.id()).unwrap().confirm();
+
+    assert_tool_calls(&calls, &[("second", "confirm")]);
+    editor.set_active_tool(None).unwrap();
+    assert!(editor.tool_mut(second.id()).is_none());
+}
+
+#[test]
+fn mode_changes_cancel_with_old_context_and_keep_compatible_tool_active() {
+    let mut editor = MeshEditor::new();
+    let mesh = editor.add_mesh(triangle_mesh());
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let tool = editor.add_tool(RecordingTool::new("tool", &calls));
+
+    editor.set_mode(EditMode::VERTEX);
+    editor.set_mesh_active(mesh).unwrap();
+    editor.set_active_tool(Some(tool.id())).unwrap();
+
+    for mode in [
+        EditMode::EDGE,
+        EditMode {
+            renderable_components: ComponentMask::empty(),
+            ..EditMode::EDGE
+        },
+    ] {
+        let previous = editor.mode();
+        calls.borrow_mut().clear();
+
+        editor.set_mode(mode);
+
+        assert_tool_calls(&calls, &[("tool", "cancel")]);
+        assert_eq!(calls.borrow()[0].mode, previous);
+        assert_eq!(
+            calls.borrow()[0].meshes,
+            vec![(mesh, previous.selection_level)]
+        );
+        assert_eq!(editor.active_tool(), Some(tool.id()));
+        assert_eq!(editor.mode(), mode);
+        assert_eq!(
+            editor.mesh(mesh).unwrap().selection().level(),
+            mode.selection_level
+        );
+
+        editor.active_tool_mut().unwrap().confirm();
+
+        assert_eq!(calls.borrow()[1].mode, mode);
+        assert_eq!(calls.borrow()[1].meshes, vec![(mesh, mode.selection_level)]);
+    }
+}
+
+#[test]
+fn mode_changes_deactivate_incompatible_tool_before_applying_mode() {
+    let mut editor = MeshEditor::new();
+    let mesh = editor.add_mesh(triangle_mesh());
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let mut tool = RecordingTool::new("tool", &calls);
+
+    tool.supported_mode = Some(EditMode::VERTEX);
+
+    let tool = editor.add_tool(tool);
+
+    editor.set_mode(EditMode::VERTEX);
+    editor.set_mesh_active(mesh).unwrap();
+    editor.set_active_tool(Some(tool.id())).unwrap();
+    calls.borrow_mut().clear();
+
+    editor.set_mode(EditMode::FACE);
+
+    assert_tool_calls(&calls, &[("tool", "cancel"), ("tool", "deactivate")]);
+
+    for call in calls.borrow().iter() {
+        assert_eq!(call.mode, EditMode::VERTEX);
+        assert_eq!(call.meshes, vec![(mesh, ComponentMask::VERTEX)]);
+    }
+
+    assert_eq!(editor.mode(), EditMode::FACE);
+    assert_eq!(
+        editor.mesh(mesh).unwrap().selection().level(),
+        ComponentMask::FACE
+    );
+    assert_eq!(editor.active_tool(), None);
+    assert!(editor.active_tool_mut().is_none());
+    assert!(editor.tool_mut(tool.id()).is_none());
+
+    calls.borrow_mut().clear();
+    editor.set_mode(EditMode::VERTEX);
+
+    assert_eq!(editor.active_tool(), None);
+    assert!(calls.borrow().is_empty());
+}
+
+#[test]
+fn active_mesh_changes_cancel_with_previous_targets() {
+    let mut editor = MeshEditor::new();
+    let first = editor.add_mesh(triangle_mesh());
+    let second = editor.add_mesh(triangle_mesh());
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let tool = editor.add_tool(RecordingTool::new("tool", &calls));
+
+    editor.set_mode(EditMode::VERTEX);
+    editor.set_mesh_active(first).unwrap();
+    editor.set_active_tool(Some(tool.id())).unwrap();
+    calls.borrow_mut().clear();
+
+    editor.set_mesh_active(second).unwrap();
+    editor.set_mesh_inactive(first).unwrap();
+    editor.remove_mesh(second).unwrap();
+
+    assert_tool_calls(
+        &calls,
+        &[("tool", "cancel"), ("tool", "cancel"), ("tool", "cancel")],
+    );
+    assert_eq!(
+        calls.borrow()[0].meshes,
+        vec![(first, ComponentMask::VERTEX)]
+    );
+    assert_eq!(
+        calls.borrow()[1].meshes,
+        vec![
+            (first, ComponentMask::VERTEX),
+            (second, ComponentMask::VERTEX)
+        ]
+    );
+    assert_eq!(
+        calls.borrow()[2].meshes,
+        vec![(second, ComponentMask::VERTEX)]
+    );
+    assert_eq!(editor.active_tool(), Some(tool.id()));
+    assert!(editor.active_meshes().is_empty());
+
+    editor.active_tool_mut().unwrap().confirm();
+
+    assert!(calls.borrow()[3].meshes.is_empty());
+}
+
+#[test]
+fn removing_active_mesh_returns_it_after_cancellation_edits() {
+    let mut editor = MeshEditor::new();
+    let mut mesh = triangle_mesh();
+    let vertex = mesh.topology().verts().next().unwrap();
+
+    mesh.selection_mut().set_level(ComponentMask::VERTEX);
+    mesh.selection_mut().select(&[vertex]);
+
+    let mesh = editor.add_mesh(mesh);
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let mut tool = RecordingTool::new("tool", &calls);
+
+    tool.clear_selection_on_cancel = true;
+
+    let tool = editor.add_tool(tool);
+
+    editor.set_mode(EditMode::VERTEX);
+    editor.set_mesh_active(mesh).unwrap();
+    editor.set_active_tool(Some(tool.id())).unwrap();
+    calls.borrow_mut().clear();
+
+    let returned = editor.remove_mesh(mesh).unwrap();
+
+    assert_tool_calls(&calls, &[("tool", "cancel")]);
+    assert_eq!(
+        calls.borrow()[0].meshes,
+        vec![(mesh, ComponentMask::VERTEX)]
+    );
+    assert!(returned.selection().is_empty());
+    assert_eq!(editor.active_tool(), Some(tool.id()));
+    assert!(editor.overlay(mesh).is_none());
+}
+
+#[test]
+fn noops_and_inactive_registration_changes_do_not_cancel() {
+    let mut editor = MeshEditor::new();
+    let active = editor.add_mesh(triangle_mesh());
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let tool = editor.add_tool(RecordingTool::new("tool", &calls));
+
+    editor.set_mode(EditMode::VERTEX);
+    editor.set_mesh_active(active).unwrap();
+    editor.set_active_tool(Some(tool.id())).unwrap();
+    calls.borrow_mut().clear();
+
+    let inactive = editor.add_mesh(triangle_mesh());
+
+    editor.set_mode(EditMode::VERTEX);
+    editor.set_active_tool(Some(tool.id())).unwrap();
+    editor.set_mesh_active(active).unwrap();
+    editor.set_mesh_inactive(inactive).unwrap();
+    editor.remove_mesh(inactive).unwrap();
+
+    for key in [inactive, MeshKey::null()] {
+        assert_eq!(editor.set_mesh_active(key), Err(MeshNotFound { key }));
+        assert_eq!(editor.set_mesh_inactive(key), Err(MeshNotFound { key }));
+        assert!(editor.remove_mesh(key).is_none());
+    }
+
+    assert_eq!(editor.active_tool(), Some(tool.id()));
+    assert_eq!(editor.active_meshes(), &[active]);
+    assert!(calls.borrow().is_empty());
+}
+
+#[test]
+fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
+    let mut editor = MeshEditor::new();
+    let active = editor.add_mesh(triangle_mesh());
+    let inactive = editor.add_mesh(triangle_mesh());
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let tool = editor.add_tool(RecordingTool::new("tool", &calls));
+    let input = PointerInput::default();
+
+    editor.set_mode(EditMode::EDGE);
+    editor.set_mesh_active(active).unwrap();
+    editor.set_active_tool(Some(tool.id())).unwrap();
+    calls.borrow_mut().clear();
+
+    {
+        let mut accessor = editor.tool_mut(tool.id()).unwrap();
+
+        assert!(accessor.pointer_down(&input));
+        assert!(!accessor.pointer_up(&input));
+        assert!(accessor.pointer_move(&input));
+        assert!(!accessor.pointer_click(&input));
+        accessor.confirm();
+    }
+
+    editor.active_tool_mut().unwrap().cancel();
+    editor.active_tool_mut().unwrap().cancel();
+
+    assert_tool_calls(
+        &calls,
+        &[
+            ("tool", "pointer_down"),
+            ("tool", "pointer_up"),
+            ("tool", "pointer_move"),
+            ("tool", "pointer_click"),
+            ("tool", "confirm"),
+            ("tool", "cancel"),
+            ("tool", "cancel"),
+        ],
+    );
+
+    for call in calls.borrow().iter() {
+        assert_eq!(call.mode, EditMode::EDGE);
+        assert_eq!(call.meshes, vec![(active, ComponentMask::EDGE)]);
+    }
+
+    assert!(!editor.is_mesh_active(inactive));
+    assert_eq!(editor.active_tool(), Some(tool.id()));
+}
+
+#[test]
+fn tool_activation_errors_report_tool_and_mode() {
+    let mut editor = MeshEditor::new();
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let mut tool = RecordingTool::new("tool", &calls);
+
+    tool.supported_mode = Some(EditMode::FACE);
+
+    let tool = editor.add_tool(tool);
+    let missing = ToolId::new();
+    let mode = editor.mode();
+
+    for (id, expected) in [
+        (missing, format!("tool {missing:?} is not registered")),
+        (
+            tool.id(),
+            format!("tool {:?} does not support edit mode {mode:?}", tool.id()),
+        ),
+    ] {
+        let error: crate::ToolActivationError = editor.set_active_tool(Some(id)).unwrap_err();
+        let error: &dyn std::error::Error = &error;
+
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(editor.active_tool(), None);
+    }
+
+    assert!(calls.borrow().is_empty());
 }

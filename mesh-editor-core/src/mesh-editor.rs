@@ -4,12 +4,12 @@ use mesh_core::Mesh;
 use slotmap::{SecondaryMap, SlotMap, new_key_type};
 use topology_overlay::{OverlayBuffers, TopologyOverlay};
 
-use crate::{EditMode, Tool, ToolAccessor, ToolHandle, ToolId};
+use crate::{EditMode, Tool, ToolAccessor, ToolContext, ToolHandle, ToolId};
 
 #[path = "mesh-editor/errors.rs"]
 mod errors;
 
-pub use errors::MeshNotFound;
+pub use errors::{MeshNotFound, ToolActivationError};
 
 new_key_type! {
     /// Identifies a mesh registered with an editor.
@@ -17,6 +17,7 @@ new_key_type! {
 }
 
 /// Owns registered meshes and coordinates their overlays and active tool.
+/// Tool, mode, and active-mesh changes cancel the current interaction first.
 pub struct MeshEditor {
     meshes: SlotMap<MeshKey, Mesh>,
     overlays: SecondaryMap<MeshKey, TopologyOverlay>,
@@ -53,12 +54,13 @@ impl MeshEditor {
         self.mode
     }
 
-    /// Applies the mode's selection level to active meshes.
+    /// Applies the mode's selection level to active meshes and deactivates incompatible tools.
     pub fn set_mode(&mut self, mode: EditMode) {
         if self.mode == mode {
             return;
         }
 
+        self.update_active_tool_mode(mode);
         self.mode = mode;
 
         for &key in &self.active_meshes {
@@ -81,6 +83,12 @@ impl MeshEditor {
 
     /// Removes a registered mesh from the editor and returns ownership to the caller.
     pub fn remove_mesh(&mut self, key: MeshKey) -> Option<Mesh> {
+        self.meshes.get(key)?;
+
+        if self.is_mesh_active(key) {
+            self.cancel_active_tool();
+        }
+
         let mesh = self.meshes.remove(key)?;
 
         self.overlays.remove(key);
@@ -113,13 +121,17 @@ impl MeshEditor {
 
     /// Applies the current mode to this mesh. Returns [`MeshNotFound`] for an unknown key.
     pub fn set_mesh_active(&mut self, key: MeshKey) -> Result<(), MeshNotFound> {
-        let mesh = self.meshes.get_mut(key).ok_or(MeshNotFound { key })?;
+        self.meshes.get(key).ok_or(MeshNotFound { key })?;
 
         if self.active_meshes.contains(&key) {
             return Ok(());
         }
 
-        mesh.selection_mut().set_level(self.mode.selection_level);
+        self.cancel_active_tool();
+
+        self.meshes[key]
+            .selection_mut()
+            .set_level(self.mode.selection_level);
         self.active_meshes.push(key);
 
         Ok(())
@@ -129,6 +141,12 @@ impl MeshEditor {
     /// Returns [`MeshNotFound`] for an unknown key.
     pub fn set_mesh_inactive(&mut self, key: MeshKey) -> Result<(), MeshNotFound> {
         self.meshes.get(key).ok_or(MeshNotFound { key })?;
+
+        if !self.active_meshes.contains(&key) {
+            return Ok(());
+        }
+
+        self.cancel_active_tool();
 
         self.active_meshes.retain(|&mesh_key| mesh_key != key);
 
@@ -150,13 +168,22 @@ impl MeshEditor {
 
     /// Borrows the active tool and constructs its mesh context.
     pub fn active_tool_mut(&mut self) -> Option<ToolAccessor<'_>> {
-        todo!()
+        let id = self.active_tool?;
+
+        self.tool_mut(id)
     }
 
     /// Borrows a tool only if its ID belongs to this editor and it is active.
     /// Retained handles use this to avoid dispatching to a different tool.
     pub fn tool_mut(&mut self, id: ToolId) -> Option<ToolAccessor<'_>> {
-        todo!()
+        if self.active_tool != Some(id) {
+            return None;
+        }
+
+        let tool = self.tools.get_mut(&id)?.as_mut();
+        let context = ToolContext::new(&mut self.meshes, &self.active_meshes, self.mode);
+
+        Some(ToolAccessor { tool, context })
     }
 
     /// Borrows a concrete tool for configuration, active or inactive.
@@ -186,9 +213,26 @@ impl MeshEditor {
     }
 
     /// Selects a registered tool, or clears the active tool with `None`.
-    /// Returns `None` if the ID does not belong to this editor.
-    pub fn set_active_tool(&mut self, tool: Option<ToolId>) -> Option<()> {
-        todo!()
+    /// Invalid requests leave the current tool unchanged. Repeated selections do nothing.
+    pub fn set_active_tool(&mut self, tool: Option<ToolId>) -> Result<(), ToolActivationError> {
+        if self.active_tool == tool {
+            return Ok(());
+        }
+
+        self.validate_tool_activation(tool)?;
+
+        if let Some(mut active) = self.active_tool_mut() {
+            active.cancel();
+            active.tool.deactivate(&mut active.context);
+        }
+
+        self.active_tool = tool;
+
+        if let Some(mut active) = self.active_tool_mut() {
+            active.tool.activate(&mut active.context);
+        }
+
+        Ok(())
     }
 
     /// Advances the active tool and updates overlays. Called by the host's frame loop.
@@ -205,6 +249,51 @@ impl MeshEditor {
     /// Consume borrowed data before the next update.
     pub fn overlay_buffers(&self, key: MeshKey) -> Option<&OverlayBuffers> {
         todo!()
+    }
+
+    fn cancel_active_tool(&mut self) {
+        let Some(mut tool_accessor) = self.active_tool_mut() else {
+            return;
+        };
+
+        tool_accessor.cancel();
+    }
+
+    fn update_active_tool_mode(&mut self, mode: EditMode) {
+        let Some(mut tool_accessor) = self.active_tool_mut() else {
+            return;
+        };
+
+        let compatible = tool_accessor.tool.supports_edit_mode(mode);
+
+        tool_accessor.cancel();
+
+        if compatible {
+            return;
+        }
+
+        tool_accessor.tool.deactivate(&mut tool_accessor.context);
+        self.active_tool = None;
+    }
+
+    fn validate_tool_activation(&self, tool: Option<ToolId>) -> Result<(), ToolActivationError> {
+        let Some(id) = tool else {
+            return Ok(());
+        };
+
+        let requested = self
+            .tools
+            .get(&id)
+            .ok_or(ToolActivationError::NotFound { id })?;
+
+        if !requested.supports_edit_mode(self.mode) {
+            return Err(ToolActivationError::IncompatibleMode {
+                id,
+                mode: self.mode,
+            });
+        }
+
+        Ok(())
     }
 }
 

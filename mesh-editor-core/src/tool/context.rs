@@ -11,7 +11,6 @@ pub struct ToolContext<'editor> {
 }
 
 impl<'editor> ToolContext<'editor> {
-    #[allow(dead_code)]
     pub(crate) fn new(
         meshes: &'editor mut SlotMap<MeshKey, Mesh>,
         active_meshes: &'editor [MeshKey],

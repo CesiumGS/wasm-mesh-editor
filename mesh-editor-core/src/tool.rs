@@ -73,6 +73,7 @@ pub trait Tool: Any {
 
     fn confirm(&mut self, context: &mut ToolContext<'_>);
 
+    /// Cancels an unfinished interaction. Does nothing if no interaction is pending.
     fn cancel(&mut self, context: &mut ToolContext<'_>);
 
     fn update(&mut self, context: &mut ToolContext<'_>, delta_seconds: f64);
