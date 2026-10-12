@@ -1,5 +1,5 @@
 use mesh_core::Mesh;
-use slotmap::{SlotMap, new_key_type};
+use slotmap::{SecondaryMap, SlotMap, new_key_type};
 use topology_overlay::{OverlayBuffers, TopologyOverlay};
 
 use crate::{EditMode, Tool, ToolAccessor, ToolHandle, ToolId};
@@ -12,6 +12,7 @@ new_key_type! {
 /// Owns registered meshes and coordinates their overlays and active tool.
 pub struct MeshEditor {
     meshes: SlotMap<MeshKey, Mesh>,
+    overlays: SecondaryMap<MeshKey, TopologyOverlay>,
     mesh_keys: Vec<MeshKey>,
     active_meshes: Vec<MeshKey>,
     mode: EditMode,
@@ -30,6 +31,7 @@ impl MeshEditor {
     pub fn new() -> Self {
         Self {
             meshes: SlotMap::with_key(),
+            overlays: SecondaryMap::new(),
             mesh_keys: Vec::new(),
             active_meshes: Vec::new(),
             mode: EditMode::NONE,
@@ -47,13 +49,25 @@ impl MeshEditor {
     }
 
     /// Registers a mesh and builds its topology overlay. The mesh starts inactive.
-    pub fn add_mesh(&mut self, mesh: Mesh) -> MeshKey {
-        todo!()
+    pub fn add_mesh(&mut self, mut mesh: Mesh) -> MeshKey {
+        let overlay = TopologyOverlay::new(&mut mesh);
+        let key = self.meshes.insert(mesh);
+
+        self.overlays.insert(key, overlay);
+        self.mesh_keys.push(key);
+
+        key
     }
 
     /// Removes a registered mesh from the editor and returns ownership to the caller.
     pub fn remove_mesh(&mut self, key: MeshKey) -> Option<Mesh> {
-        todo!()
+        let mesh = self.meshes.remove(key)?;
+
+        self.overlays.remove(key);
+        self.mesh_keys.retain(|&mesh_key| mesh_key != key);
+        self.active_meshes.retain(|&mesh_key| mesh_key != key);
+
+        Some(mesh)
     }
 
     pub fn has_mesh(&self, key: MeshKey) -> bool {
@@ -143,7 +157,7 @@ impl MeshEditor {
 
     /// Returns an overlay for read-only queries such as picking-key lookup.
     pub fn overlay(&self, key: MeshKey) -> Option<&TopologyOverlay> {
-        todo!()
+        self.overlays.get(key)
     }
 
     /// Returns this mesh's overlay changes from the latest update, if any.
