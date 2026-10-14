@@ -8,8 +8,11 @@ use crate::{EditMode, Tool, ToolAccessor, ToolContext, ToolHandle, ToolId};
 
 #[path = "mesh-editor/errors.rs"]
 mod errors;
+#[path = "mesh-editor/update_result.rs"]
+mod update_result;
 
 pub use errors::{MeshNotFound, ToolActivationError};
+pub use update_result::UpdateResult;
 
 new_key_type! {
     /// Identifies a mesh registered with an editor.
@@ -236,7 +239,10 @@ impl MeshEditor {
 
     /// Advances the active tool, then updates all registered overlays.
     /// Called by the consumer's render loop.
-    pub fn update(&mut self, delta_seconds: f64) {
+    /// Clears and refills `result`, reusing its capacity.
+    pub fn update(&mut self, delta_seconds: f64, result: &mut UpdateResult) {
+        result.changed_overlays.clear();
+
         if let Some(mut tool_accessor) = self.active_tool_mut() {
             tool_accessor
                 .tool
@@ -244,7 +250,9 @@ impl MeshEditor {
         }
 
         for (key, overlay) in &mut self.overlays {
-            overlay.update(&self.meshes[key]);
+            if overlay.update(&self.meshes[key]).is_some() {
+                result.changed_overlays.push(key);
+            }
         }
     }
 

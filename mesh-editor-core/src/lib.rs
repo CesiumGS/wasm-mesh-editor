@@ -11,5 +11,5 @@ mod mesh_editor;
 mod tool;
 
 pub use edit_mode::EditMode;
-pub use mesh_editor::{MeshEditor, MeshKey, MeshNotFound, ToolActivationError};
+pub use mesh_editor::{MeshEditor, MeshKey, MeshNotFound, ToolActivationError, UpdateResult};
 pub use tool::{PointerInput, Tool, ToolAccessor, ToolContext, ToolHandle, ToolId};
