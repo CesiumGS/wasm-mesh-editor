@@ -1,7 +1,7 @@
 //! Coordinates editable meshes and tools without owning input listeners or a render loop.
 //!
-//! Implementation is in progress. Pointer data is a placeholder;
-//! undo and redo are out of scope.
+//! The renderer supplies resolved picks, world-space rays, and drag-start mesh transforms.
+//! Implementation is in progress; undo and redo are out of scope.
 //! Changes to tools, modes, or active meshes cancel the current interaction first.
 //! Invalid tool selections return an error without interrupting the active tool.
 
@@ -12,4 +12,7 @@ mod tool;
 
 pub use edit_mode::EditMode;
 pub use mesh_editor::{MeshEditor, MeshKey, MeshNotFound, ToolActivationError, UpdateResult};
-pub use tool::{PointerInput, Tool, ToolAccessor, ToolContext, ToolHandle, ToolId};
+pub use tool::{
+    DragStartInput, MeshTransform, Modifiers, PickResult, PointerInput, Tool, ToolAccessor,
+    ToolContext, ToolHandle, ToolId, WorldRay,
+};

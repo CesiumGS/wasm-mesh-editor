@@ -3,10 +3,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 
+use glam::{DMat4, DVec3};
 use mesh_core::{ComponentMask, MeshBuffers};
 use slotmap::Key;
 
-use crate::{PointerInput, ToolContext};
+use crate::{
+    DragStartInput, MeshTransform, Modifiers, PickResult, PointerInput, ToolContext, WorldRay,
+};
 
 use super::*;
 
@@ -31,19 +34,19 @@ impl<Value: 'static> Tool for TestTool<Value> {
         panic!("unexpected tool callback");
     }
 
-    fn pointer_down(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+    fn pointer_down(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
         panic!("unexpected tool callback");
     }
 
-    fn pointer_up(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+    fn pointer_up(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
         panic!("unexpected tool callback");
     }
 
-    fn pointer_move(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+    fn pointer_move(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
         panic!("unexpected tool callback");
     }
 
-    fn pointer_click(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+    fn pointer_click(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
         panic!("unexpected tool callback");
     }
 
@@ -75,6 +78,7 @@ struct RecordingTool {
     clear_selection_on_cancel: bool,
     update_deltas: Vec<f64>,
     translation_on_update: Option<[f32; 3]>,
+    pointer_input_addresses: Vec<usize>,
 }
 
 impl RecordingTool {
@@ -86,6 +90,7 @@ impl RecordingTool {
             clear_selection_on_cancel: false,
             update_deltas: Vec::new(),
             translation_on_update: None,
+            pointer_input_addresses: Vec::new(),
         }
     }
 
@@ -123,23 +128,31 @@ impl Tool for RecordingTool {
         self.record("deactivate", context);
     }
 
-    fn pointer_down(&mut self, context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+    fn pointer_down(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         self.record("pointer_down", context);
+        self.pointer_input_addresses
+            .push(std::ptr::from_ref(input) as usize);
         true
     }
 
-    fn pointer_up(&mut self, context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+    fn pointer_up(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         self.record("pointer_up", context);
+        self.pointer_input_addresses
+            .push(std::ptr::from_ref(input) as usize);
         false
     }
 
-    fn pointer_move(&mut self, context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+    fn pointer_move(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         self.record("pointer_move", context);
+        self.pointer_input_addresses
+            .push(std::ptr::from_ref(input) as usize);
         true
     }
 
-    fn pointer_click(&mut self, context: &mut ToolContext<'_>, _input: &PointerInput) -> bool {
+    fn pointer_click(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         self.record("pointer_click", context);
+        self.pointer_input_addresses
+            .push(std::ptr::from_ref(input) as usize);
         false
     }
 
@@ -1240,7 +1253,56 @@ fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
     let inactive = editor.add_mesh(triangle_mesh());
     let calls = Rc::new(RefCell::new(Vec::new()));
     let tool = editor.add_tool(RecordingTool::new("tool", &calls));
-    let input = PointerInput::default();
+    let mesh_transforms = [MeshTransform {
+        mesh: active,
+        local_to_world: DMat4::from_translation(DVec3::new(6_378_137.125, 2.0, 3.0)),
+    }];
+    let ray = WorldRay {
+        origin: DVec3::new(6_378_137.125, 2.0, 4.0),
+        direction: DVec3::NEG_Z,
+    };
+    let down = PointerInput {
+        ray: Some(ray),
+        drag_start: Some(DragStartInput {
+            view_direction: DVec3::NEG_Z,
+            mesh_transforms: &mesh_transforms,
+        }),
+        ..Default::default()
+    };
+    let moved = PointerInput {
+        ray: Some(WorldRay {
+            origin: ray.origin + DVec3::X,
+            ..ray
+        }),
+        ..Default::default()
+    };
+    let up = PointerInput {
+        ray: Some(WorldRay {
+            origin: ray.origin + DVec3::Y,
+            ..ray
+        }),
+        ..Default::default()
+    };
+    let edge = editor
+        .mesh(active)
+        .unwrap()
+        .topology()
+        .edges()
+        .next()
+        .unwrap();
+    let click = PointerInput {
+        modifiers: Modifiers {
+            shift: true,
+            control: true,
+            alt: true,
+            meta: true,
+        },
+        pick: PickResult::Hit {
+            mesh: active,
+            component: edge.into(),
+        },
+        ..Default::default()
+    };
 
     editor.set_mode(EditMode::EDGE);
     editor.set_mesh_active(active).unwrap();
@@ -1250,13 +1312,13 @@ fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
     {
         let mut accessor = editor.tool_mut(tool.id()).unwrap();
 
-        assert!(accessor.pointer_down(&input));
-        assert!(!accessor.pointer_up(&input));
-        assert!(accessor.pointer_move(&input));
-        assert!(!accessor.pointer_click(&input));
+        assert!(accessor.pointer_down(&down));
+        assert!(accessor.pointer_move(&moved));
+        assert!(!accessor.pointer_up(&up));
         accessor.confirm();
     }
 
+    assert!(!editor.active_tool_mut().unwrap().pointer_click(&click));
     editor.active_tool_mut().unwrap().cancel();
     editor.active_tool_mut().unwrap().cancel();
 
@@ -1264,10 +1326,10 @@ fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
         &calls,
         &[
             ("tool", "pointer_down"),
-            ("tool", "pointer_up"),
             ("tool", "pointer_move"),
-            ("tool", "pointer_click"),
+            ("tool", "pointer_up"),
             ("tool", "confirm"),
+            ("tool", "pointer_click"),
             ("tool", "cancel"),
             ("tool", "cancel"),
         ],
@@ -1277,6 +1339,14 @@ fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
         assert_eq!(call.mode, EditMode::EDGE);
         assert_eq!(call.meshes, vec![(active, ComponentMask::EDGE)]);
     }
+
+    assert_eq!(
+        editor
+            .tool_config_mut(&tool)
+            .unwrap()
+            .pointer_input_addresses,
+        [&down, &moved, &up, &click].map(|input| std::ptr::from_ref(input) as usize)
+    );
 
     assert!(!editor.is_mesh_active(inactive));
     assert_eq!(editor.active_tool(), Some(tool.id()));
