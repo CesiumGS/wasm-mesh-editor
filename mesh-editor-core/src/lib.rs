@@ -13,6 +13,6 @@ mod tool;
 pub use edit_mode::EditMode;
 pub use mesh_editor::{MeshEditor, MeshKey, MeshNotFound, ToolActivationError, UpdateResult};
 pub use tool::{
-    DragStartInput, MeshTransform, Modifiers, PickResult, PointerInput, Tool, ToolAccessor,
-    ToolContext, ToolHandle, ToolId, WorldRay,
+    DragStartInput, MeshTransform, Modifiers, PickResult, PointerInput, SelectTool, Tool,
+    ToolAccessor, ToolContext, ToolHandle, ToolId, WorldRay,
 };

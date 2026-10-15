@@ -5,10 +5,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 mod access;
 mod context;
 mod input;
+mod select;
 
 pub use access::ToolAccessor;
 pub use context::ToolContext;
 pub use input::{DragStartInput, MeshTransform, Modifiers, PickResult, PointerInput, WorldRay};
+pub use select::SelectTool;
 
 use crate::EditMode;
 
