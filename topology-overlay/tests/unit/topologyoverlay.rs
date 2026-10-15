@@ -67,6 +67,10 @@ fn new_packs_buffers_and_bidirectional_maps() {
     for (index, &key) in overlay.buffer_index_to_vertex_key.iter().enumerate() {
         assert_eq!(overlay.vertex_key_to_buffer_index[key], index as u32);
         assert_eq!(
+            overlay.component_key(ComponentType::Vertex, index as u32),
+            Some(key.into())
+        );
+        assert_eq!(
             buffers.positions.data[index],
             mesh.attributes().positions[key].extend(0.0).to_array()
         );
@@ -74,6 +78,10 @@ fn new_packs_buffers_and_bidirectional_maps() {
 
     for (index, &key) in overlay.buffer_index_to_edge_key.iter().enumerate() {
         assert_eq!(overlay.edge_key_to_buffer_index[key], index as u32);
+        assert_eq!(
+            overlay.component_key(ComponentType::Edge, index as u32),
+            Some(key.into())
+        );
         assert_eq!(
             buffers.edges.data[index]
                 .map(|vertex| overlay.buffer_index_to_vertex_key[vertex as usize]),
@@ -83,6 +91,10 @@ fn new_packs_buffers_and_bidirectional_maps() {
 
     for (index, &key) in overlay.buffer_index_to_face_key.iter().enumerate() {
         assert_eq!(overlay.face_key_to_buffer_index[key], index as u32);
+        assert_eq!(
+            overlay.component_key(ComponentType::Face, index as u32),
+            Some(key.into())
+        );
 
         let triangles: Vec<_> = buffers
             .triangles
@@ -115,6 +127,47 @@ fn new_packs_buffers_and_bidirectional_maps() {
     assert!(buffers.positions.dirty_ranges.is_empty());
     assert!(buffers.edges.dirty_ranges.is_empty());
     assert!(buffers.triangles.dirty_ranges.is_empty());
+}
+
+#[test]
+fn component_key_uses_face_indices_not_triangle_indices() {
+    let mut mesh = mixed_face_mesh();
+    let faces: Vec<_> = mesh.topology().faces().collect();
+    let overlay = TopologyOverlay::new(&mut mesh);
+    let picked_faces: Vec<_> = overlay
+        .buffers()
+        .triangles
+        .data
+        .iter()
+        .map(|triangle| overlay.component_key(ComponentType::Face, triangle[3]))
+        .collect();
+
+    assert_eq!(
+        picked_faces,
+        vec![
+            Some(faces[0].into()),
+            Some(faces[0].into()),
+            Some(faces[1].into())
+        ]
+    );
+    assert_eq!(overlay.component_key(ComponentType::Face, 2), None);
+}
+
+#[test]
+fn component_key_rejects_out_of_bounds_indices() {
+    let mut mesh = mixed_face_mesh();
+    let overlay = TopologyOverlay::new(&mut mesh);
+
+    for kind in [
+        ComponentType::Vertex,
+        ComponentType::Edge,
+        ComponentType::Face,
+    ] {
+        let count = overlay.buffers().selection[kind].data.len() as u32;
+
+        assert_eq!(overlay.component_key(kind, count), None);
+        assert_eq!(overlay.component_key(kind, u32::MAX), None);
+    }
 }
 
 #[test]
@@ -181,6 +234,8 @@ fn new_accepts_an_empty_mesh() {
         ComponentType::Face,
     ] {
         assert!(overlay.buffers.selection[kind].data.is_empty());
+        assert_eq!(overlay.component_key(kind, 0), None);
+        assert_eq!(overlay.component_key(kind, u32::MAX), None);
     }
 
     assert!(overlay.buffers.full_refresh);
@@ -502,6 +557,28 @@ fn update_rebuilds_buffers_and_maps_on_topology_events() {
             overlay.buffer_index_to_face_key,
             topology.faces().collect::<Vec<_>>()
         );
+
+        for (kind, keys) in [
+            (
+                ComponentType::Vertex,
+                topology.verts().map(ComponentKey::from).collect::<Vec<_>>(),
+            ),
+            (
+                ComponentType::Edge,
+                topology.edges().map(ComponentKey::from).collect(),
+            ),
+            (
+                ComponentType::Face,
+                topology.faces().map(ComponentKey::from).collect(),
+            ),
+        ] {
+            for (index, &key) in keys.iter().enumerate() {
+                assert_eq!(overlay.component_key(kind, index as u32), Some(key));
+            }
+
+            assert_eq!(overlay.component_key(kind, keys.len() as u32), None);
+        }
+
         assert!(overlay.update(&mesh).is_none());
     }
 }

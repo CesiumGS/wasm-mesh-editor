@@ -235,10 +235,28 @@ impl TopologyOverlay {
         &self.buffers
     }
 
-    /// Returns the mesh key for a buffer index, or `None` if out of bounds.
+    /// Returns the component key for a buffer index, or `None` if out of bounds.
     /// Faces use the triangle's face index. Indices can change after topology edits.
-    pub fn component_key(&self, _kind: ComponentType, _index: u32) -> Option<ComponentKey> {
-        todo!()
+    pub fn component_key(&self, kind: ComponentType, index: u32) -> Option<ComponentKey> {
+        let index = index as usize;
+
+        match kind {
+            ComponentType::Vertex => self
+                .buffer_index_to_vertex_key
+                .get(index)
+                .copied()
+                .map(ComponentKey::Vert),
+            ComponentType::Edge => self
+                .buffer_index_to_edge_key
+                .get(index)
+                .copied()
+                .map(ComponentKey::Edge),
+            ComponentType::Face => self
+                .buffer_index_to_face_key
+                .get(index)
+                .copied()
+                .map(ComponentKey::Face),
+        }
     }
 
     fn process_mesh_changes(&mut self, mesh: &Mesh) {
