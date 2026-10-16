@@ -5,6 +5,7 @@ use glam::{DMat4, DVec3};
 use mesh_core::ComponentType;
 use serde::{Deserialize, Deserializer};
 use slotmap::KeyData;
+use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
 use crate::{
@@ -12,88 +13,76 @@ use crate::{
     SceneInput, ToolAccessor, WorldRay,
 };
 
-#[wasm_bindgen(typescript_custom_section)]
-const POINTER_INPUT_TS: &str = r#"
-/** Any object with numeric `x`, `y`, `z`, such as a Cesium `Cartesian3`. */
-export interface Vector3Like {
-    x: number;
-    y: number;
-    z: number;
+// Doc comments on these JS-facing types also document the generated TypeScript.
+
+/// Any object with numeric `x`, `y`, `z`, such as a Cesium `Cartesian3`.
+#[derive(Deserialize, Tsify)]
+pub struct Vector3Like {
+    x: f64,
+    y: f64,
+    z: f64,
 }
 
-/** Renderer-resolved pointer data. All fields are optional. */
-export interface PointerInput {
-    /** Keyboard modifiers held during the event. Omitted flags are `false`. */
-    modifiers?: { shift?: boolean; control?: boolean; alt?: boolean; meta?: boolean };
-    /**
-     * Omit when picking wasn't performed; pass `null` when it found nothing.
-     * `index` is the component's index in the mesh's overlay buffers.
-     * Picks that no longer match the mesh's overlay (unknown mesh or index) are treated as misses.
-     */
-    pick?: { mesh: bigint; componentType: ComponentType; index: number } | null;
-    /** World-space ray, such as a Cesium `Ray`. The direction is normalized. */
-    ray?: { origin: Vector3Like; direction: Vector3Like };
-    scene?: {
-        /** World-space camera direction, pointing into the scene. Normalized. */
-        viewDirection: Vector3Like;
-        /** Meshes whose placements are given in `matrices`. */
-        meshKeys: BigUint64Array;
-        /** One column-major 4x4 local-to-world matrix (16 numbers) per entry in `meshKeys`. */
-        matrices: Float64Array;
-    };
-}
-"#;
-
-#[derive(Deserialize, Default)]
+/// Keyboard modifiers held during the event. Omitted flags are `false`.
+#[derive(Deserialize, Tsify, Default)]
 #[serde(default)]
-struct ModifiersInput {
+pub struct PointerModifiers {
     shift: bool,
     control: bool,
     alt: bool,
     meta: bool,
 }
 
-#[derive(Deserialize)]
+/// A picked component. `index` is the component's index in the mesh's overlay buffers.
+#[derive(Deserialize, Tsify)]
 #[serde(rename_all = "camelCase")]
-struct PickInput {
+pub struct PointerPick {
+    #[tsify(type = "bigint")]
     mesh: u64,
+    #[tsify(type = "ComponentType")]
     component_type: u8,
     index: u32,
 }
 
-#[derive(Deserialize)]
-struct Vector3Input {
-    x: f64,
-    y: f64,
-    z: f64,
+/// World-space ray, such as a Cesium `Ray`. The direction is normalized.
+#[derive(Deserialize, Tsify)]
+pub struct RayLike {
+    origin: Vector3Like,
+    direction: Vector3Like,
 }
 
-#[derive(Deserialize)]
-struct RayInput {
-    origin: Vector3Input,
-    direction: Vector3Input,
-}
-
-#[derive(Deserialize)]
+#[derive(Deserialize, Tsify)]
 #[serde(rename_all = "camelCase")]
-struct SceneInputJs {
-    view_direction: Vector3Input,
+pub struct PointerScene {
+    /// World-space camera direction, pointing into the scene. Normalized.
+    view_direction: Vector3Like,
+    /// Meshes whose placements are given in `matrices`.
     #[serde(with = "serde_wasm_bindgen::preserve")]
+    #[tsify(type = "BigUint64Array")]
     mesh_keys: js_sys::BigUint64Array,
+    /// One column-major 4x4 local-to-world matrix (16 numbers) per entry in `meshKeys`.
     #[serde(with = "serde_wasm_bindgen::preserve")]
+    #[tsify(type = "Float64Array")]
     matrices: js_sys::Float64Array,
 }
 
-/// JS shape of [`PointerInput`]; see the `PointerInput` TypeScript interface above.
-#[derive(Deserialize)]
-struct PointerInputJs {
+/// Renderer-resolved pointer data. All fields are optional.
+// Converted to the Rust `PointerInput` for tools.
+#[derive(Deserialize, Tsify)]
+#[tsify(rename = "PointerInput")]
+pub struct PointerInputJs {
     #[serde(default)]
-    modifiers: ModifiersInput,
-    /// Absent: picking not performed. `Some(None)`: `null`, a miss.
+    modifiers: PointerModifiers,
+    /// Omit when picking wasn't performed; pass `null` when it found nothing.
+    /// Picks that no longer match the mesh's overlay (unknown mesh or index) are treated as misses.
+    // Absent: picking not performed. `Some(None)`: `null`, a miss.
     #[serde(default, deserialize_with = "present")]
-    pick: Option<Option<PickInput>>,
-    ray: Option<RayInput>,
-    scene: Option<SceneInputJs>,
+    #[tsify(optional, type = "PointerPick | null")]
+    pick: Option<Option<PointerPick>>,
+    #[tsify(optional)]
+    ray: Option<RayLike>,
+    #[tsify(optional)]
+    scene: Option<PointerScene>,
 }
 
 /// Distinguishes a present-but-`null` field from an absent one.
@@ -105,10 +94,11 @@ fn present<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
 
 pub(in crate::wasm) fn dispatch_pointer(
     editor: &mut MeshEditor,
-    input: JsValue,
+    input: Ts<PointerInputJs>,
     handler: impl FnOnce(&mut ToolAccessor<'_>, &PointerInput<'_>) -> bool,
 ) -> Result<bool, JsError> {
-    let input: PointerInputJs = serde_wasm_bindgen::from_value(input)?;
+    // `Tsify::from_js` rather than `Ts::to_rust`, whose errors name internal Rust types.
+    let input = PointerInputJs::from_js(input.js_value())?;
 
     let pick = match input.pick {
         None => PickResult::NotPerformed,
@@ -146,7 +136,7 @@ pub(in crate::wasm) fn dispatch_pointer(
 }
 
 /// Converts the JS pick. The tool accessor resolves it against the overlays.
-fn pick_hit(pick: &PickInput) -> Result<PickResult, JsError> {
+fn pick_hit(pick: &PointerPick) -> Result<PickResult, JsError> {
     const KINDS: [ComponentType; 3] = [
         ComponentType::Vertex,
         ComponentType::Edge,
@@ -167,7 +157,7 @@ fn pick_hit(pick: &PickInput) -> Result<PickResult, JsError> {
     })
 }
 
-fn world_ray(ray: RayInput) -> Result<WorldRay, JsError> {
+fn world_ray(ray: RayLike) -> Result<WorldRay, JsError> {
     let origin = DVec3::new(ray.origin.x, ray.origin.y, ray.origin.z);
 
     if !origin.is_finite() {
@@ -180,13 +170,13 @@ fn world_ray(ray: RayInput) -> Result<WorldRay, JsError> {
     })
 }
 
-fn unit_vector(vector: &Vector3Input, name: &str) -> Result<DVec3, JsError> {
+fn unit_vector(vector: &Vector3Like, name: &str) -> Result<DVec3, JsError> {
     DVec3::new(vector.x, vector.y, vector.z)
         .try_normalize()
         .ok_or_else(|| JsError::new(&format!("{name} must be finite and non-zero")))
 }
 
-fn mesh_transforms(scene: &SceneInputJs) -> Result<Vec<MeshTransform>, JsError> {
+fn mesh_transforms(scene: &PointerScene) -> Result<Vec<MeshTransform>, JsError> {
     let keys = scene.mesh_keys.to_vec();
     let matrices = scene.matrices.to_vec();
 

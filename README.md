@@ -42,6 +42,8 @@ This emits an npm-ready package (`.wasm` + JS glue + auto-generated `.d.ts`) int
 
 JS bindings are declared with `#[cfg_attr(feature = "wasm", wasm_bindgen)]` beside the Rust items they expose. Key conversions, JS-only types, and adapter methods live under each crate's `src/wasm/`, in modules named after the source modules they adapt (e.g. `mesh-core/src/wasm/mesh.rs` adapts `mesh.rs`). The `wasm` feature of `mesh-editor-core` also enables `mesh-core/wasm`. Native builds never compile `wasm-bindgen`.
 
+Plain JS objects that cross the boundary (such as `PointerInput` and `OverlayViews`) are serde structs deriving [`Tsify`](https://github.com/madonoharu/tsify), passed as `tsify::Ts<T>`, so their TypeScript interfaces and doc comments are generated from Rust. Their Rust names become TypeScript names, and their doc comments become TypeScript docs, so keep both JS-facing.
+
 JS registers tools without the editor naming concrete types: `editor.addTool(SelectTool.create())`. A crate that ships more tools exports its own factory returning a `BoxedTool` (`Tool` in JS), built with `BoxedTool::new(MyTool::default())`. Tool crates must be compiled into the same `.wasm` as the editor, so a build that includes extra tool crates needs a top-level crate that depends on `mesh-editor-core` and on them.
 
 Add `--dev` for a faster, unoptimized build.
