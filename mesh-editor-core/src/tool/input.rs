@@ -1,7 +1,7 @@
-use glam::{DMat4, DVec3};
+use glam::DVec3;
 use mesh_core::ComponentKey;
 
-use crate::MeshKey;
+use crate::{MeshKey, MeshTransform, WorldRay};
 
 /// Keyboard modifiers at the time of the pointer event.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -26,29 +26,12 @@ pub enum PickResult {
     },
 }
 
-/// A world-space pointer ray with a finite origin and unit-length direction.
+/// Renderer-provided scene context
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WorldRay {
-    pub origin: DVec3,
-    pub direction: DVec3,
-}
-
-/// A mesh's scene placement, supplied by the renderer.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MeshTransform {
-    pub mesh: MeshKey,
-    /// Finite, invertible affine transform from mesh-local to world coordinates.
-    pub local_to_world: DMat4,
-}
-
-/// Spatial context supplied only when starting a drag.
-/// Tools retain the per-mesh values they need, not this borrowed slice.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DragStartInput<'input> {
+pub struct SceneInput<'input> {
     /// Unit world-space camera direction, pointing into the scene.
     pub view_direction: DVec3,
-    /// One entry per active mesh with selected vertices, including identity transforms.
-    /// Keys must be unique; missing transforms do not imply identity.
+    /// Scene placements of all meshes registered with the editor.
     pub mesh_transforms: &'input [MeshTransform],
 }
 
@@ -59,7 +42,7 @@ pub struct PointerInput<'input> {
     pub modifiers: Modifiers,
     pub pick: PickResult,
     pub ray: Option<WorldRay>,
-    pub drag_start: Option<DragStartInput<'input>>,
+    pub scene: Option<SceneInput<'input>>,
 }
 
 #[cfg(test)]

@@ -3,14 +3,17 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod access;
+mod common;
 mod context;
 mod input;
 mod select;
+mod translate;
 
 pub use access::ToolAccessor;
 pub use context::ToolContext;
-pub use input::{DragStartInput, MeshTransform, Modifiers, PickResult, PointerInput, WorldRay};
+pub use input::{Modifiers, PickResult, PointerInput, SceneInput};
 pub use select::SelectTool;
+pub use translate::TranslateTool;
 
 use crate::EditMode;
 
@@ -55,6 +58,9 @@ impl<ToolType: Tool> ToolHandle<ToolType> {
 }
 
 /// Tool behavior. The editor supplies mesh access for each call.
+/// Only one tool is active at a time. Tool, mode, and active-mesh changes cancel
+/// the current interaction before altering its editing context.
+/// Other commands that change selection, topology, or placement must cancel it first.
 pub trait Tool: Any {
     /// Returns this tool for checked, concrete-type configuration access.
     fn as_any_mut(&mut self) -> &mut dyn Any;

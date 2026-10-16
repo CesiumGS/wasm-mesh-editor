@@ -3,13 +3,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 
-use glam::{DMat4, DVec3};
-use mesh_core::{ComponentMask, ComponentType, MeshBuffers};
+use glam::{DMat4, DVec3, Vec3};
+use mesh_core::{ComponentKey, ComponentMask, ComponentType, MeshBuffers};
 use slotmap::Key;
 
 use crate::{
-    DragStartInput, MeshTransform, Modifiers, PickResult, PointerInput, SelectTool, ToolContext,
-    WorldRay,
+    MeshTransform, Modifiers, PickResult, PointerInput, SceneInput, SelectTool, ToolContext,
+    TranslateTool, WorldRay,
 };
 
 use super::*;
@@ -233,6 +233,232 @@ fn assert_no_overlay_changes(buffers: &OverlayBuffers) {
         &buffers.selection.faces,
     ] {
         assert!(selection.dirty_ranges.is_empty());
+    }
+}
+
+#[test]
+fn translate_tool_updates_selected_components_and_overlay_positions() {
+    for (mode, kind) in [
+        (EditMode::VERTEX, ComponentType::Vertex),
+        (EditMode::EDGE, ComponentType::Edge),
+        (EditMode::FACE, ComponentType::Face),
+    ] {
+        let mut mesh = triangle_mesh();
+        let component: ComponentKey = match kind {
+            ComponentType::Vertex => mesh.topology().verts().next().unwrap().into(),
+            ComponentType::Edge => mesh.topology().edges().next().unwrap().into(),
+            ComponentType::Face => mesh.topology().faces().next().unwrap().into(),
+        };
+        mesh.selection_mut().set_level(mode.selection_level);
+        mesh.selection_mut().select(&[component]);
+        let selected: Vec<_> = mesh.selection().verts().collect();
+        let original: Vec<_> = mesh
+            .topology()
+            .verts()
+            .map(|key| (key, mesh.attributes().positions[key]))
+            .collect();
+        let mut editor = MeshEditor::new();
+        let target = editor.add_mesh(mesh);
+        let inactive = editor.add_mesh(triangle_mesh());
+        let tool = editor.add_tool(TranslateTool::default());
+        let mut result = UpdateResult::default();
+        editor.set_mode(mode);
+        editor.set_mesh_active(target).unwrap();
+        editor.set_active_tool(Some(tool.id())).unwrap();
+        editor.update(0.0, &mut result);
+
+        let allocation = editor
+            .overlay_buffers(target)
+            .unwrap()
+            .positions
+            .data
+            .as_ptr();
+        let transforms: Vec<_> = editor
+            .mesh_keys()
+            .iter()
+            .map(|&key| MeshTransform::new(key, DMat4::IDENTITY).unwrap())
+            .collect();
+        let start = PointerInput {
+            ray: Some(WorldRay {
+                origin: DVec3::Z,
+                direction: -DVec3::Z,
+            }),
+            scene: Some(SceneInput {
+                view_direction: -DVec3::Z,
+                mesh_transforms: &transforms,
+            }),
+            ..PointerInput::default()
+        };
+        let movement = PointerInput {
+            ray: Some(WorldRay {
+                origin: DVec3::new(1.0, 0.0, 1.0),
+                direction: -DVec3::Z,
+            }),
+            ..PointerInput::default()
+        };
+
+        assert!(editor.active_tool_mut().unwrap().pointer_down(&start));
+        assert!(editor.active_tool_mut().unwrap().pointer_move(&movement));
+        assert_eq!(
+            editor.mesh(target).unwrap().attributes().positions[original[0].0],
+            original[0].1
+        );
+
+        editor.update(0.016, &mut result);
+
+        assert_eq!(result.changed_overlays, vec![target]);
+        assert_eq!(
+            editor
+                .overlay_buffers(target)
+                .unwrap()
+                .positions
+                .data
+                .as_ptr(),
+            allocation
+        );
+        assert_no_overlay_changes(editor.overlay_buffers(inactive).unwrap());
+
+        for (vertex, position) in &original {
+            let expected = if selected.contains(vertex) {
+                *position + Vec3::X
+            } else {
+                *position
+            };
+            assert_eq!(
+                editor.mesh(target).unwrap().attributes().positions[*vertex],
+                expected
+            );
+        }
+
+        assert!(editor.active_tool_mut().unwrap().pointer_move(&movement));
+        editor.update(0.016, &mut result);
+
+        assert!(result.changed_overlays.is_empty());
+
+        editor.update(0.016, &mut result);
+        assert!(result.changed_overlays.is_empty());
+
+        let release = PointerInput {
+            ray: Some(WorldRay {
+                origin: DVec3::new(2.0, 1.0, 1.0),
+                direction: -DVec3::Z,
+            }),
+            ..PointerInput::default()
+        };
+        assert!(editor.active_tool_mut().unwrap().pointer_up(&release));
+
+        for (vertex, position) in &original {
+            let expected = if selected.contains(vertex) {
+                *position + Vec3::new(2.0, 1.0, 0.0)
+            } else {
+                *position
+            };
+            assert_eq!(
+                editor.mesh(target).unwrap().attributes().positions[*vertex],
+                expected
+            );
+        }
+
+        editor.update(0.016, &mut result);
+
+        assert_eq!(result.changed_overlays, vec![target]);
+        let buffers = editor.overlay_buffers(target).unwrap();
+        assert_eq!(buffers.positions.dirty_ranges.len(), selected.len());
+
+        for (index, (vertex, _)) in original.iter().enumerate() {
+            assert_eq!(
+                buffers.positions.data[index],
+                editor.mesh(target).unwrap().attributes().positions[*vertex]
+                    .extend(0.0)
+                    .to_array()
+            );
+        }
+
+        editor.active_tool_mut().unwrap().cancel();
+        editor.update(0.016, &mut result);
+
+        assert!(result.changed_overlays.is_empty());
+    }
+}
+
+#[test]
+fn translate_tool_cancels_before_editor_context_transitions() {
+    for transition in ["tool", "mode", "none", "inactive", "active", "remove"] {
+        let mut mesh = triangle_mesh();
+        let vertex = mesh.topology().verts().next().unwrap();
+        mesh.selection_mut().select(&[vertex]);
+        let mut editor = MeshEditor::new();
+        let target = editor.add_mesh(mesh);
+        let other = editor.add_mesh(triangle_mesh());
+        let tool = editor.add_tool(TranslateTool::default());
+        let select = editor.add_tool(SelectTool);
+        let mut result = UpdateResult::default();
+        editor.set_mode(EditMode::VERTEX);
+        editor.set_mesh_active(target).unwrap();
+        editor.set_active_tool(Some(tool.id())).unwrap();
+        let transforms: Vec<_> = editor
+            .mesh_keys()
+            .iter()
+            .map(|&key| MeshTransform::new(key, DMat4::IDENTITY).unwrap())
+            .collect();
+        let start = PointerInput {
+            ray: Some(WorldRay {
+                origin: DVec3::Z,
+                direction: -DVec3::Z,
+            }),
+            scene: Some(SceneInput {
+                view_direction: -DVec3::Z,
+                mesh_transforms: &transforms,
+            }),
+            ..PointerInput::default()
+        };
+        assert!(editor.active_tool_mut().unwrap().pointer_down(&start));
+        let mut movement = PointerInput {
+            ray: Some(WorldRay {
+                origin: DVec3::new(2.0, 0.0, 1.0),
+                direction: -DVec3::Z,
+            }),
+            ..PointerInput::default()
+        };
+        editor.active_tool_mut().unwrap().pointer_move(&movement);
+        editor.update(0.016, &mut result);
+
+        assert_eq!(
+            editor.mesh(target).unwrap().attributes().positions[vertex],
+            2.0 * Vec3::X
+        );
+
+        movement.ray.as_mut().unwrap().origin.x = 4.0;
+        editor.active_tool_mut().unwrap().pointer_move(&movement);
+        let mut removed = None;
+
+        match transition {
+            "tool" => editor.set_active_tool(Some(select.id())).unwrap(),
+            "mode" => editor.set_mode(EditMode::FACE),
+            "none" => editor.set_mode(EditMode::NONE),
+            "inactive" => editor.set_mesh_inactive(target).unwrap(),
+            "active" => editor.set_mesh_active(other).unwrap(),
+            "remove" => removed = editor.remove_mesh(target),
+            _ => unreachable!(),
+        }
+
+        let mesh = removed.as_ref().or_else(|| editor.mesh(target)).unwrap();
+        assert_eq!(
+            mesh.attributes().positions[vertex],
+            Vec3::ZERO,
+            "{transition}"
+        );
+
+        if let Some(mut active) = editor.active_tool_mut() {
+            assert!(!active.pointer_up(&movement));
+            active.cancel();
+        }
+
+        editor.update(0.016, &mut result);
+
+        if let Some(buffers) = editor.overlay_buffers(target) {
+            assert_eq!(buffers.positions.data[0], [0.0; 4]);
+        }
     }
 }
 
@@ -1404,17 +1630,18 @@ fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
     let inactive = editor.add_mesh(triangle_mesh());
     let calls = Rc::new(RefCell::new(Vec::new()));
     let tool = editor.add_tool(RecordingTool::new("tool", &calls));
-    let mesh_transforms = [MeshTransform {
-        mesh: active,
-        local_to_world: DMat4::from_translation(DVec3::new(6_378_137.125, 2.0, 3.0)),
-    }];
+    let mesh_transforms = [MeshTransform::new(
+        active,
+        DMat4::from_translation(DVec3::new(6_378_137.125, 2.0, 3.0)),
+    )
+    .unwrap()];
     let ray = WorldRay {
         origin: DVec3::new(6_378_137.125, 2.0, 4.0),
         direction: DVec3::NEG_Z,
     };
     let down = PointerInput {
         ray: Some(ray),
-        drag_start: Some(DragStartInput {
+        scene: Some(SceneInput {
             view_direction: DVec3::NEG_Z,
             mesh_transforms: &mesh_transforms,
         }),
@@ -1425,6 +1652,7 @@ fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
             origin: ray.origin + DVec3::X,
             ..ray
         }),
+        scene: down.scene,
         ..Default::default()
     };
     let up = PointerInput {
@@ -1432,6 +1660,7 @@ fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
             origin: ray.origin + DVec3::Y,
             ..ray
         }),
+        scene: down.scene,
         ..Default::default()
     };
     let edge = editor
@@ -1452,6 +1681,7 @@ fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
             mesh: active,
             component: edge.into(),
         },
+        scene: down.scene,
         ..Default::default()
     };
 

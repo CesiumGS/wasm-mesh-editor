@@ -20,6 +20,7 @@ mod vert;
 pub use attributes::Attributes;
 pub use edge::{Edge, EdgeRef};
 pub use face::{Face, FaceRef};
+pub use geometry::{Plane, Ray, centroid, try_inverse_affine};
 pub use loop_::Loop;
 pub use mesh::{Mesh, MeshBuffers, MeshBuildError};
 pub use mesh_change::{
