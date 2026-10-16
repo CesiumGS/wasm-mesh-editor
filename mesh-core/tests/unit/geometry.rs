@@ -9,14 +9,14 @@ fn ray(origin: DVec3) -> Ray {
 
 #[test]
 fn plane_validates_geometry_and_intersects_forward_rays() {
-    for (anchor, normal) in [
+    for (position, normal) in [
         (DVec3::NAN, DVec3::Z),
         (DVec3::splat(f64::INFINITY), DVec3::Z),
         (DVec3::ZERO, DVec3::ZERO),
         (DVec3::ZERO, 2.0 * DVec3::Z),
         (DVec3::ZERO, DVec3::NAN),
     ] {
-        assert!(Plane::new(anchor, normal).is_none());
+        assert!(Plane::new(position, normal).is_none());
     }
 
     let plane = Plane::new(2.0 * DVec3::Z, DVec3::Z).unwrap();
@@ -26,7 +26,7 @@ fn plane_validates_geometry_and_intersects_forward_rays() {
     );
     assert_eq!(plane.intersect(ray(2.0 * DVec3::Z)), Some(2.0 * DVec3::Z));
     assert_eq!(plane.intersect(ray(DVec3::Z)), None);
-    assert_eq!(plane.anchor, 2.0 * DVec3::Z);
+    assert_eq!(plane.position, 2.0 * DVec3::Z);
     assert_eq!(plane.normal, DVec3::Z);
 }
 
@@ -70,9 +70,9 @@ fn plane_rejects_invalid_and_near_parallel_rays() {
 
 #[test]
 fn oblique_plane_preserves_small_motion_at_world_scale() {
-    let anchor = DVec3::new(6_378_137.125, 4_000_000.5, 2_000_000.25);
-    let plane = Plane::new(anchor, DVec3::new(0.0, 1.0, 1.0).normalize()).unwrap();
-    let initial = ray(anchor + 10.0 * DVec3::Z);
+    let position = DVec3::new(6_378_137.125, 4_000_000.5, 2_000_000.25);
+    let plane = Plane::new(position, DVec3::new(0.0, 1.0, 1.0).normalize()).unwrap();
+    let initial = ray(position + 10.0 * DVec3::Z);
     let start = plane.intersect(initial).unwrap();
     let current = plane
         .intersect(ray(initial.origin + DVec3::new(0.125, 0.25, 0.0)))
