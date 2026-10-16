@@ -1,14 +1,89 @@
 //! JS adapters for [`MeshEditor`] and the types in its module.
 
+use std::ops::Range;
+
+use serde::Serialize;
 use slotmap::{Key, KeyData};
+use topology_overlay::{OverlayBuffer, OverlayBuffers};
+use tsify::{Ts, Tsify};
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi, VectorIntoWasmAbi};
 use wasm_bindgen::describe::{WasmDescribe, WasmDescribeVector};
 use wasm_bindgen::prelude::*;
 
-use super::tool::{BoxedTool, input};
+use super::tool::BoxedTool;
+use super::tool::input::{self, PointerInputJs};
 use crate::{
     EditMode, MeshEditor, MeshKey, MeshNotFound, ToolActivationError, ToolId, UpdateResult,
 };
+
+// Doc comments on these JS-facing types also document the generated TypeScript.
+
+/// The location of one overlay buffer in the module's linear memory.
+#[derive(Serialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayBufferView {
+    /// Byte offset of the first element in the wasm `memory.buffer`.
+    address: usize,
+    /// Number of elements. Each buffer's element layout is documented on `OverlayViews`.
+    element_count: usize,
+    /// Element indices (not bytes) changed by the latest `update`, end-exclusive.
+    /// Covers every change, so it may include unchanged elements in between.
+    /// `undefined` when nothing changed or when `fullRefresh` is set.
+    dirty_range: Option<Range<usize>>,
+}
+
+impl<T> From<&OverlayBuffer<T>> for OverlayBufferView {
+    fn from(buffer: &OverlayBuffer<T>) -> Self {
+        Self {
+            address: buffer.data.as_ptr() as usize,
+            element_count: buffer.data.len(),
+            dirty_range: buffer.dirty_range.clone(),
+        }
+    }
+}
+
+/// Selection buffers by component kind. One uint8 per component: 0 unselected, 255 selected.
+#[derive(Serialize, Tsify)]
+pub struct OverlaySelectionViews {
+    verts: OverlayBufferView,
+    edges: OverlayBufferView,
+    faces: OverlayBufferView,
+}
+
+/// Locations of a mesh's overlay buffers, for zero-copy typed-array views over wasm memory.
+///
+/// Valid only until the next call into the module: memory growth detaches `memory.buffer`,
+/// topology edits reallocate the buffers, and `removeMesh` frees them.
+/// Call `overlayViews` after `update`, read or upload right away, and don't keep views.
+#[derive(Serialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayViews {
+    /// Upload every buffer in full. Dirty ranges are `undefined` when set.
+    full_refresh: bool,
+    /// `[x, y, z, 0]` float32 per vertex.
+    positions: OverlayBufferView,
+    /// Two uint32 vertex indices per edge.
+    edges: OverlayBufferView,
+    /// Three uint32 vertex indices and a uint32 face index per triangle.
+    triangles: OverlayBufferView,
+    selection: OverlaySelectionViews,
+}
+
+impl From<&OverlayBuffers> for OverlayViews {
+    fn from(buffers: &OverlayBuffers) -> Self {
+        Self {
+            full_refresh: buffers.full_refresh,
+            positions: (&buffers.positions).into(),
+            edges: (&buffers.edges).into(),
+            triangles: (&buffers.triangles).into(),
+            selection: OverlaySelectionViews {
+                verts: (&buffers.selection.verts).into(),
+                edges: (&buffers.selection.edges).into(),
+                faces: (&buffers.selection.faces).into(),
+            },
+        }
+    }
+}
 
 // `MeshKey` crosses the boundary as its slotmap FFI value, a `u64` (a JS `bigint`).
 // These traits are wasm-bindgen's documented-but-unstable conversion API; a breaking
@@ -88,6 +163,15 @@ impl MeshEditor {
         self.active_meshes().to_vec()
     }
 
+    /// Describes where a mesh's overlay buffers are in wasm memory and what the latest
+    /// [`MeshEditor::update`] changed. Throws for an unknown mesh key.
+    #[wasm_bindgen(js_name = overlayViews)]
+    pub fn overlay_views(&self, key: MeshKey) -> Result<Ts<OverlayViews>, JsError> {
+        let buffers = self.overlay_buffers(key).ok_or(MeshNotFound { key })?;
+
+        Ok(OverlayViews::from(buffers).into_ts()?)
+    }
+
     /// Applies the mode's selection level to active meshes and deactivates incompatible tools.
     /// Takes the mode by reference so JS can pass the same `EditMode` object repeatedly.
     #[wasm_bindgen(js_name = setMode)]
@@ -122,37 +206,25 @@ impl MeshEditor {
 
     /// Forwards a pointer press to the active tool. Returns whether it was handled.
     #[wasm_bindgen(js_name = pointerDown)]
-    pub fn tool_pointer_down(
-        &mut self,
-        #[wasm_bindgen(unchecked_param_type = "PointerInput")] input: JsValue,
-    ) -> Result<bool, JsError> {
+    pub fn tool_pointer_down(&mut self, input: Ts<PointerInputJs>) -> Result<bool, JsError> {
         input::dispatch_pointer(self, input, |tool, input| tool.pointer_down(input))
     }
 
     /// Forwards a pointer release to the active tool. Returns whether it was handled.
     #[wasm_bindgen(js_name = pointerUp)]
-    pub fn tool_pointer_up(
-        &mut self,
-        #[wasm_bindgen(unchecked_param_type = "PointerInput")] input: JsValue,
-    ) -> Result<bool, JsError> {
+    pub fn tool_pointer_up(&mut self, input: Ts<PointerInputJs>) -> Result<bool, JsError> {
         input::dispatch_pointer(self, input, |tool, input| tool.pointer_up(input))
     }
 
     /// Forwards pointer movement to the active tool. Returns whether it was handled.
     #[wasm_bindgen(js_name = pointerMove)]
-    pub fn tool_pointer_move(
-        &mut self,
-        #[wasm_bindgen(unchecked_param_type = "PointerInput")] input: JsValue,
-    ) -> Result<bool, JsError> {
+    pub fn tool_pointer_move(&mut self, input: Ts<PointerInputJs>) -> Result<bool, JsError> {
         input::dispatch_pointer(self, input, |tool, input| tool.pointer_move(input))
     }
 
     /// Forwards a click to the active tool. Returns whether it was handled.
     #[wasm_bindgen(js_name = pointerClick)]
-    pub fn tool_pointer_click(
-        &mut self,
-        #[wasm_bindgen(unchecked_param_type = "PointerInput")] input: JsValue,
-    ) -> Result<bool, JsError> {
+    pub fn tool_pointer_click(&mut self, input: Ts<PointerInputJs>) -> Result<bool, JsError> {
         input::dispatch_pointer(self, input, |tool, input| tool.pointer_click(input))
     }
 

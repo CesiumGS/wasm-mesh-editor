@@ -274,16 +274,16 @@ fn assert_empty_editor(editor: &MeshEditor) {
 
 fn assert_no_overlay_changes(buffers: &OverlayBuffers) {
     assert!(!buffers.full_refresh);
-    assert!(buffers.positions.dirty_ranges.is_empty());
-    assert!(buffers.edges.dirty_ranges.is_empty());
-    assert!(buffers.triangles.dirty_ranges.is_empty());
+    assert!(buffers.positions.dirty_range.is_none());
+    assert!(buffers.edges.dirty_range.is_none());
+    assert!(buffers.triangles.dirty_range.is_none());
 
     for selection in [
         &buffers.selection.verts,
         &buffers.selection.edges,
         &buffers.selection.faces,
     ] {
-        assert!(selection.dirty_ranges.is_empty());
+        assert!(selection.dirty_range.is_none());
     }
 }
 
@@ -414,7 +414,16 @@ fn translate_tool_updates_selected_components_and_overlay_positions() {
 
         assert_eq!(result.changed_overlays, vec![target]);
         let buffers = editor.overlay_buffers(target).unwrap();
-        assert_eq!(buffers.positions.dirty_ranges.len(), selected.len());
+        let selected_indices: Vec<usize> = original
+            .iter()
+            .enumerate()
+            .filter(|(_, (vertex, _))| selected.contains(vertex))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(
+            buffers.positions.dirty_range,
+            Some(selected_indices[0]..selected_indices[selected_indices.len() - 1] + 1)
+        );
 
         for (index, (vertex, _)) in original.iter().enumerate() {
             assert_eq!(
@@ -573,10 +582,10 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
         let buffers = editor.overlay_buffers(target).unwrap();
         assert!(!buffers.full_refresh);
         assert_eq!(buffers.positions.data.as_ptr(), positions);
-        assert!(buffers.positions.dirty_ranges.is_empty());
+        assert!(buffers.positions.dirty_range.is_none());
         assert_eq!(buffers.selection[kind].data.as_ptr(), selection);
         assert_eq!(buffers.selection[kind].data[0], 255);
-        assert_eq!(buffers.selection[kind].dirty_ranges, vec![0..1]);
+        assert_eq!(buffers.selection[kind].dirty_range, Some(0..1));
         assert_eq!(
             buffers
                 .selection
@@ -800,9 +809,9 @@ fn update_applies_active_tool_configuration_and_edits_in_the_same_frame() {
     assert!(!buffers.full_refresh);
     assert_eq!(buffers.positions.data.as_ptr(), positions);
     assert_eq!(buffers.positions.data[0], [2.0, 0.0, 0.0, 0.0]);
-    assert_eq!(buffers.positions.dirty_ranges, vec![0..1]);
+    assert_eq!(buffers.positions.dirty_range, Some(0..1));
     assert_eq!(buffers.selection.verts.data, vec![255, 0, 0]);
-    assert_eq!(buffers.selection.verts.dirty_ranges, vec![0..1]);
+    assert_eq!(buffers.selection.verts.dirty_range, Some(0..1));
     assert_no_overlay_changes(editor.overlay_buffers(inactive).unwrap());
 
     let mesh = editor.mesh(active).unwrap();
@@ -892,7 +901,7 @@ fn update_processes_cancellation_changes_after_mesh_deactivation() {
 
     assert!(!buffers.full_refresh);
     assert_eq!(buffers.selection.verts.data, vec![0, 0, 0]);
-    assert_eq!(buffers.selection.verts.dirty_ranges, vec![0..1]);
+    assert_eq!(buffers.selection.verts.dirty_range, Some(0..1));
     assert!(editor.active_meshes().is_empty());
 
     editor.update(0.016, &mut result);
