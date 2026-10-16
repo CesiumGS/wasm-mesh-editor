@@ -26,8 +26,66 @@ fn selection_buffers_index_independent_component_kinds() {
 
     for (kind, value) in values {
         assert_eq!(reader[kind].data, vec![value]);
-        assert!(reader[kind].dirty_ranges.is_empty());
+        assert!(reader[kind].dirty_range.is_none());
     }
+}
+
+#[test]
+fn extend_dirty_range_merges_into_one_covering_range() {
+    let mut buffer = OverlayBuffer::new(vec![0u8; 10]);
+
+    buffer.extend_dirty_range(3..3);
+    assert_eq!(buffer.dirty_range, None);
+
+    buffer.extend_dirty_range(5..6);
+    assert_eq!(buffer.dirty_range, Some(5..6));
+
+    buffer.extend_dirty_range(5..6);
+    assert_eq!(buffer.dirty_range, Some(5..6));
+
+    buffer.extend_dirty_range(8..9);
+    assert_eq!(buffer.dirty_range, Some(5..9));
+
+    buffer.extend_dirty_range(2..3);
+    assert_eq!(buffer.dirty_range, Some(2..9));
+
+    buffer.extend_dirty_range(6..7);
+    assert_eq!(buffer.dirty_range, Some(2..9));
+
+    buffer.extend_dirty_range(0..0);
+    assert_eq!(buffer.dirty_range, Some(2..9));
+}
+
+#[test]
+fn dirty_range_builder_covers_included_indices() {
+    assert!(DirtyRangeBuilder::new().build().is_empty());
+
+    let mut builder = DirtyRangeBuilder::new();
+    for index in [7, 2, 4, 7] {
+        builder.include(index);
+    }
+
+    assert_eq!(builder.build(), 2..8);
+}
+
+#[test]
+fn update_merges_sparse_changes_into_covering_range() {
+    let mut mesh = mixed_face_mesh();
+    let verts: Vec<_> = mesh.topology().verts().collect();
+    let mut overlay = TopologyOverlay::new(&mut mesh);
+    overlay.update(&mesh).unwrap();
+
+    mesh.selection_mut().select(&[verts[4], verts[1]]);
+
+    let buffers = overlay.update(&mesh).unwrap();
+    assert_eq!(buffers.selection.verts.dirty_range, Some(1..5));
+    assert!(buffers.positions.dirty_range.is_none());
+
+    mesh.translate_selected(Vec3::X);
+
+    let buffers = overlay.update(&mesh).unwrap();
+    assert_eq!(buffers.positions.dirty_range, Some(1..5));
+    assert!(buffers.selection.verts.dirty_range.is_none());
 }
 
 fn mixed_face_mesh() -> Mesh {
@@ -128,14 +186,14 @@ fn new_packs_buffers_and_bidirectional_maps() {
         (ComponentType::Face, 2),
     ] {
         assert_eq!(buffers.selection[kind].data, vec![0; count]);
-        assert!(buffers.selection[kind].dirty_ranges.is_empty());
+        assert!(buffers.selection[kind].dirty_range.is_none());
     }
 
     assert!(buffers.full_refresh);
     assert!(matches!(overlay.pending_upload, PendingChanges::Full));
-    assert!(buffers.positions.dirty_ranges.is_empty());
-    assert!(buffers.edges.dirty_ranges.is_empty());
-    assert!(buffers.triangles.dirty_ranges.is_empty());
+    assert!(buffers.positions.dirty_range.is_none());
+    assert!(buffers.edges.dirty_range.is_none());
+    assert!(buffers.triangles.dirty_range.is_none());
 }
 
 #[test]
@@ -293,7 +351,7 @@ fn update_delivers_initial_upload_once() {
 
         let buffers = overlay.update(&mesh).unwrap();
         assert!(buffers.full_refresh);
-        assert!(buffers.positions.dirty_ranges.is_empty());
+        assert!(buffers.positions.dirty_range.is_none());
         let returned = std::ptr::from_ref(buffers);
 
         assert!(std::ptr::eq(returned, overlay.buffers()));
@@ -326,8 +384,8 @@ fn buffers_preserves_data_between_updates() {
 
         assert!(!buffers.full_refresh);
         assert_eq!(buffers.selection.verts.data[5], 255);
-        assert_eq!(buffers.selection.verts.dirty_ranges, vec![5..6]);
-        assert!(buffers.positions.dirty_ranges.is_empty());
+        assert_eq!(buffers.selection.verts.dirty_range, Some(5..6));
+        assert!(buffers.positions.dirty_range.is_none());
     }
 
     overlay.update(&mesh).unwrap();
@@ -335,7 +393,7 @@ fn buffers_preserves_data_between_updates() {
     assert_eq!(overlay.buffers().selection.verts.data[5], 0);
     assert!(overlay.update(&mesh).is_none());
     assert_eq!(overlay.buffers().selection.verts.data[5], 0);
-    assert!(overlay.buffers().selection.verts.dirty_ranges.is_empty());
+    assert!(overlay.buffers().selection.verts.dirty_range.is_none());
     assert!(!overlay.buffers().full_refresh);
 }
 
@@ -355,11 +413,11 @@ fn update_includes_changes_queued_before_initial_upload() {
         buffers.selection[ComponentType::Vertex].data,
         vec![0, 0, 0, 0, 0, 255]
     );
-    assert!(buffers.positions.dirty_ranges.is_empty());
+    assert!(buffers.positions.dirty_range.is_none());
     assert!(
         buffers.selection[ComponentType::Vertex]
-            .dirty_ranges
-            .is_empty()
+            .dirty_range
+            .is_none()
     );
     assert!(overlay.update(&mesh).is_none());
 }
@@ -377,10 +435,10 @@ fn update_returns_partial_uploads_and_clears_previous_ranges() {
     assert!(!buffers.full_refresh);
     assert_eq!(buffers.selection[ComponentType::Vertex].data[5], 255);
     assert_eq!(
-        buffers.selection[ComponentType::Vertex].dirty_ranges,
-        vec![5..6]
+        buffers.selection[ComponentType::Vertex].dirty_range,
+        Some(5..6)
     );
-    assert!(buffers.positions.dirty_ranges.is_empty());
+    assert!(buffers.positions.dirty_range.is_none());
 
     mesh.translate_selected(Vec3::X);
     mesh.translate_selected(Vec3::Y);
@@ -388,11 +446,11 @@ fn update_returns_partial_uploads_and_clears_previous_ranges() {
     let buffers = overlay.update(&mesh).unwrap();
     assert!(!buffers.full_refresh);
     assert_eq!(buffers.positions.data[5], [3.0, 4.0, 4.0, 0.0]);
-    assert_eq!(buffers.positions.dirty_ranges, vec![5..6, 5..6]);
+    assert_eq!(buffers.positions.dirty_range, Some(5..6));
     assert!(
         buffers.selection[ComponentType::Vertex]
-            .dirty_ranges
-            .is_empty()
+            .dirty_range
+            .is_none()
     );
 
     mesh.selection_mut().clear();
@@ -400,12 +458,12 @@ fn update_returns_partial_uploads_and_clears_previous_ranges() {
     let buffers = overlay.update(&mesh).unwrap();
     assert!(!buffers.full_refresh);
     assert_eq!(buffers.selection[ComponentType::Vertex].data[5], 0);
-    assert!(buffers.positions.dirty_ranges.is_empty());
+    assert!(buffers.positions.dirty_range.is_none());
     assert!(overlay.update(&mesh).is_none());
     assert!(
         overlay.buffers.selection[ComponentType::Vertex]
-            .dirty_ranges
-            .is_empty()
+            .dirty_range
+            .is_none()
     );
 }
 
@@ -445,7 +503,7 @@ fn update_replays_queued_selection_changes_in_order() {
         ComponentType::Edge,
         ComponentType::Face,
     ] {
-        assert!(!buffers.selection[kind].dirty_ranges.is_empty());
+        assert!(buffers.selection[kind].dirty_range.is_some());
     }
 
     assert!(overlay.update(&mesh).is_none());
@@ -472,7 +530,7 @@ fn update_replays_queued_selection_changes_in_order() {
         ComponentType::Face,
     ] {
         assert!(buffers.selection[kind].data.iter().all(|&value| value == 0));
-        assert!(!buffers.selection[kind].dirty_ranges.is_empty());
+        assert!(buffers.selection[kind].dirty_range.is_some());
     }
 
     assert!(overlay.update(&mesh).is_none());
@@ -506,7 +564,7 @@ fn update_reports_nonempty_selection_deltas_even_when_keys_are_unmapped() {
         ComponentType::Face,
     ] {
         assert!(buffers.selection[kind].data.is_empty());
-        assert!(buffers.selection[kind].dirty_ranges.is_empty());
+        assert!(buffers.selection[kind].dirty_range.is_none());
     }
 
     assert!(overlay.update(&mesh).is_none());
@@ -565,11 +623,11 @@ fn update_rebuilds_buffers_and_maps_on_topology_events() {
             buffers.triangles.data.len(),
             topology.loop_count() - 2 * topology.face_count()
         );
-        assert!(buffers.positions.dirty_ranges.is_empty());
+        assert!(buffers.positions.dirty_range.is_none());
         assert!(
             buffers.selection[ComponentType::Vertex]
-                .dirty_ranges
-                .is_empty()
+                .dirty_range
+                .is_none()
         );
         assert_eq!(
             overlay.vertex_key_to_buffer_index.len(),

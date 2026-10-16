@@ -21,17 +21,55 @@ pub struct OverlayComponent {
 #[derive(Default)]
 pub struct OverlayBuffer<T> {
     pub data: Vec<T>,
-    /// Ranges index `data`, not bytes. They may overlap or be out of order;
-    /// the renderer can merge them before uploading.
-    pub dirty_ranges: Vec<Range<usize>>,
+    /// The smallest range of `data` (element indices, not bytes) covering every entry changed by
+    /// the latest update, or `None` if nothing changed. May include unchanged entries between
+    /// changed ones.
+    pub dirty_range: Option<Range<usize>>,
 }
 
 impl<T> OverlayBuffer<T> {
     fn new(data: Vec<T>) -> Self {
         Self {
             data,
-            dirty_ranges: Vec::new(),
+            dirty_range: None,
         }
+    }
+
+    /// Grows `dirty_range` to also cover `range`. Does nothing if `range` is empty.
+    fn extend_dirty_range(&mut self, range: Range<usize>) {
+        if range.is_empty() {
+            return;
+        }
+
+        self.dirty_range = Some(match self.dirty_range.take() {
+            Some(dirty) => dirty.start.min(range.start)..dirty.end.max(range.end),
+            None => range,
+        });
+    }
+}
+
+/// Collects indices in a loop into the smallest covering range, to apply to a buffer once.
+struct DirtyRangeBuilder {
+    start: usize,
+    end: usize,
+}
+
+impl DirtyRangeBuilder {
+    fn new() -> Self {
+        Self {
+            start: usize::MAX,
+            end: 0,
+        }
+    }
+
+    fn include(&mut self, index: usize) {
+        self.start = self.start.min(index);
+        self.end = self.end.max(index + 1);
+    }
+
+    /// The covering range, or an empty range if no index was included.
+    fn build(self) -> Range<usize> {
+        self.start..self.end
     }
 }
 
@@ -76,7 +114,7 @@ pub struct OverlayBuffers {
     pub triangles: OverlayBuffer<[u32; 4]>,
     /// Selection by vertex, edge, or face index: 0 unselected, 255 selected.
     pub selection: SelectionBuffers,
-    /// Upload all buffers and refresh picking maps, regardless of dirty ranges.
+    /// Upload all buffers and refresh picking maps. Dirty ranges are `None` when this is set.
     /// True on the first update and after topology edits.
     pub full_refresh: bool,
 }
@@ -150,16 +188,16 @@ impl OverlayBuffers {
 
     fn clear_changes(&mut self) {
         self.full_refresh = false;
-        self.positions.dirty_ranges.clear();
-        self.edges.dirty_ranges.clear();
-        self.triangles.dirty_ranges.clear();
+        self.positions.dirty_range = None;
+        self.edges.dirty_range = None;
+        self.triangles.dirty_range = None;
 
         for kind in [
             ComponentType::Vertex,
             ComponentType::Edge,
             ComponentType::Face,
         ] {
-            self.selection[kind].dirty_ranges.clear();
+            self.selection[kind].dirty_range = None;
         }
     }
 }
@@ -285,6 +323,8 @@ impl TopologyOverlay {
     }
 
     fn update_positions(&mut self, mesh: &Mesh, keys: impl IntoIterator<Item = VertKey>) {
+        let mut dirty = DirtyRangeBuilder::new();
+
         for key in keys {
             let (Some(&index), Some(position)) = (
                 self.vertex_key_to_buffer_index.get(key),
@@ -295,7 +335,12 @@ impl TopologyOverlay {
 
             let index = index as usize;
             self.buffers.positions.data[index] = position.extend(0.0).to_array();
-            self.buffers.positions.dirty_ranges.push(index..index + 1);
+            dirty.include(index);
+        }
+
+        let dirty = dirty.build();
+        if !dirty.is_empty() {
+            self.buffers.positions.extend_dirty_range(dirty);
             self.pending_upload.request_partial();
         }
     }
@@ -333,6 +378,8 @@ impl TopologyOverlay {
         indices: &SecondaryMap<K, u32>,
         value: u8,
     ) {
+        let mut dirty = DirtyRangeBuilder::new();
+
         for &key in keys {
             let Some(&index) = indices.get(key) else {
                 continue;
@@ -340,8 +387,10 @@ impl TopologyOverlay {
 
             let index = index as usize;
             buffer.data[index] = value;
-            buffer.dirty_ranges.push(index..index + 1);
+            dirty.include(index);
         }
+
+        buffer.extend_dirty_range(dirty.build());
     }
 
     fn rebuild(&mut self, mesh: &Mesh) {
