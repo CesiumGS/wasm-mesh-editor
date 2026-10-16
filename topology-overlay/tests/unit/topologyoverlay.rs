@@ -67,7 +67,10 @@ fn new_packs_buffers_and_bidirectional_maps() {
     for (index, &key) in overlay.buffer_index_to_vertex_key.iter().enumerate() {
         assert_eq!(overlay.vertex_key_to_buffer_index[key], index as u32);
         assert_eq!(
-            overlay.component_key(ComponentType::Vertex, index as u32),
+            overlay.component_key(OverlayComponent {
+                kind: ComponentType::Vertex,
+                index: index as u32
+            }),
             Some(key.into())
         );
         assert_eq!(
@@ -79,7 +82,10 @@ fn new_packs_buffers_and_bidirectional_maps() {
     for (index, &key) in overlay.buffer_index_to_edge_key.iter().enumerate() {
         assert_eq!(overlay.edge_key_to_buffer_index[key], index as u32);
         assert_eq!(
-            overlay.component_key(ComponentType::Edge, index as u32),
+            overlay.component_key(OverlayComponent {
+                kind: ComponentType::Edge,
+                index: index as u32
+            }),
             Some(key.into())
         );
         assert_eq!(
@@ -92,7 +98,10 @@ fn new_packs_buffers_and_bidirectional_maps() {
     for (index, &key) in overlay.buffer_index_to_face_key.iter().enumerate() {
         assert_eq!(overlay.face_key_to_buffer_index[key], index as u32);
         assert_eq!(
-            overlay.component_key(ComponentType::Face, index as u32),
+            overlay.component_key(OverlayComponent {
+                kind: ComponentType::Face,
+                index: index as u32
+            }),
             Some(key.into())
         );
 
@@ -139,7 +148,12 @@ fn component_key_uses_face_indices_not_triangle_indices() {
         .triangles
         .data
         .iter()
-        .map(|triangle| overlay.component_key(ComponentType::Face, triangle[3]))
+        .map(|triangle| {
+            overlay.component_key(OverlayComponent {
+                kind: ComponentType::Face,
+                index: triangle[3],
+            })
+        })
         .collect();
 
     assert_eq!(
@@ -150,7 +164,13 @@ fn component_key_uses_face_indices_not_triangle_indices() {
             Some(faces[1].into())
         ]
     );
-    assert_eq!(overlay.component_key(ComponentType::Face, 2), None);
+    assert_eq!(
+        overlay.component_key(OverlayComponent {
+            kind: ComponentType::Face,
+            index: 2
+        }),
+        None
+    );
 }
 
 #[test]
@@ -165,8 +185,17 @@ fn component_key_rejects_out_of_bounds_indices() {
     ] {
         let count = overlay.buffers().selection[kind].data.len() as u32;
 
-        assert_eq!(overlay.component_key(kind, count), None);
-        assert_eq!(overlay.component_key(kind, u32::MAX), None);
+        assert_eq!(
+            overlay.component_key(OverlayComponent { kind, index: count }),
+            None
+        );
+        assert_eq!(
+            overlay.component_key(OverlayComponent {
+                kind,
+                index: u32::MAX
+            }),
+            None
+        );
     }
 }
 
@@ -234,8 +263,17 @@ fn new_accepts_an_empty_mesh() {
         ComponentType::Face,
     ] {
         assert!(overlay.buffers.selection[kind].data.is_empty());
-        assert_eq!(overlay.component_key(kind, 0), None);
-        assert_eq!(overlay.component_key(kind, u32::MAX), None);
+        assert_eq!(
+            overlay.component_key(OverlayComponent { kind, index: 0 }),
+            None
+        );
+        assert_eq!(
+            overlay.component_key(OverlayComponent {
+                kind,
+                index: u32::MAX
+            }),
+            None
+        );
     }
 
     assert!(overlay.buffers.full_refresh);
@@ -573,10 +611,22 @@ fn update_rebuilds_buffers_and_maps_on_topology_events() {
             ),
         ] {
             for (index, &key) in keys.iter().enumerate() {
-                assert_eq!(overlay.component_key(kind, index as u32), Some(key));
+                assert_eq!(
+                    overlay.component_key(OverlayComponent {
+                        kind,
+                        index: index as u32
+                    }),
+                    Some(key)
+                );
             }
 
-            assert_eq!(overlay.component_key(kind, keys.len() as u32), None);
+            assert_eq!(
+                overlay.component_key(OverlayComponent {
+                    kind,
+                    index: keys.len() as u32
+                }),
+                None
+            );
         }
 
         assert!(overlay.update(&mesh).is_none());

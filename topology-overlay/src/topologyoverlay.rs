@@ -8,6 +8,15 @@ use mesh_core::{
 };
 use slotmap::{Key, SecondaryMap};
 
+/// A component as the renderer identifies it, e.g. from a picking pass: its index in the
+/// overlay buffers for that component kind. Faces use the triangle's face index.
+/// Indices can change after topology edits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OverlayComponent {
+    pub kind: ComponentType,
+    pub index: u32,
+}
+
 /// A buffer and the entries changed by the latest update.
 #[derive(Default)]
 pub struct OverlayBuffer<T> {
@@ -235,12 +244,11 @@ impl TopologyOverlay {
         &self.buffers
     }
 
-    /// Returns the component key for a buffer index, or `None` if out of bounds.
-    /// Faces use the triangle's face index. Indices can change after topology edits.
-    pub fn component_key(&self, kind: ComponentType, index: u32) -> Option<ComponentKey> {
-        let index = index as usize;
+    /// Returns the component key for an overlay component, or `None` if its index is out of bounds.
+    pub fn component_key(&self, component: OverlayComponent) -> Option<ComponentKey> {
+        let index = component.index as usize;
 
-        match kind {
+        match component.kind {
             ComponentType::Vertex => self
                 .buffer_index_to_vertex_key
                 .get(index)

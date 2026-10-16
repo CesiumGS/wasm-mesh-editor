@@ -8,8 +8,8 @@ use mesh_core::{ComponentKey, ComponentMask, ComponentType, MeshBuffers};
 use slotmap::Key;
 
 use crate::{
-    MeshTransform, Modifiers, PickResult, PointerInput, SceneInput, SelectTool, ToolContext,
-    TranslateTool, WorldRay,
+    MeshTransform, Modifiers, OverlayComponent, PickResult, PointerInput, SceneInput, SelectTool,
+    ToolContext, TranslateTool, WorldRay,
 };
 
 use super::*;
@@ -35,19 +35,35 @@ impl<Value: 'static> Tool for TestTool<Value> {
         panic!("unexpected tool callback");
     }
 
-    fn pointer_down(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
+    fn pointer_down(
+        &mut self,
+        _context: &mut ToolContext<'_>,
+        _input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         panic!("unexpected tool callback");
     }
 
-    fn pointer_up(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
+    fn pointer_up(
+        &mut self,
+        _context: &mut ToolContext<'_>,
+        _input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         panic!("unexpected tool callback");
     }
 
-    fn pointer_move(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
+    fn pointer_move(
+        &mut self,
+        _context: &mut ToolContext<'_>,
+        _input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         panic!("unexpected tool callback");
     }
 
-    fn pointer_click(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
+    fn pointer_click(
+        &mut self,
+        _context: &mut ToolContext<'_>,
+        _input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         panic!("unexpected tool callback");
     }
 
@@ -61,6 +77,29 @@ impl<Value: 'static> Tool for TestTool<Value> {
 
     fn update(&mut self, _context: &mut ToolContext<'_>, _delta_seconds: f64) {
         panic!("unexpected tool callback");
+    }
+}
+
+/// What a tool received from one pointer call. Scene transforms are kept by address to check
+/// that they're borrowed through, not copied.
+#[derive(Debug, PartialEq)]
+struct ReceivedInput {
+    modifiers: Modifiers,
+    pick: PickResult<ComponentKey>,
+    ray: Option<WorldRay>,
+    scene: Option<(DVec3, *const MeshTransform)>,
+}
+
+impl ReceivedInput {
+    fn new(input: &PointerInput<'_, ComponentKey>) -> Self {
+        Self {
+            modifiers: input.modifiers,
+            pick: input.pick,
+            ray: input.ray,
+            scene: input
+                .scene
+                .map(|scene| (scene.view_direction, scene.mesh_transforms.as_ptr())),
+        }
     }
 }
 
@@ -79,7 +118,7 @@ struct RecordingTool {
     clear_selection_on_cancel: bool,
     update_deltas: Vec<f64>,
     translation_on_update: Option<[f32; 3]>,
-    pointer_input_addresses: Vec<usize>,
+    received_inputs: Vec<ReceivedInput>,
 }
 
 impl RecordingTool {
@@ -91,7 +130,7 @@ impl RecordingTool {
             clear_selection_on_cancel: false,
             update_deltas: Vec::new(),
             translation_on_update: None,
-            pointer_input_addresses: Vec::new(),
+            received_inputs: Vec::new(),
         }
     }
 
@@ -129,31 +168,43 @@ impl Tool for RecordingTool {
         self.record("deactivate", context);
     }
 
-    fn pointer_down(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
+    fn pointer_down(
+        &mut self,
+        context: &mut ToolContext<'_>,
+        input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         self.record("pointer_down", context);
-        self.pointer_input_addresses
-            .push(std::ptr::from_ref(input) as usize);
+        self.received_inputs.push(ReceivedInput::new(input));
         true
     }
 
-    fn pointer_up(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
+    fn pointer_up(
+        &mut self,
+        context: &mut ToolContext<'_>,
+        input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         self.record("pointer_up", context);
-        self.pointer_input_addresses
-            .push(std::ptr::from_ref(input) as usize);
+        self.received_inputs.push(ReceivedInput::new(input));
         false
     }
 
-    fn pointer_move(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
+    fn pointer_move(
+        &mut self,
+        context: &mut ToolContext<'_>,
+        input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         self.record("pointer_move", context);
-        self.pointer_input_addresses
-            .push(std::ptr::from_ref(input) as usize);
+        self.received_inputs.push(ReceivedInput::new(input));
         true
     }
 
-    fn pointer_click(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
+    fn pointer_click(
+        &mut self,
+        context: &mut ToolContext<'_>,
+        input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         self.record("pointer_click", context);
-        self.pointer_input_addresses
-            .push(std::ptr::from_ref(input) as usize);
+        self.received_inputs.push(ReceivedInput::new(input));
         false
     }
 
@@ -485,7 +536,7 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
         let component = editor
             .overlay(target)
             .unwrap()
-            .component_key(kind, 0)
+            .component_key(OverlayComponent { kind, index: 0 })
             .unwrap();
         let positions = editor
             .overlay_buffers(target)
@@ -499,7 +550,7 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
         let mut input = PointerInput {
             pick: PickResult::Hit {
                 mesh: target,
-                component,
+                component: OverlayComponent { kind, index: 0 },
             },
             ..PointerInput::default()
         };
@@ -1033,6 +1084,111 @@ fn removed_mesh_key_cannot_access_or_remove_replacement() {
     assert!(editor.has_mesh(replacement));
     assert!(editor.mesh(replacement).is_some());
     assert!(editor.overlay(replacement).is_some());
+}
+
+/// Clicks through the editor's tool accessor and returns the pick the tool received.
+fn pick_received_by_tool(editor: &mut MeshEditor, pick: PickResult) -> PickResult<ComponentKey> {
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let tool = editor.add_tool(RecordingTool::new("tool", &calls));
+
+    editor.set_active_tool(Some(tool.id())).unwrap();
+    editor
+        .tool_mut(tool.id())
+        .unwrap()
+        .pointer_click(&PointerInput {
+            pick,
+            ..PointerInput::default()
+        });
+
+    let received = editor.tool_config_mut(&tool).unwrap().received_inputs.pop();
+
+    received.unwrap().pick
+}
+
+#[test]
+fn tool_accessors_resolve_overlay_indices_to_components() {
+    let mut editor = MeshEditor::new();
+    let mesh = editor.add_mesh(triangle_mesh());
+
+    for (kind, count) in [
+        (ComponentType::Vertex, 3),
+        (ComponentType::Edge, 3),
+        (ComponentType::Face, 1),
+    ] {
+        for index in 0..count {
+            let component = editor
+                .overlay(mesh)
+                .unwrap()
+                .component_key(OverlayComponent { kind, index })
+                .unwrap();
+
+            assert_eq!(component.kind(), kind);
+            assert_eq!(
+                pick_received_by_tool(
+                    &mut editor,
+                    PickResult::Hit {
+                        mesh,
+                        component: OverlayComponent { kind, index }
+                    }
+                ),
+                PickResult::Hit { mesh, component }
+            );
+        }
+
+        assert_eq!(
+            pick_received_by_tool(
+                &mut editor,
+                PickResult::Hit {
+                    mesh,
+                    component: OverlayComponent { kind, index: count }
+                }
+            ),
+            PickResult::Miss
+        );
+    }
+
+    assert_eq!(
+        pick_received_by_tool(&mut editor, PickResult::NotPerformed),
+        PickResult::NotPerformed
+    );
+    assert_eq!(
+        pick_received_by_tool(&mut editor, PickResult::Miss),
+        PickResult::Miss
+    );
+}
+
+#[test]
+fn tool_accessors_resolve_unknown_and_removed_meshes_as_misses() {
+    let mut editor = MeshEditor::new();
+    let removed = editor.add_mesh(triangle_mesh());
+
+    assert!(editor.remove_mesh(removed).is_some());
+
+    let replacement = editor.add_mesh(triangle_mesh());
+
+    for mesh in [MeshKey::null(), removed] {
+        assert_eq!(
+            pick_received_by_tool(
+                &mut editor,
+                PickResult::Hit {
+                    mesh,
+                    component: OverlayComponent {
+                        kind: ComponentType::Vertex,
+                        index: 0
+                    }
+                }
+            ),
+            PickResult::Miss
+        );
+    }
+
+    assert!(matches!(
+        pick_received_by_tool(
+            &mut editor,
+            PickResult::Hit { mesh: replacement, component: OverlayComponent { kind: ComponentType::Vertex, index: 0 } }
+        ),
+        PickResult::Hit { mesh, .. } if mesh == replacement
+    ));
 }
 
 #[test]
@@ -1664,11 +1820,12 @@ fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
         ..Default::default()
     };
     let edge = editor
-        .mesh(active)
+        .overlay(active)
         .unwrap()
-        .topology()
-        .edges()
-        .next()
+        .component_key(OverlayComponent {
+            kind: ComponentType::Edge,
+            index: 0,
+        })
         .unwrap();
     let click = PointerInput {
         modifiers: Modifiers {
@@ -1679,7 +1836,10 @@ fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
         },
         pick: PickResult::Hit {
             mesh: active,
-            component: edge.into(),
+            component: OverlayComponent {
+                kind: ComponentType::Edge,
+                index: 0,
+            },
         },
         scene: down.scene,
         ..Default::default()
@@ -1721,12 +1881,29 @@ fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
         assert_eq!(call.meshes, vec![(active, ComponentMask::EDGE)]);
     }
 
+    let expected = |input: &PointerInput<'_>, pick| ReceivedInput {
+        modifiers: input.modifiers,
+        pick,
+        ray: input.ray,
+        scene: input
+            .scene
+            .map(|scene| (scene.view_direction, mesh_transforms.as_ptr())),
+    };
+
     assert_eq!(
-        editor
-            .tool_config_mut(&tool)
-            .unwrap()
-            .pointer_input_addresses,
-        [&down, &moved, &up, &click].map(|input| std::ptr::from_ref(input) as usize)
+        editor.tool_config_mut(&tool).unwrap().received_inputs,
+        [
+            expected(&down, PickResult::NotPerformed),
+            expected(&moved, PickResult::NotPerformed),
+            expected(&up, PickResult::NotPerformed),
+            expected(
+                &click,
+                PickResult::Hit {
+                    mesh: active,
+                    component: edge
+                }
+            ),
+        ]
     );
 
     assert!(!editor.is_mesh_active(inactive));

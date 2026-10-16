@@ -15,6 +15,8 @@ pub use input::{Modifiers, PickResult, PointerInput, SceneInput};
 pub use select::SelectTool;
 pub use translate::TranslateTool;
 
+use mesh_core::ComponentKey;
+
 use crate::EditMode;
 
 /// Identifies a registered tool uniquely across editors.
@@ -33,6 +35,18 @@ impl ToolId {
             })
             .expect("tool ID space exhausted");
 
+        Self { value }
+    }
+
+    /// The raw value JS sees as a number.
+    #[cfg(feature = "wasm")]
+    pub(crate) fn raw(self) -> usize {
+        self.value
+    }
+
+    /// Rebuilds an ID from JS. Unknown IDs are rejected wherever the editor looks them up.
+    #[cfg(feature = "wasm")]
+    pub(crate) fn from_raw(value: usize) -> Self {
         Self { value }
     }
 }
@@ -71,14 +85,30 @@ pub trait Tool: Any {
 
     fn deactivate(&mut self, context: &mut ToolContext<'_>);
 
-    fn pointer_down(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool;
+    fn pointer_down(
+        &mut self,
+        context: &mut ToolContext<'_>,
+        input: &PointerInput<'_, ComponentKey>,
+    ) -> bool;
 
     /// Applies the final pointer input and finishes an active drag before returning.
-    fn pointer_up(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool;
+    fn pointer_up(
+        &mut self,
+        context: &mut ToolContext<'_>,
+        input: &PointerInput<'_, ComponentKey>,
+    ) -> bool;
 
-    fn pointer_move(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool;
+    fn pointer_move(
+        &mut self,
+        context: &mut ToolContext<'_>,
+        input: &PointerInput<'_, ComponentKey>,
+    ) -> bool;
 
-    fn pointer_click(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool;
+    fn pointer_click(
+        &mut self,
+        context: &mut ToolContext<'_>,
+        input: &PointerInput<'_, ComponentKey>,
+    ) -> bool;
 
     /// Applies any pending preview and finishes the interaction without waiting for `update`.
     fn confirm(&mut self, context: &mut ToolContext<'_>);

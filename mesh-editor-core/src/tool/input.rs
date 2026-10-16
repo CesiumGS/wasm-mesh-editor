@@ -1,5 +1,7 @@
 use glam::DVec3;
 use mesh_core::ComponentKey;
+use slotmap::SecondaryMap;
+use topology_overlay::{OverlayComponent, TopologyOverlay};
 
 use crate::{MeshKey, MeshTransform, WorldRay};
 
@@ -12,9 +14,9 @@ pub struct Modifiers {
     pub meta: bool,
 }
 
-/// A renderer-resolved pick. Tools validate the mesh and component before use.
+/// A pick result for a pointer event
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PickResult {
+pub enum PickResult<Component = OverlayComponent> {
     /// No picking was requested for this event. This is not a miss.
     #[default]
     NotPerformed,
@@ -22,7 +24,7 @@ pub enum PickResult {
     Miss,
     Hit {
         mesh: MeshKey,
-        component: ComponentKey,
+        component: Component,
     },
 }
 
@@ -37,12 +39,58 @@ pub struct SceneInput<'input> {
 
 /// Primary-pointer data resolved by the renderer. Defaults contain no pick or spatial data.
 /// The renderer owns button mapping, click recognition, pointer capture, and camera controls.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct PointerInput<'input> {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointerInput<'input, Component = OverlayComponent> {
     pub modifiers: Modifiers,
-    pub pick: PickResult,
+    pub pick: PickResult<Component>,
     pub ray: Option<WorldRay>,
     pub scene: Option<SceneInput<'input>>,
+}
+
+// Written by hand: deriving would require `Component: Default`, which `ComponentKey` isn't.
+impl<Component> Default for PointerInput<'_, Component> {
+    fn default() -> Self {
+        Self {
+            modifiers: Modifiers::default(),
+            pick: PickResult::NotPerformed,
+            ray: None,
+            scene: None,
+        }
+    }
+}
+
+impl<'input> PointerInput<'input> {
+    /// Resolves the pick against the editor's overlays. Scene context stays borrowed.
+    pub(crate) fn resolve(
+        &self,
+        overlays: &SecondaryMap<MeshKey, TopologyOverlay>,
+    ) -> PointerInput<'input, ComponentKey> {
+        PointerInput {
+            modifiers: self.modifiers,
+            pick: self.pick.resolve(overlays),
+            ray: self.ray,
+            scene: self.scene,
+        }
+    }
+}
+
+impl PickResult {
+    fn resolve(
+        self,
+        overlays: &SecondaryMap<MeshKey, TopologyOverlay>,
+    ) -> PickResult<ComponentKey> {
+        match self {
+            Self::NotPerformed => PickResult::NotPerformed,
+            Self::Miss => PickResult::Miss,
+            Self::Hit { mesh, component } => overlays
+                .get(mesh)
+                .and_then(|overlay| overlay.component_key(component))
+                .map_or(PickResult::Miss, |component| PickResult::Hit {
+                    mesh,
+                    component,
+                }),
+        }
+    }
 }
 
 #[cfg(test)]

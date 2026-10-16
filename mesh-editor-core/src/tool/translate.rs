@@ -1,7 +1,7 @@
 use std::any::Any;
 
 use glam::DVec3;
-use mesh_core::Plane;
+use mesh_core::{ComponentKey, Plane};
 
 use crate::{EditMode, MeshTransform, PointerInput, Tool, ToolContext};
 
@@ -22,6 +22,7 @@ impl TranslationDrag {
 /// whose position is derived from the selection centroid of the participating meshes.
 /// Scene context is required at drag start; its plane and placements are retained until completion.
 #[derive(Default)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct TranslateTool {
     meshes: Vec<MeshTransform>,
     drag: Option<TranslationDrag>,
@@ -31,7 +32,7 @@ impl TranslateTool {
     fn begin(
         &mut self,
         context: &ToolContext<'_>,
-        input: &PointerInput<'_>,
+        input: &PointerInput<'_, ComponentKey>,
     ) -> Option<TranslationDrag> {
         let ray = input.ray?;
         let scene = input.scene?;
@@ -83,7 +84,11 @@ impl Tool for TranslateTool {
         self.cancel(context);
     }
 
-    fn pointer_down(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
+    fn pointer_down(
+        &mut self,
+        context: &mut ToolContext<'_>,
+        input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         if self.drag.is_some() || !self.supports_edit_mode(context.mode()) {
             return false;
         }
@@ -98,7 +103,11 @@ impl Tool for TranslateTool {
         true
     }
 
-    fn pointer_up(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
+    fn pointer_up(
+        &mut self,
+        context: &mut ToolContext<'_>,
+        input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         if self.drag.is_none() {
             return false;
         }
@@ -109,7 +118,11 @@ impl Tool for TranslateTool {
         true
     }
 
-    fn pointer_move(&mut self, _context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
+    fn pointer_move(
+        &mut self,
+        _context: &mut ToolContext<'_>,
+        input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         let Some(drag) = &mut self.drag else {
             return false;
         };
@@ -123,7 +136,11 @@ impl Tool for TranslateTool {
         true
     }
 
-    fn pointer_click(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
+    fn pointer_click(
+        &mut self,
+        _context: &mut ToolContext<'_>,
+        _input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         false
     }
 

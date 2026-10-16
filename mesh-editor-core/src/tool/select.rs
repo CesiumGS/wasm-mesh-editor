@@ -8,12 +8,13 @@ use crate::{EditMode, PickResult, PointerInput, Tool, ToolContext};
 /// Plain hits replace only the hit mesh's selection. Plain misses clear all active meshes.
 /// Rejected hits leave selection unchanged. Only accepted hits return `true`.
 #[derive(Debug, Default)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct SelectTool;
 
 impl SelectTool {
     fn validate_hit<'context>(
         context: &'context mut ToolContext<'_>,
-        pick: PickResult,
+        pick: PickResult<ComponentKey>,
     ) -> Option<(&'context mut Mesh, ComponentKey)> {
         let PickResult::Hit { mesh, component } = pick else {
             return None;
@@ -55,19 +56,35 @@ impl Tool for SelectTool {
 
     fn deactivate(&mut self, _context: &mut ToolContext<'_>) {}
 
-    fn pointer_down(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
+    fn pointer_down(
+        &mut self,
+        _context: &mut ToolContext<'_>,
+        _input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         false
     }
 
-    fn pointer_up(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
+    fn pointer_up(
+        &mut self,
+        _context: &mut ToolContext<'_>,
+        _input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         false
     }
 
-    fn pointer_move(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
+    fn pointer_move(
+        &mut self,
+        _context: &mut ToolContext<'_>,
+        _input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         false
     }
 
-    fn pointer_click(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
+    fn pointer_click(
+        &mut self,
+        context: &mut ToolContext<'_>,
+        input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
         if !self.supports_edit_mode(context.mode()) {
             return false;
         }

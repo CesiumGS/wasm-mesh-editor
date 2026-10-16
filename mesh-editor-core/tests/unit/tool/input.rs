@@ -1,13 +1,15 @@
 use glam::{DMat4, DVec3};
-use mesh_core::{Mesh, MeshBuffers};
+use mesh_core::{ComponentType, Mesh};
 
-use crate::{MeshEditor, MeshTransform, Modifiers, PickResult, PointerInput, WorldRay};
+use crate::{
+    MeshEditor, MeshTransform, Modifiers, OverlayComponent, PickResult, PointerInput, WorldRay,
+};
 
 use super::SceneInput;
 
 #[test]
 fn default_input_does_not_imply_a_pick_miss_or_spatial_data() {
-    let input = PointerInput::default();
+    let input: PointerInput = PointerInput::default();
 
     assert_eq!(input.modifiers, Modifiers::default());
     assert_eq!(input.pick, PickResult::NotPerformed);
@@ -18,32 +20,26 @@ fn default_input_does_not_imply_a_pick_miss_or_spatial_data() {
 
 #[test]
 fn selection_input_carries_a_hit_without_spatial_data() {
-    let mesh = Mesh::from_buffers(MeshBuffers {
-        positions: vec![
-            DVec3::ZERO.as_vec3(),
-            DVec3::X.as_vec3(),
-            DVec3::Y.as_vec3(),
-        ],
-        normals: None,
-        uvs: None,
-        indices: vec![0, 1, 2],
-        face_vertex_counts: None,
-    })
-    .unwrap();
-    let component = mesh.topology().verts().next().unwrap().into();
     let mut editor = MeshEditor::new();
-    let mesh = editor.add_mesh(mesh);
+    let mesh = editor.add_mesh(Mesh::new());
+    let pick = PickResult::Hit {
+        mesh,
+        component: OverlayComponent {
+            kind: ComponentType::Vertex,
+            index: 0,
+        },
+    };
     let input = PointerInput {
         modifiers: Modifiers {
             shift: true,
             ..Default::default()
         },
-        pick: PickResult::Hit { mesh, component },
+        pick,
         ..Default::default()
     };
 
     assert!(input.modifiers.shift);
-    assert_eq!(input.pick, PickResult::Hit { mesh, component });
+    assert_eq!(input.pick, pick);
     assert_eq!(input.ray, None);
     assert_eq!(input.scene, None);
 }
@@ -58,7 +54,7 @@ fn pointer_input_borrows_optional_scene_context() {
         origin: offset + DVec3::Z,
         direction: DVec3::NEG_Z,
     };
-    let start = PointerInput {
+    let start: PointerInput = PointerInput {
         ray: Some(ray),
         scene: Some(SceneInput {
             view_direction: DVec3::NEG_Z,
@@ -77,7 +73,7 @@ fn pointer_input_borrows_optional_scene_context() {
     );
     assert_eq!(copied.ray.unwrap().origin.x, offset.x);
 
-    let moved = PointerInput {
+    let moved: PointerInput = PointerInput {
         ray: Some(WorldRay {
             origin: ray.origin + DVec3::X,
             ..ray

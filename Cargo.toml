@@ -4,7 +4,6 @@ members = [
     "mesh-core",
     "topology-overlay",
     "mesh-editor-core",
-    "mesh-editor-wasm",
     "utils/event-emitter",
 ]
 
@@ -17,7 +16,11 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 bitflags = "2"
+bytemuck = { version = "1", features = ["extern_crate_alloc"] }
 glam = "0.29"
+js-sys = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
 slotmap = "1.0"
 wasm-bindgen = "0.2"
 

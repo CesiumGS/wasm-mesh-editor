@@ -21,7 +21,7 @@ fn selected_mesh(positions: &[Vec3]) -> Mesh {
     mesh
 }
 
-fn pointer(position: DVec3) -> PointerInput<'static> {
+fn pointer(position: DVec3) -> PointerInput<'static, ComponentKey> {
     PointerInput {
         ray: Some(WorldRay {
             origin: position,
@@ -31,7 +31,7 @@ fn pointer(position: DVec3) -> PointerInput<'static> {
     }
 }
 
-fn start_input(transforms: &[MeshTransform], origin: DVec3) -> PointerInput<'_> {
+fn start_input(transforms: &[MeshTransform], origin: DVec3) -> PointerInput<'_, ComponentKey> {
     PointerInput {
         scene: Some(SceneInput {
             view_direction: -DVec3::Z,

@@ -1,7 +1,10 @@
 //! Prepares mesh data for a topology overlay. Rendering is handled elsewhere.
 //!
-//! API draft: picking lookup is not implemented yet.
+//! Picks read back from the overlay buffers map to mesh components through
+//! [`TopologyOverlay::component_key`].
 
 mod topologyoverlay;
 
-pub use topologyoverlay::{OverlayBuffer, OverlayBuffers, SelectionBuffers, TopologyOverlay};
+pub use topologyoverlay::{
+    OverlayBuffer, OverlayBuffers, OverlayComponent, SelectionBuffers, TopologyOverlay,
+};
