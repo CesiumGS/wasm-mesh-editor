@@ -18,31 +18,107 @@ use crate::{
 
 // Doc comments on these JS-facing types also document the generated TypeScript.
 
+/// The scalar type of each component in a buffer element.
+#[derive(Clone, Copy, Serialize, Tsify)]
+#[serde(rename_all = "lowercase")]
+pub enum ScalarType {
+    Float32,
+    Uint32,
+    /// An unsigned byte that shaders read as a normalized value: 255 is 1.0.
+    Unorm8,
+}
+
+impl ScalarType {
+    const fn size(self) -> usize {
+        match self {
+            Self::Float32 | Self::Uint32 => 4,
+            Self::Unorm8 => 1,
+        }
+    }
+}
+
+/// The layout of one buffer element: `components` values of `scalarType`.
+#[derive(Clone, Copy, Serialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct ElementLayout {
+    scalar_type: ScalarType,
+    components: usize,
+}
+
+/// An overlay buffer element type and its layout.
+trait OverlayElement {
+    const LAYOUT: ElementLayout;
+}
+
+impl OverlayElement for [f32; 4] {
+    const LAYOUT: ElementLayout = ElementLayout {
+        scalar_type: ScalarType::Float32,
+        components: 4,
+    };
+}
+
+impl OverlayElement for [u32; 2] {
+    const LAYOUT: ElementLayout = ElementLayout {
+        scalar_type: ScalarType::Uint32,
+        components: 2,
+    };
+}
+
+impl OverlayElement for [u32; 4] {
+    const LAYOUT: ElementLayout = ElementLayout {
+        scalar_type: ScalarType::Uint32,
+        components: 4,
+    };
+}
+
+impl OverlayElement for u8 {
+    const LAYOUT: ElementLayout = ElementLayout {
+        scalar_type: ScalarType::Unorm8,
+        components: 1,
+    };
+}
+
+const fn assert_layout_size<T: OverlayElement>() {
+    assert!(T::LAYOUT.components * T::LAYOUT.scalar_type.size() == size_of::<T>());
+}
+
+// Fails to compile if a layout disagrees with its element type's size.
+const _: () = {
+    assert_layout_size::<[f32; 4]>();
+    assert_layout_size::<[u32; 2]>();
+    assert_layout_size::<[u32; 4]>();
+    assert_layout_size::<u8>();
+};
+
 /// The location of one overlay buffer in the module's linear memory.
 #[derive(Serialize, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayBufferView {
-    /// Byte offset of the first element in the wasm `memory.buffer`.
+    /// Byte offset of the first element in `memory.buffer`, where `memory` is the module's
+    /// `WebAssembly.Memory` (`InitOutput.memory`, from `init()` or `initSync()`).
     address: usize,
-    /// Number of elements. Each buffer's element layout is documented on `OverlayViews`.
+    /// Number of elements, each laid out as `layout` describes.
+    /// A typed-array view over the buffer holds `elementCount * layout.components` values.
     element_count: usize,
     /// Element indices (not bytes) changed by the latest `update`, end-exclusive.
     /// Covers every change, so it may include unchanged elements in between.
     /// `undefined` when nothing changed or when `fullRefresh` is set.
     dirty_range: Option<Range<usize>>,
+    layout: ElementLayout,
 }
 
-impl<T> From<&OverlayBuffer<T>> for OverlayBufferView {
+impl<T: OverlayElement> From<&OverlayBuffer<T>> for OverlayBufferView {
     fn from(buffer: &OverlayBuffer<T>) -> Self {
         Self {
             address: buffer.data.as_ptr() as usize,
             element_count: buffer.data.len(),
             dirty_range: buffer.dirty_range.clone(),
+            layout: T::LAYOUT,
         }
     }
 }
 
-/// Selection buffers by component kind. One uint8 per component: 0 unselected, 255 selected.
+/// Selection buffers by component kind. One value per component: 0 unselected, 255 selected.
 #[derive(Serialize, Tsify)]
 pub struct OverlaySelectionViews {
     verts: OverlayBufferView,
@@ -60,11 +136,11 @@ pub struct OverlaySelectionViews {
 pub struct OverlayViews {
     /// Upload every buffer in full. Dirty ranges are `undefined` when set.
     full_refresh: bool,
-    /// `[x, y, z, 0]` float32 per vertex.
+    /// `[x, y, z, 0]` per vertex.
     positions: OverlayBufferView,
-    /// Two uint32 vertex indices per edge.
+    /// Two vertex indices per edge.
     edges: OverlayBufferView,
-    /// Three uint32 vertex indices and a uint32 face index per triangle.
+    /// Three vertex indices and a face index per triangle.
     triangles: OverlayBufferView,
     selection: OverlaySelectionViews,
 }

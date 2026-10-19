@@ -106,11 +106,11 @@ impl IndexMut<ComponentType> for SelectionBuffers {
 /// Mesh data packed for rendering.
 #[derive(Default)]
 pub struct OverlayBuffers {
-    /// One `[x, y, z, 0.0]` per vertex (RGBA32F). Point instances index this directly.
+    /// One `[x, y, z, 0.0]` per vertex. Point instances index this directly.
     pub positions: OverlayBuffer<[f32; 4]>,
-    /// Two position indices per edge (RG32UI).
+    /// Two position indices per edge.
     pub edges: OverlayBuffer<[u32; 2]>,
-    /// Three position indices and a face index per triangle (RGBA32UI).
+    /// Three position indices and a face index per triangle.
     pub triangles: OverlayBuffer<[u32; 4]>,
     /// Selection by vertex, edge, or face index: 0 unselected, 255 selected.
     pub selection: SelectionBuffers,
