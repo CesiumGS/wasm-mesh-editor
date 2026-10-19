@@ -8,12 +8,23 @@
         "codegen",
         "disjointly",
         "dvec",
+        "glsl",
         "gons",
+        "highp",
+        "ivec",
         "nontrapping",
+        "pickable",
         "rlib",
         "rustc",
+        "serde",
         "slotmap",
+        "texel",
         "topo",
-        "verts"
+        "tsify",
+        "unorm",
+        "usampler",
+        "uvec",
+        "verts",
+        "webgl"
     ]
 }
