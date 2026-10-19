@@ -32,7 +32,10 @@ impl From<shaders::ShaderSources> for ShaderSources {
 /// Each program owns `main()` and calls hooks that the consumer defines:
 /// - vertex: `vec4 topologyOverlay_modelToEye(vec3 positionMC)`,
 ///   `vec4 topologyOverlay_eyeToClip(vec4 positionEC)`, `vec2 topologyOverlay_viewportSize()`,
-///   and `void topologyOverlay_setPickOutputs(uint componentIndex)`
+///   and `void topologyOverlay_setVertexOutputs(vec4 positionEC, uint componentIndex)`.
+///   `eyeToClip` must be linear, like a projection matrix, and free of side effects: it may be
+///   called more than once per vertex. `setVertexOutputs` is called once per vertex after
+///   `gl_Position` is final, for outputs such as custom depth and pick colors.
 /// - fragment: `void topologyOverlay_writeColor(vec4 color)`
 #[derive(Serialize, Tsify)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +43,9 @@ pub struct TopologyOverlayShaders {
     /// Points: `positions.elementCount` instances of 4 vertices each, drawn as `TRIANGLE_STRIP`.
     /// `u_pointSize` is a diameter in the pixels of `topologyOverlay_viewportSize()`.
     point: ShaderSources,
+    /// Edges: `edges.elementCount` instances of 4 vertices each, drawn as `TRIANGLE_STRIP`.
+    /// `u_edgeWidth` is in the pixels of `topologyOverlay_viewportSize()`.
+    edge: ShaderSources,
     /// Faces: `triangles.elementCount` instances of 3 vertices each, drawn as `TRIANGLES`.
     face: ShaderSources,
     /// Hooks for plain WebGL2, driven by `u_modelView`, `u_projection`, and `u_viewportSize`.
@@ -52,6 +58,7 @@ pub struct TopologyOverlayShaders {
 pub fn topology_overlay_shaders() -> Result<Ts<TopologyOverlayShaders>, JsError> {
     Ok(TopologyOverlayShaders {
         point: shaders::POINT.into(),
+        edge: shaders::EDGE.into(),
         face: shaders::FACE.into(),
         default_hooks: shaders::DEFAULT_HOOKS.into(),
     }
