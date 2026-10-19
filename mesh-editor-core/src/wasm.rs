@@ -8,6 +8,7 @@
 mod edit_mode;
 #[path = "wasm/mesh-editor.rs"]
 mod mesh_editor;
+mod shaders;
 mod tool;
 
 pub use tool::BoxedTool;

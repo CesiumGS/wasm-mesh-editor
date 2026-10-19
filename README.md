@@ -7,7 +7,7 @@ A modular mesh-editing library for the web and native. Use it headless, or bring
 | Crate | Role |
 | --- | --- |
 | `mesh-core` | Headless mesh kernel based on a radial edge structure. |
-| `topology-overlay` | A translation layer from the mesh data model to GPU-ready data buffers for drawing the mesh overlay (points, edges, and faces). |
+| `topology-overlay` | A translation layer from the mesh data model to GPU-ready data buffers for drawing the mesh overlay (points, edges, and faces), plus the WebGL2 shaders that draw them. |
 | `mesh-editor-core` | An orchestration layer for composing multiple meshes and overlays, and manager of global state (like edit mode, tools, etc.). With the `wasm` feature, it also compiles everything into one `.wasm` and exposes the editor to JS via `wasm-bindgen`. |
 
 Small, reusable utility crates live under `utils/`:
@@ -47,6 +47,31 @@ Plain JS objects that cross the boundary (such as `PointerInput` and `OverlayVie
 JS registers tools without the editor naming concrete types: `editor.addTool(SelectTool.create())`. A crate that ships more tools exports its own factory returning a `BoxedTool` (`Tool` in JS), built with `BoxedTool::new(MyTool::default())`. Tool crates must be compiled into the same `.wasm` as the editor, so a build that includes extra tool crates needs a top-level crate that depends on `mesh-editor-core` and on them.
 
 Add `--dev` for a faster, unoptimized build.
+
+## Overlay shaders
+
+`topology-overlay/shaders/` holds GLSL ES 3.00 shaders that draw the overlay buffers as WebGL2 data textures, one instanced draw per component kind. They're embedded in the `.wasm`: JS reads them from `topologyOverlayShaders()`.
+
+Each program owns its `main()` and calls hook functions that the consumer defines, so camera transforms, depth writing (such as log depth), gamma correction, and pick encoding stay on the consumer's side:
+
+| Stage | Hook |
+| --- | --- |
+| Vertex | `vec4 topologyOverlay_modelToEye(vec3 positionMC)` |
+| Vertex | `vec4 topologyOverlay_eyeToClip(vec4 positionEC)` |
+| Vertex | `vec2 topologyOverlay_viewportSize()` |
+| Vertex | `void topologyOverlay_setPickOutputs(uint componentIndex)` |
+| Fragment | `void topologyOverlay_writeColor(vec4 color)` |
+
+Build each stage as `#version 300 es`, then the program's source, then the hook definitions. `defaultHooks` defines them for plain WebGL2.
+
+The WebGL tests compile and link every program in headless Chromium, so they need a built package:
+
+```sh
+npm install
+npx playwright install chromium   # first time only
+npm run build:wasm
+npm run test:webgl
+```
 
 ## Docs
 
