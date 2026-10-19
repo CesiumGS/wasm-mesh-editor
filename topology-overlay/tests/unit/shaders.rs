@@ -1,6 +1,6 @@
 use super::*;
 
-const PROGRAMS: [(&str, ShaderSources); 2] = [("point", POINT), ("face", FACE)];
+const PROGRAMS: [(&str, ShaderSources); 3] = [("point", POINT), ("edge", EDGE), ("face", FACE)];
 
 /// Names of `topologyOverlay_*` functions declared without a body (`...);`).
 fn hook_prototypes(source: &str) -> Vec<&str> {
@@ -34,7 +34,7 @@ fn programs_declare_the_hook_interface() {
                 "topologyOverlay_modelToEye",
                 "topologyOverlay_eyeToClip",
                 "topologyOverlay_viewportSize",
-                "topologyOverlay_setPickOutputs",
+                "topologyOverlay_setVertexOutputs",
             ],
             "{name}"
         );

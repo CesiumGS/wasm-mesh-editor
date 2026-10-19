@@ -20,6 +20,6 @@ vec2 topologyOverlay_viewportSize()
     return u_viewportSize;
 }
 
-void topologyOverlay_setPickOutputs(uint componentIndex)
+void topologyOverlay_setVertexOutputs(vec4 positionEC, uint componentIndex)
 {
 }

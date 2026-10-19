@@ -32,6 +32,19 @@ pub const POINT: ShaderSources = ShaderSources {
     ),
 };
 
+/// Edges: draw `edges.len()` instances of 4 vertices each as `TRIANGLE_STRIP`.
+/// `u_edgeWidth` is in the pixels of `topologyOverlay_viewportSize()`.
+pub const EDGE: ShaderSources = ShaderSources {
+    vertex: concat!(
+        shader!("TopologyOverlayCommonVS"),
+        shader!("TopologyOverlayEdgeVS")
+    ),
+    fragment: concat!(
+        shader!("TopologyOverlayCommonFS"),
+        shader!("TopologyOverlayEdgeFS")
+    ),
+};
+
 /// Faces: draw `triangles.len()` instances of 3 vertices each as `TRIANGLES`.
 pub const FACE: ShaderSources = ShaderSources {
     vertex: concat!(

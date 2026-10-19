@@ -16,8 +16,9 @@ void main()
     vec3 positionMC = topologyOverlay_fetchPosition(triangle[gl_VertexID]);
     vec4 positionEC = topologyOverlay_applyDepthBias(topologyOverlay_modelToEye(positionMC));
 
+    gl_Position = topologyOverlay_eyeToClip(positionEC);
+
     v_positionEC = positionEC.xyz;
     v_selected = topologyOverlay_fetchSelected(faceIndex);
-    gl_Position = topologyOverlay_eyeToClip(positionEC);
-    topologyOverlay_setPickOutputs(faceIndex);
+    topologyOverlay_setVertexOutputs(positionEC, faceIndex);
 }

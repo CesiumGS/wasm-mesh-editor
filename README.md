@@ -59,8 +59,10 @@ Each program owns its `main()` and calls hook functions that the consumer define
 | Vertex | `vec4 topologyOverlay_modelToEye(vec3 positionMC)` |
 | Vertex | `vec4 topologyOverlay_eyeToClip(vec4 positionEC)` |
 | Vertex | `vec2 topologyOverlay_viewportSize()` |
-| Vertex | `void topologyOverlay_setPickOutputs(uint componentIndex)` |
+| Vertex | `void topologyOverlay_setVertexOutputs(vec4 positionEC, uint componentIndex)` |
 | Fragment | `void topologyOverlay_writeColor(vec4 color)` |
+
+`topologyOverlay_eyeToClip` must be linear, like a projection matrix, and free of side effects: edges call it twice per vertex and interpolate its results to clip to the near plane. `topologyOverlay_setVertexOutputs` is called once per vertex after `gl_Position` is final, with the vertex's eye position and the drawn component's overlay index: the place for custom depth (it may adjust `gl_Position`'s depth, as Cesium's `czm_vertexLogDepth()` does) and pick colors.
 
 Build each stage as `#version 300 es`, then the program's source, then the hook definitions. `defaultHooks` defines them for plain WebGL2. Point and edge sizes are in the pixels of `topologyOverlay_viewportSize()`, so scale them by the device pixel ratio. Upload each buffer as a texture with `NEAREST` min and mag filters: the default filters leave data textures incomplete, and the shaders then read zeros.
 

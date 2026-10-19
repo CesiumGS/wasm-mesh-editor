@@ -12,6 +12,7 @@
         "glsl",
         "gons",
         "highp",
+        "inout",
         "ivec",
         "nontrapping",
         "pickable",

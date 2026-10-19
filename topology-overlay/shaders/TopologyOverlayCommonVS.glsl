@@ -10,12 +10,16 @@ precision highp int;
 
 // Model space to eye space, e.g. `modelView * vec4(positionMC, 1.0)`.
 vec4 topologyOverlay_modelToEye(vec3 positionMC);
-// Eye space to clip space, e.g. `projection * positionEC`. Also the place to compute custom depth.
+// Eye space to clip space, e.g. `projection * positionEC`. Must be linear, like a projection
+// matrix, and free of side effects: it may be called more than once per vertex, and edges
+// interpolate its results.
 vec4 topologyOverlay_eyeToClip(vec4 positionEC);
 // Viewport size in pixels. Point and edge sizes are in the same pixels.
 vec2 topologyOverlay_viewportSize();
-// Called once per vertex with the drawn component's overlay index, for the consumer's pick pass.
-void topologyOverlay_setPickOutputs(uint componentIndex);
+// Called once per vertex, after `gl_Position` is final, with the vertex's eye position (before
+// any screen-space offset) and the drawn component's overlay index. The place for per-vertex
+// outputs such as custom depth and pick colors. May adjust `gl_Position`'s depth.
+void topologyOverlay_setVertexOutputs(vec4 positionEC, uint componentIndex);
 
 // ---- Overlay buffers, one texel per element ----
 
@@ -48,4 +52,12 @@ vec4 topologyOverlay_applyDepthBias(vec4 positionEC)
 {
     positionEC.z += abs(positionEC.z) * u_depthBias;
     return positionEC;
+}
+
+// Moves a clip position by a screen-space offset in pixels, keeping its depth and `w`.
+vec4 topologyOverlay_offsetByPixels(vec4 positionClip, vec2 offsetPixels)
+{
+    // An offset of `2 / viewport` in normalized device coordinates is one pixel.
+    vec2 offsetNDC = offsetPixels * 2.0 / topologyOverlay_viewportSize();
+    return positionClip + vec4(offsetNDC * positionClip.w, 0.0, 0.0);
 }
