@@ -62,7 +62,7 @@ Each program owns its `main()` and calls hook functions that the consumer define
 | Vertex | `void topologyOverlay_setPickOutputs(uint componentIndex)` |
 | Fragment | `void topologyOverlay_writeColor(vec4 color)` |
 
-Build each stage as `#version 300 es`, then the program's source, then the hook definitions. `defaultHooks` defines them for plain WebGL2.
+Build each stage as `#version 300 es`, then the program's source, then the hook definitions. `defaultHooks` defines them for plain WebGL2. Point and edge sizes are in the pixels of `topologyOverlay_viewportSize()`, so scale them by the device pixel ratio. Upload each buffer as a texture with `NEAREST` min and mag filters: the default filters leave data textures incomplete, and the shaders then read zeros.
 
 The WebGL tests compile and link every program in headless Chromium, so they need a built package:
 

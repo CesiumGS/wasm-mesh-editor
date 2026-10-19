@@ -19,6 +19,19 @@ macro_rules! shader {
     };
 }
 
+/// Points: draw `positions.len()` instances of 4 vertices each as `TRIANGLE_STRIP`.
+/// `u_pointSize` is a diameter in the pixels of `topologyOverlay_viewportSize()`.
+pub const POINT: ShaderSources = ShaderSources {
+    vertex: concat!(
+        shader!("TopologyOverlayCommonVS"),
+        shader!("TopologyOverlayPointVS")
+    ),
+    fragment: concat!(
+        shader!("TopologyOverlayCommonFS"),
+        shader!("TopologyOverlayPointFS")
+    ),
+};
+
 /// Faces: draw `triangles.len()` instances of 3 vertices each as `TRIANGLES`.
 pub const FACE: ShaderSources = ShaderSources {
     vertex: concat!(

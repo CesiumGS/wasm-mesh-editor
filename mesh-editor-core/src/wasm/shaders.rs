@@ -26,6 +26,9 @@ impl From<shaders::ShaderSources> for ShaderSources {
 
 /// Shaders that draw the buffers from `overlayViews` as WebGL2 data textures.
 ///
+/// Upload each buffer as a texture with `NEAREST` min and mag filters: the default filters leave
+/// data textures incomplete, and the shaders then read zeros.
+///
 /// Each program owns `main()` and calls hooks that the consumer defines:
 /// - vertex: `vec4 topologyOverlay_modelToEye(vec3 positionMC)`,
 ///   `vec4 topologyOverlay_eyeToClip(vec4 positionEC)`, `vec2 topologyOverlay_viewportSize()`,
@@ -34,6 +37,9 @@ impl From<shaders::ShaderSources> for ShaderSources {
 #[derive(Serialize, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct TopologyOverlayShaders {
+    /// Points: `positions.elementCount` instances of 4 vertices each, drawn as `TRIANGLE_STRIP`.
+    /// `u_pointSize` is a diameter in the pixels of `topologyOverlay_viewportSize()`.
+    point: ShaderSources,
     /// Faces: `triangles.elementCount` instances of 3 vertices each, drawn as `TRIANGLES`.
     face: ShaderSources,
     /// Hooks for plain WebGL2, driven by `u_modelView`, `u_projection`, and `u_viewportSize`.
@@ -45,6 +51,7 @@ pub struct TopologyOverlayShaders {
 #[wasm_bindgen(js_name = topologyOverlayShaders)]
 pub fn topology_overlay_shaders() -> Result<Ts<TopologyOverlayShaders>, JsError> {
     Ok(TopologyOverlayShaders {
+        point: shaders::POINT.into(),
         face: shaders::FACE.into(),
         default_hooks: shaders::DEFAULT_HOOKS.into(),
     }

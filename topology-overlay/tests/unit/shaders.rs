@@ -1,5 +1,7 @@
 use super::*;
 
+const PROGRAMS: [(&str, ShaderSources); 2] = [("point", POINT), ("face", FACE)];
+
 /// Names of `topologyOverlay_*` functions declared without a body (`...);`).
 fn hook_prototypes(source: &str) -> Vec<&str> {
     source
@@ -25,49 +27,58 @@ fn defines(source: &str, function: &str) -> bool {
 
 #[test]
 fn programs_declare_the_hook_interface() {
-    assert_eq!(
-        hook_prototypes(FACE.vertex),
-        [
-            "topologyOverlay_modelToEye",
-            "topologyOverlay_eyeToClip",
-            "topologyOverlay_viewportSize",
-            "topologyOverlay_setPickOutputs",
-        ]
-    );
-    assert_eq!(
-        hook_prototypes(FACE.fragment),
-        ["topologyOverlay_writeColor"]
-    );
+    for (name, program) in PROGRAMS {
+        assert_eq!(
+            hook_prototypes(program.vertex),
+            [
+                "topologyOverlay_modelToEye",
+                "topologyOverlay_eyeToClip",
+                "topologyOverlay_viewportSize",
+                "topologyOverlay_setPickOutputs",
+            ],
+            "{name}"
+        );
+        assert_eq!(
+            hook_prototypes(program.fragment),
+            ["topologyOverlay_writeColor"],
+            "{name}"
+        );
+    }
 }
 
 #[test]
 fn default_hooks_define_every_declared_hook() {
-    for (stage, program, hooks) in [
-        ("vertex", FACE.vertex, DEFAULT_HOOKS.vertex),
-        ("fragment", FACE.fragment, DEFAULT_HOOKS.fragment),
-    ] {
-        let declared = hook_prototypes(program);
-        assert!(!declared.is_empty(), "no {stage} hooks found");
-
-        for hook in declared {
-            assert!(
-                defines(hooks, hook),
-                "default {stage} hooks don't define {hook}"
-            );
+    for (_, program) in PROGRAMS {
+        for (stage, source, hooks) in [
+            ("vertex", program.vertex, DEFAULT_HOOKS.vertex),
+            ("fragment", program.fragment, DEFAULT_HOOKS.fragment),
+        ] {
+            for hook in hook_prototypes(source) {
+                assert!(
+                    defines(hooks, hook),
+                    "default {stage} hooks don't define {hook}"
+                );
+            }
         }
     }
 }
 
 #[test]
 fn programs_start_with_their_stage_declarations() {
-    assert!(
-        FACE.vertex
-            .starts_with("// Topology overlay: declarations shared by every vertex")
-    );
-    assert!(
-        FACE.fragment
-            .starts_with("// Topology overlay: declarations shared by every fragment")
-    );
-    assert_eq!(FACE.vertex.matches("void main()").count(), 1);
-    assert_eq!(FACE.fragment.matches("void main()").count(), 1);
+    for (name, program) in PROGRAMS {
+        assert!(
+            program
+                .vertex
+                .starts_with("// Topology overlay: declarations shared by every vertex"),
+            "{name}"
+        );
+        assert!(
+            program
+                .fragment
+                .starts_with("// Topology overlay: declarations shared by every fragment"),
+            "{name}"
+        );
+        assert_eq!(program.vertex.matches("void main()").count(), 1, "{name}");
+        assert_eq!(program.fragment.matches("void main()").count(), 1, "{name}");
+    }
 }
