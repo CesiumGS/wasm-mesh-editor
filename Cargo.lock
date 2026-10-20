@@ -44,7 +44,9 @@ dependencies = [
 name = "mesh-editor-core"
 version = "0.1.0"
 dependencies = [
+ "glam",
  "mesh-core",
+ "slotmap",
  "topology-overlay",
 ]
 
