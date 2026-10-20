@@ -18,6 +18,6 @@ pub use mesh::Ray as WorldRay;
 pub use mesh_editor::{MeshEditor, MeshKey, MeshNotFound, ToolActivationError, UpdateResult};
 pub use mesh_transform::MeshTransform;
 pub use tool::{
-    Modifiers, PickResult, PointerInput, SceneInput, Tool, ToolAccessor, ToolContext, ToolHandle,
-    ToolId,
+    Modifiers, PickResult, PointerInput, SceneInput, SelectTool, Tool, ToolAccessor, ToolContext,
+    ToolHandle, ToolId, TranslateTool,
 };
