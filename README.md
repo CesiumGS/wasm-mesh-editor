@@ -7,7 +7,7 @@ A modular mesh-editing library for the web and native. Use it headless, or bring
 | Crate | Role |
 | --- | --- |
 | `mesh-core` | Headless mesh kernel based on a radial edge structure. |
-| `topology-overlay` | A translation layer from the mesh data model to GPU-ready data buffers for drawing the mesh overlay (points, edges, and faces). |
+| `topology-overlay` | A translation layer from the mesh data model to GPU-ready data buffers for drawing the mesh overlay (points, edges, and faces), plus the WebGL2 shaders that draw them. |
 | `mesh-editor-core` | An orchestration layer for composing multiple meshes and overlays, and manager of global state (like edit mode, tools, etc.). |
 | `mesh-editor-wasm` | The `wasm-bindgen` boundary. Compiles the above crates into one `.wasm` (with shared linear memory) and exposes the API to JS. The only crate that knows about JS. |
 
