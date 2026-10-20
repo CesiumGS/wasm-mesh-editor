@@ -6,5 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+glam.workspace = true
 mesh = { path = "../mesh" }
+slotmap.workspace = true
 topology-overlay = { path = "../topology-overlay" }
