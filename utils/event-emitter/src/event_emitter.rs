@@ -12,9 +12,8 @@ impl<T> AsRef<T> for Event<T> {
     }
 }
 
-/// A single-threaded broadcaster with an unbounded queue per subscriber.
-///
-/// Emission queues shared payload handles without invoking consumer code.
+/// A single-threaded broadcaster with an unbounded event queue per subscriber.
+/// Each "Sender" is a handle to a subscriber's personal event queue.
 pub struct EventEmitter<T> {
     senders: Vec<Sender<Event<T>>>,
 }
@@ -33,11 +32,11 @@ impl<T> EventEmitter<T> {
         }
     }
 
-    /// Subscribes to future events in emission order.
+    /// Subscribe to (future) events (in emission order).
     ///
     /// The receiver does not borrow the emitter. Drain it regularly with
     /// [`Receiver::try_iter`] or [`Receiver::try_recv`] to avoid a backlog.
-    /// Dropping it discards its queued handles and unsubscribes; its sender is
+    /// Dropping the receiver discards its queued handles and unsubscribes; its sender is
     /// removed on the next emission.
     pub fn subscribe(&mut self) -> Receiver<Event<T>> {
         let (sender, receiver) = mpsc::channel();
@@ -46,9 +45,9 @@ impl<T> EventEmitter<T> {
     }
 
     /// Moves an event into shared storage and queues a handle for each subscriber.
+    /// The payload itself is not cloned.
     ///
-    /// The payload is not cloned. Returning does not mean consumers have
-    /// processed it. Disconnected subscribers are removed without an error.
+    /// Consumers process events asynchronously. Disconnected subscribers are removed without an error.
     pub fn emit(&mut self, event: T) {
         let event = Rc::new(event);
         self.senders
