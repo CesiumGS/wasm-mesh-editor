@@ -52,7 +52,7 @@ Add `--dev` for a faster, unoptimized build.
 
 `topology-overlay/shaders/` holds GLSL ES 3.00 shaders that draw the overlay buffers as WebGL2 data textures, one instanced draw per component kind. They're embedded in the `.wasm`: JS reads them from `topologyOverlayShaders()`.
 
-Each program owns its `main()` and calls hook functions that the consumer defines, so camera transforms, depth writing (such as log depth), gamma correction, and pick encoding stay on the consumer's side:
+Each shader owns its `main()` and calls hook functions that the consumer defines, so camera transforms, depth writing (such as log depth), gamma correction, and pick encoding stay on the consumer's side:
 
 | Stage | Hook |
 | --- | --- |
@@ -64,9 +64,9 @@ Each program owns its `main()` and calls hook functions that the consumer define
 
 `topologyOverlay_eyeToClip` must be linear, like a projection matrix, and free of side effects: edges call it twice per vertex and interpolate its results to clip to the near plane. `topologyOverlay_setVertexOutputs` is called once per vertex after `gl_Position` is final, with the vertex's eye position and the drawn component's overlay index: the place for custom depth (it may adjust `gl_Position`'s depth, as Cesium's `czm_vertexLogDepth()` does) and pick colors.
 
-Build each stage as `#version 300 es`, then the program's source, then the hook definitions. `defaultHooks` defines them for plain WebGL2. Point and edge sizes are in the pixels of `topologyOverlay_viewportSize()`, so scale them by the device pixel ratio. Upload each buffer as a texture with `NEAREST` min and mag filters: the default filters leave data textures incomplete, and the shaders then read zeros.
+Build each stage as `#version 300 es`, then the shader's source, then the hook definitions. `defaultHooks` defines them for plain WebGL2. Bind each overlay buffer's texture to its `layout.uniformName` from `overlayViews`; `topologyOverlayShaders().uniforms` names the rest, such as each shader's sizes and colors, the shared depth bias, and the view uniforms that the default hooks declare. Point and edge sizes are in the pixels of `topologyOverlay_viewportSize()`, so scale them by the device pixel ratio. Upload each buffer as a texture with `NEAREST` min and mag filters: the default filters leave data textures incomplete, and the shaders then read zeros.
 
-The WebGL tests compile and link every program in headless Chromium, so they need a built package:
+The WebGL tests compile and link every shader in headless Chromium, so they need a built package:
 
 ```sh
 npm install
