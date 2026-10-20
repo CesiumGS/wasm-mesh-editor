@@ -16,6 +16,8 @@ mod mesh_component;
 mod selection;
 mod topology;
 mod vert;
+#[cfg(feature = "wasm")]
+mod wasm;
 
 pub use attributes::Attributes;
 pub use edge::{Edge, EdgeRef};

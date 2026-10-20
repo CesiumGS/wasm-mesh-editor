@@ -13,6 +13,7 @@ new_key_type! {
 
 /// A selectable component kind. Loops are internal and excluded.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub enum ComponentType {
     Vertex,
     Edge,
