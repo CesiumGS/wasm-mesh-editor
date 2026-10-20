@@ -1,0 +1,436 @@
+use std::ops::{Index, IndexMut, Range};
+use std::sync::mpsc::Receiver;
+
+use event_emitter::Event;
+use mesh_core::{
+    AttributeChange, ComponentKey, ComponentType, EdgeKey, FaceKey, Mesh, MeshChange,
+    SelectionChange, VertKey,
+};
+use slotmap::{Key, SecondaryMap};
+
+/// A component as the renderer identifies it, e.g. from a picking pass: its index in the
+/// overlay buffers for that component kind. Faces use the triangle's face index.
+/// Indices can change after topology edits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OverlayComponent {
+    pub kind: ComponentType,
+    pub index: u32,
+}
+
+/// A buffer and the entries changed by the latest update.
+#[derive(Default)]
+pub struct OverlayBuffer<T> {
+    pub data: Vec<T>,
+    /// The smallest range of `data` (element indices, not bytes) covering every entry changed by
+    /// the latest update, or `None` if nothing changed. May include unchanged entries between
+    /// changed ones.
+    pub dirty_range: Option<Range<usize>>,
+}
+
+impl<T> OverlayBuffer<T> {
+    fn new(data: Vec<T>) -> Self {
+        Self {
+            data,
+            dirty_range: None,
+        }
+    }
+
+    /// Grows `dirty_range` to also cover `range`. Does nothing if `range` is empty.
+    fn extend_dirty_range(&mut self, range: Range<usize>) {
+        if range.is_empty() {
+            return;
+        }
+
+        self.dirty_range = Some(match self.dirty_range.take() {
+            Some(dirty) => dirty.start.min(range.start)..dirty.end.max(range.end),
+            None => range,
+        });
+    }
+}
+
+/// Collects indices in a loop into the smallest covering range, to apply to a buffer once.
+struct DirtyRangeBuilder {
+    start: usize,
+    end: usize,
+}
+
+impl DirtyRangeBuilder {
+    fn new() -> Self {
+        Self {
+            start: usize::MAX,
+            end: 0,
+        }
+    }
+
+    fn include(&mut self, index: usize) {
+        self.start = self.start.min(index);
+        self.end = self.end.max(index + 1);
+    }
+
+    /// The covering range, or an empty range if no index was included.
+    fn build(self) -> Range<usize> {
+        self.start..self.end
+    }
+}
+
+/// Selection buffers by component kind: 0 unselected, 255 selected.
+#[derive(Default)]
+pub struct SelectionBuffers {
+    pub verts: OverlayBuffer<u8>,
+    pub edges: OverlayBuffer<u8>,
+    pub faces: OverlayBuffer<u8>,
+}
+
+impl Index<ComponentType> for SelectionBuffers {
+    type Output = OverlayBuffer<u8>;
+
+    fn index(&self, kind: ComponentType) -> &Self::Output {
+        match kind {
+            ComponentType::Vertex => &self.verts,
+            ComponentType::Edge => &self.edges,
+            ComponentType::Face => &self.faces,
+        }
+    }
+}
+
+impl IndexMut<ComponentType> for SelectionBuffers {
+    fn index_mut(&mut self, kind: ComponentType) -> &mut Self::Output {
+        match kind {
+            ComponentType::Vertex => &mut self.verts,
+            ComponentType::Edge => &mut self.edges,
+            ComponentType::Face => &mut self.faces,
+        }
+    }
+}
+
+/// Mesh data packed for rendering.
+#[derive(Default)]
+pub struct OverlayBuffers {
+    /// One `[x, y, z, 0.0]` per vertex. Point instances index this directly.
+    pub positions: OverlayBuffer<[f32; 4]>,
+    /// Two position indices per edge.
+    pub edges: OverlayBuffer<[u32; 2]>,
+    /// Three position indices and a face index per triangle.
+    pub triangles: OverlayBuffer<[u32; 4]>,
+    /// Selection by vertex, edge, or face index: 0 unselected, 255 selected.
+    pub selection: SelectionBuffers,
+    /// Upload all buffers and refresh picking maps. Dirty ranges are `None` when this is set.
+    /// True on the first update and after topology edits.
+    pub full_refresh: bool,
+}
+
+impl OverlayBuffers {
+    fn new(
+        mesh: &Mesh,
+        vertices: &[VertKey],
+        edges: &[EdgeKey],
+        faces: &[FaceKey],
+        vertex_indices: &SecondaryMap<VertKey, u32>,
+        edge_indices: &SecondaryMap<EdgeKey, u32>,
+        face_indices: &SecondaryMap<FaceKey, u32>,
+    ) -> Self {
+        let positions = vertices
+            .iter()
+            .map(|&key| mesh.attributes().positions[key].extend(0.0).to_array())
+            .collect();
+
+        let edge_endpoints = edges
+            .iter()
+            .map(|&key| {
+                mesh.edge(key)
+                    .unwrap()
+                    .verts()
+                    .map(|key| vertex_indices[key])
+            })
+            .collect();
+
+        let topology = mesh.topology();
+        let triangle_count = topology.loop_count() - 2 * topology.face_count();
+        let mut triangles = Vec::with_capacity(triangle_count);
+
+        for (index, &key) in faces.iter().enumerate() {
+            let face_index = index as u32;
+
+            for triangle in mesh.face(key).unwrap().triangulation() {
+                let [first, second, third] = triangle.map(|key| vertex_indices[key]);
+                triangles.push([first, second, third, face_index]);
+            }
+        }
+
+        let selected = mesh.selection();
+        let mut selection = SelectionBuffers {
+            verts: OverlayBuffer::new(vec![0; vertices.len()]),
+            edges: OverlayBuffer::new(vec![0; edges.len()]),
+            faces: OverlayBuffer::new(vec![0; faces.len()]),
+        };
+
+        // Generally speaking, these loops do nothing (since TopologyOverlay is usually created over a new mesh, with nothing selected yet)
+        for key in selected.verts() {
+            selection[ComponentType::Vertex].data[vertex_indices[key] as usize] = 255;
+        }
+
+        for key in selected.edges() {
+            selection[ComponentType::Edge].data[edge_indices[key] as usize] = 255;
+        }
+
+        for key in selected.faces() {
+            selection[ComponentType::Face].data[face_indices[key] as usize] = 255;
+        }
+
+        Self {
+            positions: OverlayBuffer::new(positions),
+            edges: OverlayBuffer::new(edge_endpoints),
+            triangles: OverlayBuffer::new(triangles),
+            selection,
+            full_refresh: true,
+        }
+    }
+
+    fn clear_changes(&mut self) {
+        self.full_refresh = false;
+        self.positions.dirty_range = None;
+        self.edges.dirty_range = None;
+        self.triangles.dirty_range = None;
+
+        for kind in [
+            ComponentType::Vertex,
+            ComponentType::Edge,
+            ComponentType::Face,
+        ] {
+            self.selection[kind].dirty_range = None;
+        }
+    }
+}
+
+#[derive(Default)]
+enum PendingChanges {
+    #[default]
+    None,
+    Partial,
+    Full,
+}
+
+impl PendingChanges {
+    /// Upgrades a `PendingChanges` from `None` to `Partial` if it hasn't been set yet.
+    /// Does nothing if the `PendingChanges` is already `Partial` or `Full`.
+    fn request_partial(&mut self) {
+        if matches!(self, Self::None) {
+            *self = Self::Partial;
+        }
+    }
+}
+
+/// Translates mesh data into a GPU-friendly representation. This is not the renderer, just a translation layer.
+/// It triangulates the mesh and creates + maintains CPU-side arrays, but does not manage any GPU resources itself.
+#[allow(dead_code)]
+pub struct TopologyOverlay {
+    buffers: OverlayBuffers,
+    // Structures for mapping between mesh keys and buffer keys
+    vertex_key_to_buffer_index: SecondaryMap<VertKey, u32>,
+    edge_key_to_buffer_index: SecondaryMap<EdgeKey, u32>,
+    face_key_to_buffer_index: SecondaryMap<FaceKey, u32>,
+    // Structures for mapping between buffer indices and mesh keys (e.g. for picking)
+    buffer_index_to_vertex_key: Vec<VertKey>,
+    buffer_index_to_edge_key: Vec<EdgeKey>,
+    buffer_index_to_face_key: Vec<FaceKey>,
+    pending_upload: PendingChanges,
+    mesh_changes: Receiver<Event<MeshChange>>,
+}
+
+impl TopologyOverlay {
+    /// Builds buffers, subscribes to changes, and queues a full upload for `update`.
+    pub fn new(mesh: &mut Mesh) -> Self {
+        let mut overlay = Self {
+            buffers: OverlayBuffers::default(),
+            vertex_key_to_buffer_index: SecondaryMap::new(),
+            edge_key_to_buffer_index: SecondaryMap::new(),
+            face_key_to_buffer_index: SecondaryMap::new(),
+            buffer_index_to_vertex_key: Vec::new(),
+            buffer_index_to_edge_key: Vec::new(),
+            buffer_index_to_face_key: Vec::new(),
+            pending_upload: PendingChanges::None,
+            mesh_changes: mesh.subscribe(),
+        };
+
+        overlay.rebuild(mesh);
+        overlay
+    }
+
+    /// Drains mesh changes and returns buffers to upload, or `None` if nothing changed.
+    /// The first call returns a full upload, even if no changes have arrived.
+    /// Pass the same mesh used in `new`. Topology edits rebuild all buffers.
+    /// Consume the result before the next update, which clears the previous dirty ranges.
+    pub fn update(&mut self, mesh: &Mesh) -> Option<&OverlayBuffers> {
+        self.buffers.clear_changes();
+        self.process_mesh_changes(mesh);
+
+        let pending = std::mem::take(&mut self.pending_upload);
+        if matches!(pending, PendingChanges::None) {
+            return None;
+        }
+
+        if matches!(pending, PendingChanges::Full) {
+            self.buffers.clear_changes();
+            self.buffers.full_refresh = true;
+        }
+
+        Some(&self.buffers)
+    }
+
+    /// Borrows the packed buffers. Queued mesh changes are applied by [`Self::update`].
+    pub fn buffers(&self) -> &OverlayBuffers {
+        &self.buffers
+    }
+
+    /// Returns the component key for an overlay component, or `None` if its index is out of bounds.
+    pub fn component_key(&self, component: OverlayComponent) -> Option<ComponentKey> {
+        let index = component.index as usize;
+
+        match component.kind {
+            ComponentType::Vertex => self
+                .buffer_index_to_vertex_key
+                .get(index)
+                .copied()
+                .map(ComponentKey::Vert),
+            ComponentType::Edge => self
+                .buffer_index_to_edge_key
+                .get(index)
+                .copied()
+                .map(ComponentKey::Edge),
+            ComponentType::Face => self
+                .buffer_index_to_face_key
+                .get(index)
+                .copied()
+                .map(ComponentKey::Face),
+        }
+    }
+
+    fn process_mesh_changes(&mut self, mesh: &Mesh) {
+        while let Ok(event) = self.mesh_changes.try_recv() {
+            match event.as_ref() {
+                MeshChange::Topology(change) if !change.is_empty() => {
+                    self.mesh_changes.try_iter().for_each(drop);
+                    self.rebuild(mesh);
+                    break;
+                }
+                MeshChange::Attributes(AttributeChange::Position(keys)) => {
+                    self.update_positions(mesh, keys.iter().copied());
+                }
+                MeshChange::Selection(change) => self.update_selection(change),
+                _ => {}
+            }
+        }
+    }
+
+    fn update_positions(&mut self, mesh: &Mesh, keys: impl IntoIterator<Item = VertKey>) {
+        let mut dirty = DirtyRangeBuilder::new();
+
+        for key in keys {
+            let (Some(&index), Some(position)) = (
+                self.vertex_key_to_buffer_index.get(key),
+                mesh.attributes().positions.get(key),
+            ) else {
+                continue;
+            };
+
+            let index = index as usize;
+            self.buffers.positions.data[index] = position.extend(0.0).to_array();
+            dirty.include(index);
+        }
+
+        let dirty = dirty.build();
+        if !dirty.is_empty() {
+            self.buffers.positions.extend_dirty_range(dirty);
+            self.pending_upload.request_partial();
+        }
+    }
+
+    fn update_selection(&mut self, change: &SelectionChange) {
+        for (keys, value) in [(&change.added, 255), (&change.removed, 0)] {
+            Self::set_selection(
+                &mut self.buffers.selection[ComponentType::Vertex],
+                &keys.verts,
+                &self.vertex_key_to_buffer_index,
+                value,
+            );
+            Self::set_selection(
+                &mut self.buffers.selection[ComponentType::Edge],
+                &keys.edges,
+                &self.edge_key_to_buffer_index,
+                value,
+            );
+            Self::set_selection(
+                &mut self.buffers.selection[ComponentType::Face],
+                &keys.faces,
+                &self.face_key_to_buffer_index,
+                value,
+            );
+        }
+
+        if !change.is_empty() {
+            self.pending_upload.request_partial();
+        }
+    }
+
+    fn set_selection<K: Key>(
+        buffer: &mut OverlayBuffer<u8>,
+        keys: &[K],
+        indices: &SecondaryMap<K, u32>,
+        value: u8,
+    ) {
+        let mut dirty = DirtyRangeBuilder::new();
+
+        for &key in keys {
+            let Some(&index) = indices.get(key) else {
+                continue;
+            };
+
+            let index = index as usize;
+            buffer.data[index] = value;
+            dirty.include(index);
+        }
+
+        buffer.extend_dirty_range(dirty.build());
+    }
+
+    fn rebuild(&mut self, mesh: &Mesh) {
+        let topology = mesh.topology();
+
+        let buffer_index_to_vertex_key: Vec<VertKey> = topology.verts().collect();
+        let buffer_index_to_edge_key: Vec<EdgeKey> = topology.edges().collect();
+        let buffer_index_to_face_key: Vec<FaceKey> = topology.faces().collect();
+
+        let vertex_key_to_buffer_index = build_key_to_buffer_index(&buffer_index_to_vertex_key);
+        let edge_key_to_buffer_index = build_key_to_buffer_index(&buffer_index_to_edge_key);
+        let face_key_to_buffer_index = build_key_to_buffer_index(&buffer_index_to_face_key);
+
+        self.buffers = OverlayBuffers::new(
+            mesh,
+            &buffer_index_to_vertex_key,
+            &buffer_index_to_edge_key,
+            &buffer_index_to_face_key,
+            &vertex_key_to_buffer_index,
+            &edge_key_to_buffer_index,
+            &face_key_to_buffer_index,
+        );
+
+        self.vertex_key_to_buffer_index = vertex_key_to_buffer_index;
+        self.edge_key_to_buffer_index = edge_key_to_buffer_index;
+        self.face_key_to_buffer_index = face_key_to_buffer_index;
+        self.buffer_index_to_vertex_key = buffer_index_to_vertex_key;
+        self.buffer_index_to_edge_key = buffer_index_to_edge_key;
+        self.buffer_index_to_face_key = buffer_index_to_face_key;
+        self.pending_upload = PendingChanges::Full;
+    }
+}
+
+fn build_key_to_buffer_index<K: Key>(keys: &[K]) -> SecondaryMap<K, u32> {
+    keys.iter()
+        .enumerate()
+        .map(|(index, &key)| (key, index as u32))
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "../tests/unit/topologyoverlay.rs"]
+mod tests;
