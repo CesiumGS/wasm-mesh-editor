@@ -10,6 +10,12 @@ A modular mesh-editing library for the web and native. Use it headless, or bring
 | `topology-overlay` | A translation layer from the mesh data model to GPU-ready data buffers for drawing the mesh overlay (points, edges, and faces). |
 | `mesh-editor` | An orchestration layer for composing multiple meshes and overlays, and manager of global state (like edit mode, tools, etc.). |
 
+Small, reusable utility crates live under `utils/`:
+
+| Crate | Role |
+| --- | --- |
+| [event-emitter](utils/event-emitter/) | Queued broadcasts with shared read-only payloads and receiver-owned subscriptions. |
+
 ## Prerequisites
 
 - [Rust](https://rustup.rs/) (stable; edition 2024 needs 1.85+)
