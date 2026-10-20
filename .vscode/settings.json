@@ -6,5 +6,7 @@
     },
     // Swap the default background syntax compiler from "cargo check" to "clippy"
     // This runs Rust's strict idiomatic linter in the background as you code
-    "rust-analyzer.check.command": "clippy"
+    "rust-analyzer.check.command": "clippy",
+    // Check the wasm-only bindings (mesh-editor-core/src/wasm.rs) too
+    "rust-analyzer.cargo.features": ["mesh-editor-core/wasm"]
 }

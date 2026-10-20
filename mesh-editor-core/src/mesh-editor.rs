@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use mesh_core::Mesh;
 use slotmap::{SecondaryMap, SlotMap, new_key_type};
 use topology_overlay::{OverlayBuffers, TopologyOverlay};
+#[cfg(feature = "wasm")]
+use wasm_bindgen::prelude::wasm_bindgen;
 
 use crate::{EditMode, Tool, ToolAccessor, ToolContext, ToolHandle, ToolId};
 
@@ -21,6 +23,7 @@ new_key_type! {
 
 /// Owns registered meshes and coordinates their overlays and active tool.
 /// Tool, mode, and active-mesh changes cancel the current interaction first.
+#[cfg_attr(feature = "wasm", wasm_bindgen)]
 pub struct MeshEditor {
     meshes: SlotMap<MeshKey, Mesh>,
     overlays: SecondaryMap<MeshKey, TopologyOverlay>,
@@ -37,8 +40,10 @@ impl Default for MeshEditor {
     }
 }
 
+#[cfg_attr(feature = "wasm", wasm_bindgen)]
 impl MeshEditor {
     /// Creates an editor with no meshes or active tool, in `EditMode::NONE`.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(constructor))]
     pub fn new() -> Self {
         Self {
             meshes: SlotMap::with_key(),
@@ -52,11 +57,13 @@ impl MeshEditor {
     }
 
     /// Returns the editing policy, including component visibility for the renderer.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter))]
     pub fn mode(&self) -> EditMode {
         self.mode
     }
 
     /// Registers a mesh and builds its topology overlay. The mesh starts inactive.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = addMesh))]
     pub fn add_mesh(&mut self, mut mesh: Mesh) -> MeshKey {
         let overlay = TopologyOverlay::new(&mut mesh);
         let key = self.meshes.insert(mesh);
@@ -68,6 +75,7 @@ impl MeshEditor {
     }
 
     /// Removes a registered mesh from the editor and returns ownership to the caller.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = removeMesh))]
     pub fn remove_mesh(&mut self, key: MeshKey) -> Option<Mesh> {
         self.meshes.get(key)?;
 
@@ -84,15 +92,18 @@ impl MeshEditor {
         Some(mesh)
     }
 
+    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = hasMesh))]
     pub fn has_mesh(&self, key: MeshKey) -> bool {
         self.meshes.contains_key(key)
     }
 
+    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = isMeshActive))]
     pub fn is_mesh_active(&self, key: MeshKey) -> bool {
         self.active_meshes.contains(&key)
     }
 
     /// Applies the current mode to this mesh. Returns [`MeshNotFound`] for an unknown key.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = setMeshActive))]
     pub fn set_mesh_active(&mut self, key: MeshKey) -> Result<(), MeshNotFound> {
         self.meshes.get(key).ok_or(MeshNotFound { key })?;
 
@@ -112,6 +123,7 @@ impl MeshEditor {
 
     /// Stops editing this mesh without changing its selection or selection level.
     /// Returns [`MeshNotFound`] for an unknown key.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = setMeshInactive))]
     pub fn set_mesh_inactive(&mut self, key: MeshKey) -> Result<(), MeshNotFound> {
         self.meshes.get(key).ok_or(MeshNotFound { key })?;
 
@@ -129,6 +141,7 @@ impl MeshEditor {
     /// Advances the active tool, then updates all registered overlays.
     /// Called by the consumer's render loop.
     /// Clears and refills `result`, reusing its capacity.
+    #[cfg_attr(feature = "wasm", wasm_bindgen)]
     pub fn update(&mut self, delta_seconds: f64, result: &mut UpdateResult) {
         result.changed_overlays.clear();
 
