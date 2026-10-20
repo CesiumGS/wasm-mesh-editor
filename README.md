@@ -46,7 +46,7 @@ Plain JS objects that cross the boundary (such as `PointerInput` and `OverlayVie
 
 JS registers tools without the editor naming concrete types: `editor.addTool(SelectTool.create())`. A crate that ships more tools exports its own factory returning a `BoxedTool` (`Tool` in JS), built with `BoxedTool::new(MyTool::default())`. Tool crates must be compiled into the same `.wasm` as the editor, so a build that includes extra tool crates needs a top-level crate that depends on `mesh-editor-core` and on them.
 
-Add `--dev` for a faster, unoptimized build.
+Add `--dev` for a faster, unoptimized build. The npm scripts wrap both: `npm run build:wasm` (dev) and `npm run build:wasm:release`.
 
 ## Overlay shaders
 
