@@ -82,3 +82,33 @@ fn programs_start_with_their_stage_declarations() {
         assert_eq!(program.fragment.matches("void main()").count(), 1, "{name}");
     }
 }
+
+/// Whether `source` declares a uniform named `name`, e.g. `uniform highp sampler2D name;`.
+fn declares_uniform(source: &str, name: &str) -> bool {
+    source.lines().map(str::trim).any(|line| {
+        line.starts_with("uniform ")
+            && line
+                .strip_suffix(';')
+                .is_some_and(|declaration| declaration.split_whitespace().last() == Some(name))
+    })
+}
+
+#[test]
+fn programs_declare_their_texture_uniforms() {
+    for (uniform, programs) in [
+        (uniforms::POSITION_TEXTURE, &[POINT, EDGE, FACE][..]),
+        (uniforms::SELECTION_TEXTURE, &[POINT, EDGE, FACE][..]),
+        (uniforms::EDGE_TEXTURE, &[EDGE][..]),
+        (uniforms::TRIANGLE_TEXTURE, &[FACE][..]),
+    ] {
+        for program in programs {
+            assert!(
+                declares_uniform(program.vertex, uniform),
+                "{uniform} is not declared"
+            );
+        }
+    }
+
+    assert!(!declares_uniform(POINT.vertex, uniforms::EDGE_TEXTURE));
+    assert!(!declares_uniform(POINT.vertex, uniforms::TRIANGLE_TEXTURE));
+}

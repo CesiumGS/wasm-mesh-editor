@@ -4,6 +4,7 @@ use std::ops::Range;
 
 use serde::Serialize;
 use slotmap::{Key, KeyData};
+use topology_overlay::shaders::uniforms;
 use topology_overlay::{OverlayBuffer, OverlayBuffers};
 use tsify::{Ts, Tsify};
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi, VectorIntoWasmAbi};
@@ -37,49 +38,44 @@ impl ScalarType {
     }
 }
 
-/// The layout of one buffer element: `components` values of `scalarType`.
+/// How to read one overlay buffer: each element is `components` values of `scalarType`, uploaded
+/// as one texel of the texture that the shaders read from `uniformName`.
 #[derive(Clone, Copy, Serialize, Tsify)]
 #[serde(rename_all = "camelCase")]
-pub struct ElementLayout {
+pub struct BufferLayout {
     scalar_type: ScalarType,
     components: usize,
+    uniform_name: &'static str,
 }
 
-/// An overlay buffer element type and its layout.
+/// An overlay buffer element type: `COMPONENTS` values of `SCALAR_TYPE`.
 trait OverlayElement {
-    const LAYOUT: ElementLayout;
+    const SCALAR_TYPE: ScalarType;
+    const COMPONENTS: usize;
 }
 
 impl OverlayElement for [f32; 4] {
-    const LAYOUT: ElementLayout = ElementLayout {
-        scalar_type: ScalarType::Float32,
-        components: 4,
-    };
+    const SCALAR_TYPE: ScalarType = ScalarType::Float32;
+    const COMPONENTS: usize = 4;
 }
 
 impl OverlayElement for [u32; 2] {
-    const LAYOUT: ElementLayout = ElementLayout {
-        scalar_type: ScalarType::Uint32,
-        components: 2,
-    };
+    const SCALAR_TYPE: ScalarType = ScalarType::Uint32;
+    const COMPONENTS: usize = 2;
 }
 
 impl OverlayElement for [u32; 4] {
-    const LAYOUT: ElementLayout = ElementLayout {
-        scalar_type: ScalarType::Uint32,
-        components: 4,
-    };
+    const SCALAR_TYPE: ScalarType = ScalarType::Uint32;
+    const COMPONENTS: usize = 4;
 }
 
 impl OverlayElement for u8 {
-    const LAYOUT: ElementLayout = ElementLayout {
-        scalar_type: ScalarType::Unorm8,
-        components: 1,
-    };
+    const SCALAR_TYPE: ScalarType = ScalarType::Unorm8;
+    const COMPONENTS: usize = 1;
 }
 
 const fn assert_layout_size<T: OverlayElement>() {
-    assert!(T::LAYOUT.components * T::LAYOUT.scalar_type.size() == size_of::<T>());
+    assert!(T::COMPONENTS * T::SCALAR_TYPE.size() == size_of::<T>());
 }
 
 // Fails to compile if a layout disagrees with its element type's size.
@@ -104,21 +100,26 @@ pub struct OverlayBufferView {
     /// Covers every change, so it may include unchanged elements in between.
     /// `undefined` when nothing changed or when `fullRefresh` is set.
     dirty_range: Option<Range<usize>>,
-    layout: ElementLayout,
+    layout: BufferLayout,
 }
 
-impl<T: OverlayElement> From<&OverlayBuffer<T>> for OverlayBufferView {
-    fn from(buffer: &OverlayBuffer<T>) -> Self {
+impl OverlayBufferView {
+    fn new<T: OverlayElement>(buffer: &OverlayBuffer<T>, uniform_name: &'static str) -> Self {
         Self {
             address: buffer.data.as_ptr() as usize,
             element_count: buffer.data.len(),
             dirty_range: buffer.dirty_range.clone(),
-            layout: T::LAYOUT,
+            layout: BufferLayout {
+                scalar_type: T::SCALAR_TYPE,
+                components: T::COMPONENTS,
+                uniform_name,
+            },
         }
     }
 }
 
 /// Selection buffers by component kind. One value per component: 0 unselected, 255 selected.
+/// Each binds to the same uniform, in the draw for its component kind.
 #[derive(Serialize, Tsify)]
 pub struct OverlaySelectionViews {
     verts: OverlayBufferView,
@@ -149,13 +150,22 @@ impl From<&OverlayBuffers> for OverlayViews {
     fn from(buffers: &OverlayBuffers) -> Self {
         Self {
             full_refresh: buffers.full_refresh,
-            positions: (&buffers.positions).into(),
-            edges: (&buffers.edges).into(),
-            triangles: (&buffers.triangles).into(),
+            positions: OverlayBufferView::new(&buffers.positions, uniforms::POSITION_TEXTURE),
+            edges: OverlayBufferView::new(&buffers.edges, uniforms::EDGE_TEXTURE),
+            triangles: OverlayBufferView::new(&buffers.triangles, uniforms::TRIANGLE_TEXTURE),
             selection: OverlaySelectionViews {
-                verts: (&buffers.selection.verts).into(),
-                edges: (&buffers.selection.edges).into(),
-                faces: (&buffers.selection.faces).into(),
+                verts: OverlayBufferView::new(
+                    &buffers.selection.verts,
+                    uniforms::SELECTION_TEXTURE,
+                ),
+                edges: OverlayBufferView::new(
+                    &buffers.selection.edges,
+                    uniforms::SELECTION_TEXTURE,
+                ),
+                faces: OverlayBufferView::new(
+                    &buffers.selection.faces,
+                    uniforms::SELECTION_TEXTURE,
+                ),
             },
         }
     }

@@ -57,6 +57,19 @@ pub const FACE: ShaderSources = ShaderSources {
     ),
 };
 
+/// Names of the texture uniforms that the programs read overlay buffers from.
+pub mod uniforms {
+    /// `positions`, in every program.
+    pub const POSITION_TEXTURE: &str = "u_positionTexture";
+    /// The drawn component kind's selection buffer, in every program: `selection.verts` for
+    /// points, `selection.edges` for edges, and `selection.faces` for faces.
+    pub const SELECTION_TEXTURE: &str = "u_selectionTexture";
+    /// `edges`, in the edge program.
+    pub const EDGE_TEXTURE: &str = "u_edgeTexture";
+    /// `triangles`, in the face program.
+    pub const TRIANGLE_TEXTURE: &str = "u_triangleTexture";
+}
+
 /// Hook definitions for plain WebGL2 consumers, driven by `u_modelView`, `u_projection`, and
 /// `u_viewportSize` uniforms. They don't encode picks.
 pub const DEFAULT_HOOKS: ShaderSources = ShaderSources {
