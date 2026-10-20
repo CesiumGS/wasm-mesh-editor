@@ -8,6 +8,7 @@ use crate::{EditMode, PickResult, PointerInput, Tool, ToolContext};
 /// Plain hits replace only the hit mesh's selection. Plain misses clear all active meshes.
 /// Rejected hits leave selection unchanged. Only accepted hits return `true`.
 #[derive(Debug, Default)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct SelectTool;
 
 impl SelectTool {
