@@ -2,9 +2,12 @@ use mesh::ComponentMask;
 
 /// Which components are visible and directly selectable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct EditMode {
     /// Component visibility policy for the renderer.
+    #[cfg_attr(feature = "wasm", wasm_bindgen(skip))]
     pub renderable_components: ComponentMask,
+    #[cfg_attr(feature = "wasm", wasm_bindgen(skip))]
     pub selection_level: ComponentMask,
 }
 

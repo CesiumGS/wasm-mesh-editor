@@ -11,6 +11,8 @@ mod edit_mode;
 mod mesh_editor;
 mod mesh_transform;
 mod tool;
+#[cfg(feature = "wasm")]
+mod wasm;
 
 pub use edit_mode::EditMode;
 /// A ray interpreted in world coordinates by editor tools.
@@ -21,3 +23,5 @@ pub use tool::{
     Modifiers, PickResult, PointerInput, SceneInput, SelectTool, Tool, ToolAccessor, ToolContext,
     ToolHandle, ToolId, TranslateTool,
 };
+#[cfg(feature = "wasm")]
+pub use wasm::BoxedTool;
