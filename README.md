@@ -74,6 +74,15 @@ Each shader owns its `main()` and calls hook functions that the consumer defines
 
 Build each stage as `#version 300 es`, then the shader's source, then the hook definitions. `defaultHooks` defines them for plain WebGL2. Bind each overlay buffer's texture to its `layout.uniformName` from `overlayViews`; `topologyOverlayShaders().uniforms` names the rest, such as each shader's sizes and colors, the shared depth bias, and the view uniforms that the default hooks declare. Point and edge sizes are in the pixels of `topologyOverlay_viewportSize()`, so scale them by the device pixel ratio. Upload each buffer as a texture with `NEAREST` min and mag filters: the default filters leave data textures incomplete, and the shaders then read zeros.
 
+The WebGL tests compile and link every shader in headless Chromium, so they need a built package:
+
+```sh
+npm install
+npx playwright install chromium   # first time only
+wasm-pack build mesh-editor --dev --target web --out-name mesh-editor -- --features wasm
+npm run test:webgl
+```
+
 ## Docs
 
 ```sh
