@@ -45,6 +45,7 @@ impl SelectModifiersPolicy {
 
 /// A tool to enable selection of mesh components or meshes (in EditMode.NONE mode).
 #[derive(Debug, Default)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct SelectTool {
     pub modifiers_policy: SelectModifiersPolicy,
 }
