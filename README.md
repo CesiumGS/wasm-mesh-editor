@@ -35,10 +35,18 @@ cargo fmt           # format
 ## Build the Wasm package
 
 ```sh
-wasm-pack build mesh-editor --target web --out-name mesh-editor -- --features wasm
+wasm-pack build mesh-editor --target web --scope cesium --out-name mesh-editor -- --features wasm
 ```
 
-This emits an npm-ready package (`.wasm` + JS glue + auto-generated `.d.ts`) into `mesh-editor/pkg/`, which CesiumJS imports.
+This emits an npm-ready package (`.wasm` + JS glue + auto-generated `.d.ts`) into `mesh-editor/pkg/`, which CesiumJS imports. The `--scope cesium` flag names the package `@cesium/mesh-editor`.
+
+While the API is unstable the package ships as pre-releases versioned below `1.0.0` (`0.1.0-alpha.N`, set by the workspace `version` in `Cargo.toml`). To publish one, from `mesh-editor/pkg/` run:
+
+```sh
+npm publish --access public --tag alpha
+```
+
+`--access public` is required to publish a scoped package, and `--tag alpha` places it under the `alpha` dist-tag instead of `latest`, so pre-releases aren't installed by default. Publishing to the `@cesium` scope requires npm org membership.
 
 JS bindings are declared with `#[cfg_attr(feature = "wasm", wasm_bindgen)]` beside the Rust items they expose. Key conversions, JS-only types, and adapter methods live under each crate's `src/wasm/`, in modules named after the source modules they adapt (e.g. `mesh/src/wasm/mesh.rs` adapts `mesh.rs`). The `wasm` feature of `mesh-editor` also enables `mesh/wasm`. Native builds never compile `wasm-bindgen`.
 
@@ -46,7 +54,7 @@ Plain JS objects that cross the boundary (such as `PointerInput` and `OverlayVie
 
 JS registers tools without the editor naming concrete types: `editor.addTool(SelectTool.create())`. A crate that ships more tools exports its own factory returning a `BoxedTool` (`Tool` in JS), built with `BoxedTool::new(MyTool::default())`. Tool crates must be compiled into the same `.wasm` as the editor, so a build that includes extra tool crates needs a top-level crate that depends on `mesh-editor` and on them.
 
-Add `--dev` for a faster, unoptimized build. The npm scripts wrap both: `npm run build:wasm` (dev) and `npm run build:wasm:release`.
+Add `--dev` for a faster, unoptimized build.
 
 ## Overlay shaders
 
