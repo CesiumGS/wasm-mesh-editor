@@ -8,11 +8,13 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-alpha.0"
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.85"
-# repository = "https://github.com/<you>/mesh-editor"
+authors = ["Cesium GS, Inc. <https://cesium.com>"]
+homepage = "https://cesium.com/cesiumjs/"
+repository = "https://github.com/CesiumGS/wasm-mesh-editor"
 
 [workspace.dependencies]
 bitflags = "2"
