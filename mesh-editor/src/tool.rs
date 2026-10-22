@@ -37,6 +37,18 @@ impl ToolId {
 
         Self { value }
     }
+
+    /// The raw value JS sees as a number.
+    #[cfg(feature = "wasm")]
+    pub(crate) fn raw(self) -> usize {
+        self.value
+    }
+
+    /// Rebuilds an ID from JS. Unknown IDs are rejected wherever the editor looks them up.
+    #[cfg(feature = "wasm")]
+    pub(crate) fn from_raw(value: usize) -> Self {
+        Self { value }
+    }
 }
 
 /// Identifies an editor-owned tool while retaining its concrete type.
