@@ -10,7 +10,10 @@ mod edge;
 mod face;
 mod geometry;
 mod loop_;
+mod mesh;
+mod mesh_change;
 mod mesh_component;
+mod selection;
 mod topology;
 mod vert;
 
@@ -19,8 +22,13 @@ pub use edge::{Edge, EdgeRef};
 pub use face::{Face, FaceRef};
 pub use geometry::{Plane, Ray, centroid, try_inverse_affine};
 pub use loop_::Loop;
+pub use mesh::{Mesh, MeshBuffers, MeshBuildError};
+pub use mesh_change::{
+    AttributeChange, MeshChange, SelectionChange, SelectionKeys, TopologyChange,
+};
 pub use mesh_component::{
     ComponentKey, ComponentMask, ComponentRef, ComponentType, EdgeKey, FaceKey, LoopKey, VertKey,
 };
+pub use selection::{Selection, SelectionBoundary, SelectionKind, SelectionStep, SelectionView};
 pub use topology::Topology;
 pub use vert::{Vert, VertRef};
