@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "WebAssembly mesh editor consumed by CesiumJS: a headless mesh kernel with an editor, tools, and GPU-ready topology overlay, exposed to JS via wasm-bindgen."
+keywords = ["mesh", "editor", "webassembly", "wasm", "cesium"]
 
 [lib]
 # cdylib -> the .wasm artifact; rlib -> native consumers and tests.
