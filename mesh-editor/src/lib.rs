@@ -24,5 +24,3 @@ pub use tool::{
     ToolHandle, ToolId, TranslateTool,
 };
 pub use topology_overlay::OverlayComponent;
-#[cfg(feature = "wasm")]
-pub use wasm::BoxedTool;

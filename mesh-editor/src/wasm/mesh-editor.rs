@@ -11,7 +11,6 @@ use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi, VectorIntoWasmAbi};
 use wasm_bindgen::describe::{WasmDescribe, WasmDescribeVector};
 use wasm_bindgen::prelude::*;
 
-use super::tool::BoxedTool;
 use super::tool::input::{self, PointerInputJs};
 use crate::{
     EditMode, MeshEditor, MeshKey, MeshNotFound, ToolActivationError, ToolId, UpdateResult,
@@ -258,17 +257,29 @@ impl MeshEditor {
         Ok(OverlayViews::from(buffers).into_ts()?)
     }
 
-    /// Applies the mode's selection level to active meshes and deactivates incompatible tools.
-    /// Takes the mode by reference so JS can pass the same `EditMode` object repeatedly.
+    /// Makes `components` selectable.
+    /// Applies the selection level to active meshes and deactivates incompatible tools.
+    /// Throws for bits outside `ComponentMask`.
     #[wasm_bindgen(js_name = setMode)]
-    pub fn set_mode_by_ref(&mut self, mode: &EditMode) {
-        self.set_mode(*mode);
+    pub fn set_mode_from_components(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "ComponentMask")] components: u32,
+    ) -> Result<(), JsError> {
+        self.set_mode(EditMode::from_js_components(components)?);
+
+        Ok(())
     }
 
-    /// Registers a tool, taking ownership of it. The tool starts inactive.
-    #[wasm_bindgen(js_name = addTool)]
-    pub fn add_tool_object(&mut self, tool: BoxedTool) -> ToolId {
-        self.add_boxed_tool(tool.tool)
+    /// The components the renderer should draw in the current mode.
+    #[wasm_bindgen(getter = renderableComponents, unchecked_return_type = "ComponentMask")]
+    pub fn renderable_components(&self) -> u8 {
+        self.mode().renderable_components.bits()
+    }
+
+    /// The components that can be selected directly in the current mode.
+    #[wasm_bindgen(getter = selectableComponents, unchecked_return_type = "ComponentMask")]
+    pub fn selectable_components(&self) -> u8 {
+        self.mode().selection_level.bits()
     }
 
     /// The active tool's ID, or `undefined` if no tool is active.
