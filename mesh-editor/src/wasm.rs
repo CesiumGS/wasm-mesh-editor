@@ -10,5 +10,3 @@ mod edit_mode;
 mod mesh_editor;
 mod shaders;
 mod tool;
-
-pub use tool::BoxedTool;
