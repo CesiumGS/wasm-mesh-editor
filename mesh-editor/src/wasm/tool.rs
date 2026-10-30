@@ -1,9 +1,9 @@
 //! JS adapters for tools.
 //!
-//! JS registers type-erased [`BoxedTool`]s (exported as `Tool`). Every crate that provides tools,
-//! this one included, exports factories returning them, like `SelectTool.create()`, so the editor
-//! never names concrete tool types. Plugin crates must be linked into the same `.wasm` as the
-//! editor.
+//! Tools stay owned by the editor; JS only receives `ToolId`s. Every crate that provides tools,
+//! this one included, exports static functions on its tool types that take the editor, like
+//! `SelectTool.addTo(editor)`, so the editor never names concrete tool types. Plugin crates must
+//! be linked into the same `.wasm` as the editor.
 
 pub(super) mod input;
 mod select;
@@ -11,25 +11,8 @@ mod translate;
 
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
 use wasm_bindgen::describe::WasmDescribe;
-use wasm_bindgen::prelude::*;
 
-use crate::{Tool, ToolId};
-
-/// A type-erased tool, ready to register with `MeshEditor.addTool`. Exported as `Tool`.
-#[wasm_bindgen(js_name = Tool)]
-pub struct BoxedTool {
-    pub(super) tool: Box<dyn Tool>,
-}
-
-impl BoxedTool {
-    /// Wraps a tool for JS. Any crate that provides tools (this one included, as well as
-    /// plugins) calls this from its exported factories, like `SelectTool.create()`.
-    pub fn new<ToolType: Tool>(tool: ToolType) -> Self {
-        Self {
-            tool: Box::new(tool),
-        }
-    }
-}
+use crate::ToolId;
 
 // `ToolId` crosses the boundary as a JS number. See the `MeshKey` conversion for caveats.
 
