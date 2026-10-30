@@ -8,7 +8,6 @@ import { chromium } from "playwright";
 
 import init, {
   ComponentType,
-  EditMode,
   Mesh,
   MeshEditor,
   SelectTool,
@@ -279,9 +278,9 @@ function triangleOverlay(positions, selection) {
   );
 
   if (selection) {
-    editor.setMode(selection.mode);
+    editor.setMode(1 << selection.componentType);
     editor.setMeshActive(key);
-    editor.setActiveTool(editor.addTool(SelectTool.create()));
+    editor.setActiveTool(SelectTool.addTo(editor));
     editor.pointerClick({
       pick: { mesh: key, componentType: selection.componentType, index: selection.index },
     });
@@ -323,7 +322,6 @@ for (const [name, expected] of Object.entries(activeUniforms)) {
 
 test("point shader draws a disc per vertex, colored by selection", async () => {
   const { editor, views } = triangleOverlay(TRIANGLE, {
-    mode: EditMode.VERTEX,
     componentType: ComponentType.Vertex,
     index: 1,
   });
@@ -380,7 +378,6 @@ function edgeUniforms() {
 
 test("edge shader draws a fixed-width quad per edge, colored by selection", async () => {
   const { editor, views } = triangleOverlay(TRIANGLE, {
-    mode: EditMode.EDGE,
     componentType: ComponentType.Edge,
     index: 0,
   });
