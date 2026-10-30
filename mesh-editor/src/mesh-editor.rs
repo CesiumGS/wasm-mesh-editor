@@ -61,12 +61,6 @@ impl MeshEditor {
         }
     }
 
-    /// Returns the editing policy, including component visibility for the renderer.
-    #[cfg_attr(feature = "wasm", wasm_bindgen(getter))]
-    pub fn mode(&self) -> EditMode {
-        self.mode
-    }
-
     /// Registers a mesh and builds its topology overlay. The mesh starts inactive.
     #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = addMesh))]
     pub fn add_mesh(&mut self, mut mesh: Mesh) -> MeshKey {
@@ -163,6 +157,10 @@ impl MeshEditor {
 }
 
 impl MeshEditor {
+    pub fn mode(&self) -> EditMode {
+        self.mode
+    }
+
     /// Applies the mode's selection level to active meshes and deactivates incompatible tools.
     pub fn set_mode(&mut self, mode: EditMode) {
         if self.mode == mode {

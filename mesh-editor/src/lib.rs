@@ -23,5 +23,3 @@ pub use tool::{
     Modifiers, PickResult, PointerInput, SceneInput, SelectTool, Tool, ToolAccessor, ToolContext,
     ToolHandle, ToolId, TranslateTool,
 };
-#[cfg(feature = "wasm")]
-pub use wasm::BoxedTool;
