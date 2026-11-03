@@ -160,7 +160,7 @@ fn only_plain_explicit_misses_clear_active_meshes() {
         assert_eq!(context.mesh(second).unwrap().selection().len(), 1);
     }
 
-    assert!(!SelectTool.pointer_click(
+    assert!(SelectTool.pointer_click(
         &mut context,
         &PointerInput {
             pick: PickResult::Miss,
@@ -173,7 +173,7 @@ fn only_plain_explicit_misses_clear_active_meshes() {
 }
 
 #[test]
-fn rejected_hits_preserve_all_selection() {
+fn rejected_hits_act_as_misses() {
     let mut meshes = SlotMap::with_key();
     let target = meshes.insert(triangle_mesh());
     let other = meshes.insert(triangle_mesh());
@@ -183,8 +183,9 @@ fn rejected_hits_preserve_all_selection() {
     let replacement = meshes.insert(triangle_mesh());
     let vertex = meshes[target].topology().verts().next().unwrap();
     let edge = meshes[target].topology().edges().next().unwrap();
+    let other_vertex = meshes[other].topology().verts().next().unwrap();
 
-    for key in [target, other, inactive, replacement] {
+    for key in [inactive, replacement] {
         let selected = meshes[key].topology().verts().next().unwrap();
         meshes[key].selection_mut().select(&[selected]);
     }
@@ -199,7 +200,18 @@ fn rejected_hits_preserve_all_selection() {
         (target, VertKey::null().into()),
         (target, edge.into()),
     ] {
-        for shift in [false, true] {
+        for shift in [true, false] {
+            context
+                .mesh_mut(target)
+                .unwrap()
+                .selection_mut()
+                .set(&[vertex]);
+            context
+                .mesh_mut(other)
+                .unwrap()
+                .selection_mut()
+                .set(&[other_vertex]);
+
             let input = PointerInput {
                 pick: PickResult::Hit { mesh, component },
                 modifiers: Modifiers {
@@ -209,10 +221,14 @@ fn rejected_hits_preserve_all_selection() {
                 ..PointerInput::default()
             };
 
-            assert!(!SelectTool.pointer_click(&mut context, &input));
-            assert!(context.mesh(target).unwrap().selection().contains(vertex));
-            assert_eq!(context.mesh(target).unwrap().selection().len(), 1);
-            assert_eq!(context.mesh(other).unwrap().selection().len(), 1);
+            assert_eq!(SelectTool.pointer_click(&mut context, &input), !shift);
+
+            let expected_len = usize::from(shift);
+            assert_eq!(
+                context.mesh(target).unwrap().selection().len(),
+                expected_len
+            );
+            assert_eq!(context.mesh(other).unwrap().selection().len(), expected_len);
         }
     }
 
@@ -259,7 +275,7 @@ fn combined_selection_levels_accept_each_enabled_kind() {
         );
     }
 
-    assert!(!SelectTool.pointer_click(
+    assert!(SelectTool.pointer_click(
         &mut context,
         &PointerInput {
             pick: PickResult::Hit {
@@ -269,7 +285,7 @@ fn combined_selection_levels_accept_each_enabled_kind() {
             ..PointerInput::default()
         }
     ));
-    assert!(context.mesh(target).unwrap().selection().contains(edge));
+    assert!(context.mesh(target).unwrap().selection().is_empty());
 }
 
 #[test]

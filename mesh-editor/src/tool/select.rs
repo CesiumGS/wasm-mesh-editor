@@ -2,23 +2,21 @@ use std::any::Any;
 
 use mesh::{ComponentKey, Mesh};
 
-use crate::{EditMode, PickResult, PointerInput, Tool, ToolContext};
+use crate::{EditMode, MeshKey, PickResult, PointerInput, Tool, ToolContext};
 
 /// Selects renderer-picked components on click; Shift toggles them.
 /// Plain hits replace only the hit mesh's selection. Plain misses clear all active meshes.
-/// Rejected hits leave selection unchanged. Only accepted hits return `true`.
+/// Hits that can't be selected (inactive or unknown mesh, missing component, or a type outside
+/// the selection level) count as misses. Shift-misses and unpicked clicks are ignored.
 #[derive(Debug, Default)]
 pub struct SelectTool;
 
 impl SelectTool {
     fn validate_hit<'context>(
         context: &'context mut ToolContext<'_>,
-        pick: PickResult<ComponentKey>,
+        mesh: MeshKey,
+        component: ComponentKey,
     ) -> Option<(&'context mut Mesh, ComponentKey)> {
-        let PickResult::Hit { mesh, component } = pick else {
-            return None;
-        };
-
         if !context
             .mode()
             .selection_level
@@ -88,18 +86,20 @@ impl Tool for SelectTool {
             return false;
         }
 
-        if input.pick == PickResult::Miss {
+        let hit = match input.pick {
+            PickResult::NotPerformed => return false,
+            PickResult::Miss => None,
+            PickResult::Hit { mesh, component } => Self::validate_hit(context, mesh, component),
+        };
+
+        let Some((mesh, component)) = hit else {
             // Shift-click on empty space does not clear selection
             if input.modifiers.shift {
                 return false;
             }
 
             Self::clear_selection(context);
-            return false;
-        }
-
-        let Some((mesh, component)) = Self::validate_hit(context, input.pick) else {
-            return false;
+            return true;
         };
 
         if input.modifiers.shift {
