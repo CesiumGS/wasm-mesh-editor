@@ -1,3 +1,4 @@
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
 use mesh::Mesh;
@@ -181,16 +182,11 @@ impl MeshEditor {
 
     /// Registers a tool with this editor. The tool starts inactive.
     pub fn add_tool<ToolType: Tool>(&mut self, tool: ToolType) -> ToolHandle<ToolType> {
-        ToolHandle::new(self.add_boxed_tool(Box::new(tool)))
-    }
-
-    /// Registers a type-erased tool, for callers without a concrete tool type (such as JS).
-    pub(crate) fn add_boxed_tool(&mut self, tool: Box<dyn Tool>) -> ToolId {
         let id = ToolId::new();
 
-        self.tools.insert(id, tool);
+        self.tools.insert(id, Box::new(tool));
 
-        id
+        ToolHandle::new(id)
     }
 
     pub fn active_tool(&self) -> Option<ToolId> {
@@ -221,8 +217,33 @@ impl MeshEditor {
         })
     }
 
+    /// Returns a typed handle for a registered tool, active or inactive.
+    /// Returns `None` for a foreign or missing ID, or a different concrete tool type.
+    /// Does not activate the tool or interrupt its current interaction.
+    ///
+    /// Use the handle with [`Self::tool_config_mut`] to configure a tool by ID.
+    ///
+    /// ```no_run
+    /// use mesh_editor::{MeshEditor, Tool, ToolId};
+    ///
+    /// fn configuration_by_id<ToolType: Tool>(
+    ///     editor: &mut MeshEditor,
+    ///     id: ToolId,
+    /// ) -> Option<&mut ToolType> {
+    ///     let handle = editor.tool_handle::<ToolType>(id)?;
+    ///
+    ///     editor.tool_config_mut(&handle)
+    /// }
+    /// ```
+    pub fn tool_handle<ToolType: Tool>(&self, id: ToolId) -> Option<ToolHandle<ToolType>> {
+        let tool = self.tools.get(&id)?;
+
+        (Any::type_id(tool.as_ref()) == TypeId::of::<ToolType>()).then(|| ToolHandle::new(id))
+    }
+
     /// Borrows a concrete tool for configuration, active or inactive.
     /// Returns `None` for a foreign or missing handle.
+    /// Use [`Self::tool_handle`] to obtain a typed handle from a tool ID.
     ///
     /// ```no_run
     /// use mesh_editor::{MeshEditor, Tool};
