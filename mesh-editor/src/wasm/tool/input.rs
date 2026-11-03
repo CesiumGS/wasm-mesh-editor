@@ -36,7 +36,7 @@ pub struct PointerModifiers {
 /// A picked component. `index` is the component's index in the mesh's overlay buffers.
 #[derive(Deserialize, Tsify)]
 #[serde(rename_all = "camelCase")]
-pub struct PointerPick {
+pub struct PickHit {
     #[tsify(type = "bigint")]
     mesh: u64,
     #[tsify(type = "ComponentType")]
@@ -51,9 +51,11 @@ pub struct RayLike {
     direction: Vector3Like,
 }
 
+// Converted to the Rust `SceneInput` for tools.
 #[derive(Deserialize, Tsify)]
 #[serde(rename_all = "camelCase")]
-pub struct PointerScene {
+#[tsify(rename = "SceneInput")]
+pub struct SceneInputJs {
     /// World-space camera direction, pointing into the scene. Normalized.
     view_direction: Vector3Like,
     /// Meshes whose placements are given in `matrices`.
@@ -77,12 +79,12 @@ pub struct PointerInputJs {
     /// Picks that no longer match the mesh's overlay (unknown mesh or index) are treated as misses.
     // Absent: picking not performed. `Some(None)`: `null`, a miss.
     #[serde(default, deserialize_with = "present")]
-    #[tsify(optional, type = "PointerPick | null")]
-    pick: Option<Option<PointerPick>>,
+    #[tsify(optional, type = "PickHit | null")]
+    pick: Option<Option<PickHit>>,
     #[tsify(optional)]
     ray: Option<RayLike>,
-    #[tsify(optional)]
-    scene: Option<PointerScene>,
+    #[tsify(optional, type = "SceneInput")]
+    scene: Option<SceneInputJs>,
 }
 
 /// Distinguishes a present-but-`null` field from an absent one.
@@ -136,7 +138,7 @@ pub(in crate::wasm) fn dispatch_pointer(
 }
 
 /// Converts the JS pick. The tool accessor resolves it against the overlays.
-fn pick_hit(pick: &PointerPick) -> Result<PickResult, JsError> {
+fn pick_hit(pick: &PickHit) -> Result<PickResult, JsError> {
     const KINDS: [ComponentType; 3] = [
         ComponentType::Vertex,
         ComponentType::Edge,
@@ -176,7 +178,7 @@ fn unit_vector(vector: &Vector3Like, name: &str) -> Result<DVec3, JsError> {
         .ok_or_else(|| JsError::new(&format!("{name} must be finite and non-zero")))
 }
 
-fn mesh_transforms(scene: &PointerScene) -> Result<Vec<MeshTransform>, JsError> {
+fn mesh_transforms(scene: &SceneInputJs) -> Result<Vec<MeshTransform>, JsError> {
     let keys = scene.mesh_keys.to_vec();
     let matrices = scene.matrices.to_vec();
 
