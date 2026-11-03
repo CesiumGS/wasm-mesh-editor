@@ -1430,6 +1430,58 @@ fn mesh_not_found_reports_the_missing_key() {
 }
 
 #[test]
+fn tool_handle_lookup_supports_active_and_inactive_configuration() {
+    let mut editor = MeshEditor::new();
+    let first = editor.add_tool(TestTool { value: 1_u32 });
+    let second = editor.add_tool(TestTool { value: 2_u32 });
+
+    let recovered = editor.tool_handle::<TestTool<u32>>(first.id()).unwrap();
+
+    assert_eq!(recovered.id(), first.id());
+    editor.tool_config_mut(&recovered).unwrap().value = 10;
+    assert_eq!(editor.active_tool(), None);
+
+    editor.active_tool = Some(first.id());
+
+    let active = {
+        let editor = &editor;
+        editor
+            .tool_handle::<TestTool<u32>>(editor.active_tool().unwrap())
+            .unwrap()
+    };
+    let inactive = editor.tool_handle::<TestTool<u32>>(second.id()).unwrap();
+
+    editor.tool_config_mut(&active).unwrap().value = 11;
+    editor.tool_config_mut(&inactive).unwrap().value = 20;
+
+    assert_eq!(editor.tool_config_mut(&first).unwrap().value, 11);
+    assert_eq!(editor.tool_config_mut(&second).unwrap().value, 20);
+    assert_eq!(editor.active_tool(), Some(first.id()));
+    assert!(editor.tool_mut(second.id()).is_none());
+}
+
+#[test]
+fn tool_handle_lookup_rejects_wrong_types_and_unregistered_ids() {
+    let mut editor = MeshEditor::new();
+    let mut other_editor = MeshEditor::new();
+    let number = editor.add_tool(TestTool { value: 1_u32 });
+    let foreign = other_editor.add_tool(TestTool { value: 2_u32 });
+
+    assert!(
+        editor
+            .tool_handle::<TestTool<String>>(number.id())
+            .is_none()
+    );
+    assert!(editor.tool_handle::<TestTool<u32>>(foreign.id()).is_none());
+    assert!(editor.tool_handle::<TestTool<u32>>(ToolId::new()).is_none());
+    assert_eq!(editor.tool_config_mut(&number).unwrap().value, 1);
+
+    editor.tools.remove(&number.id()).unwrap();
+
+    assert!(editor.tool_handle::<TestTool<u32>>(number.id()).is_none());
+}
+
+#[test]
 fn tool_registration_and_configuration_preserve_active_tool() {
     let mut editor = MeshEditor::new();
     let first = editor.add_tool(TestTool { value: 1_u32 });
