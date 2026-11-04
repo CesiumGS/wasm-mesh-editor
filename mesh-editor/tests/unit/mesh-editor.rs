@@ -118,6 +118,7 @@ struct RecordingTool {
     clear_selection_on_cancel: bool,
     update_deltas: Vec<f64>,
     translation_on_update: Option<[f32; 3]>,
+    active_meshes_on_click: Option<Vec<MeshKey>>,
     received_inputs: Vec<ReceivedInput>,
 }
 
@@ -130,6 +131,7 @@ impl RecordingTool {
             clear_selection_on_cancel: false,
             update_deltas: Vec::new(),
             translation_on_update: None,
+            active_meshes_on_click: None,
             received_inputs: Vec::new(),
         }
     }
@@ -205,6 +207,15 @@ impl Tool for RecordingTool {
     ) -> bool {
         self.record("pointer_click", context);
         self.received_inputs.push(ReceivedInput::new(input));
+
+        if let Some(keys) = &self.active_meshes_on_click {
+            context.retain_active_meshes(|key| keys.contains(key));
+
+            for &key in keys {
+                context.set_mesh_active(key).unwrap();
+            }
+        }
+
         false
     }
 
@@ -216,8 +227,8 @@ impl Tool for RecordingTool {
         self.record("cancel", context);
 
         if self.clear_selection_on_cancel {
-            for &key in context.active_meshes() {
-                context.mesh_mut(key).unwrap().selection_mut().clear();
+            for mesh in context.active_meshes_mut() {
+                mesh.selection_mut().clear();
             }
         }
     }
@@ -230,8 +241,7 @@ impl Tool for RecordingTool {
             return;
         };
 
-        for &key in context.active_meshes() {
-            let mesh = context.mesh_mut(key).unwrap();
+        for mesh in context.active_meshes_mut() {
             let vertex = mesh.topology().verts().next().unwrap();
 
             mesh.selection_mut().select(&[vertex]);
@@ -1336,6 +1346,37 @@ fn active_mesh_changes_cancel_with_previous_targets() {
     editor.active_tool_mut().unwrap().confirm();
 
     assert!(calls.borrow()[3].meshes.is_empty());
+}
+
+#[test]
+fn active_mesh_changes_from_the_active_tool_do_not_cancel_it() {
+    let mut editor = MeshEditor::new();
+    let first = editor.add_mesh(triangle_mesh());
+    let second = editor.add_mesh(triangle_mesh());
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let mut tool = RecordingTool::new("tool", &calls);
+
+    tool.active_meshes_on_click = Some(vec![second]);
+
+    let tool = editor.add_tool(tool);
+
+    editor.set_mode(EditMode::VERTEX);
+    editor.set_mesh_active(first).unwrap();
+    editor.set_active_tool(Some(tool.id())).unwrap();
+    calls.borrow_mut().clear();
+
+    editor
+        .active_tool_mut()
+        .unwrap()
+        .pointer_click(&PointerInput::default());
+
+    assert_tool_calls(&calls, &[("tool", "pointer_click")]);
+    assert_eq!(editor.active_meshes(), &[second]);
+    assert_eq!(
+        editor.mesh(second).unwrap().selection().level(),
+        ComponentMask::VERTEX
+    );
+    assert_eq!(editor.active_tool(), Some(tool.id()));
 }
 
 #[test]

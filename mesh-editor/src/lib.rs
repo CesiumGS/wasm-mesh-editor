@@ -2,7 +2,8 @@
 //!
 //! The renderer supplies resolved picks, world-space rays, and optional scene context.
 //! Implementation is in progress; undo and redo are out of scope.
-//! Changes to tools, modes, or active meshes cancel the current interaction first.
+//! Changes to tools, modes, or active meshes cancel the current interaction first,
+//! except active-mesh changes made by the active tool itself.
 //! Invalid tool selections return an error without interrupting the active tool.
 
 mod edit_mode;
