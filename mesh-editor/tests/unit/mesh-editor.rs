@@ -643,42 +643,81 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
 }
 
 #[test]
-fn select_tool_deactivates_in_empty_modes_and_requires_reactivation() {
+fn select_tool_stays_active_across_modes() {
     let mut editor = MeshEditor::new();
     let tool = editor.add_tool(SelectTool);
 
-    assert_eq!(
-        editor.set_active_tool(Some(tool.id())),
-        Err(ToolActivationError::IncompatibleMode {
-            id: tool.id(),
-            mode: EditMode::NONE
-        })
-    );
-
-    editor.set_mode(EditMode::EDGE);
-    editor.set_active_tool(Some(tool.id())).unwrap();
-    editor.set_mode(EditMode::FACE);
-
-    assert_eq!(editor.active_tool(), Some(tool.id()));
-
-    editor.set_mode(EditMode::NONE);
-
-    assert_eq!(editor.active_tool(), None);
-    assert!(editor.tool_mut(tool.id()).is_none());
-    assert_eq!(
-        editor.set_active_tool(Some(tool.id())),
-        Err(ToolActivationError::IncompatibleMode {
-            id: tool.id(),
-            mode: EditMode::NONE
-        })
-    );
-
-    editor.set_mode(EditMode::VERTEX);
-
-    assert_eq!(editor.active_tool(), None);
-
     editor.set_active_tool(Some(tool.id())).unwrap();
 
+    for mode in [
+        EditMode::EDGE,
+        EditMode::FACE,
+        EditMode::NONE,
+        EditMode::VERTEX,
+    ] {
+        editor.set_mode(mode);
+
+        assert_eq!(editor.active_tool(), Some(tool.id()));
+    }
+}
+
+#[test]
+fn select_tool_clicks_in_empty_modes_resolve_inactive_meshes_and_change_active_meshes() {
+    let mut editor = MeshEditor::new();
+    let first = editor.add_mesh(triangle_mesh());
+    let second = editor.add_mesh(triangle_mesh());
+    let tool = editor.add_tool(SelectTool);
+    let click = |mesh, shift| PointerInput {
+        pick: PickResult::Hit {
+            mesh,
+            component: OverlayComponent {
+                kind: ComponentType::Face,
+                index: 0,
+            },
+        },
+        modifiers: Modifiers {
+            shift,
+            ..Modifiers::default()
+        },
+        ..PointerInput::default()
+    };
+
+    editor.set_active_tool(Some(tool.id())).unwrap();
+
+    assert!(
+        editor
+            .active_tool_mut()
+            .unwrap()
+            .pointer_click(&click(first, false))
+    );
+    assert_eq!(editor.active_meshes(), &[first]);
+
+    assert!(
+        editor
+            .active_tool_mut()
+            .unwrap()
+            .pointer_click(&click(second, true))
+    );
+    assert_eq!(editor.active_meshes(), &[first, second]);
+
+    assert!(
+        editor
+            .active_tool_mut()
+            .unwrap()
+            .pointer_click(&click(second, false))
+    );
+    assert_eq!(editor.active_meshes(), &[second]);
+
+    assert!(
+        editor
+            .active_tool_mut()
+            .unwrap()
+            .pointer_click(&PointerInput {
+                pick: PickResult::Miss,
+                ..PointerInput::default()
+            })
+    );
+    assert!(editor.active_meshes().is_empty());
     assert_eq!(editor.active_tool(), Some(tool.id()));
 }
 
