@@ -4,10 +4,7 @@ use mesh::{ComponentKey, Mesh};
 
 use crate::{EditMode, MeshKey, PickResult, PointerInput, Tool, ToolContext};
 
-/// Selects renderer-picked components on click; Shift toggles them.
-/// Plain hits replace only the hit mesh's selection. Plain misses clear all active meshes.
-/// Hits that can't be selected (inactive or unknown mesh, missing component, or a type outside
-/// the selection level) count as misses. Shift-misses and unpicked clicks are ignored.
+/// A tool to enable selection of mesh components or meshes (in EditMode.NONE mode).
 #[derive(Debug, Default)]
 pub struct SelectTool;
 
@@ -31,6 +28,50 @@ impl SelectTool {
         Some((mesh, component))
     }
 
+    fn click_meshes(context: &mut ToolContext<'_>, input: &PointerInput<'_, ComponentKey>) -> bool {
+        let clicked = match input.pick {
+            PickResult::NotPerformed => return false,
+            PickResult::Miss => None,
+            PickResult::Hit { mesh, .. } => Some(mesh),
+        };
+
+        match (clicked, input.modifiers.shift) {
+            (None, true) => false,
+            (Some(mesh), true) if context.is_mesh_active(mesh) => {
+                context.retain_active_meshes(|&key| key != mesh);
+                true
+            }
+            (Some(mesh), true) => context.set_mesh_active(mesh).is_ok(),
+            (clicked, false) => {
+                context.retain_active_meshes(|&key| Some(key) == clicked);
+                // An unknown mesh counts as a miss, which the retain above already handled
+                clicked.map(|mesh| context.set_mesh_active(mesh));
+                true
+            }
+        }
+    }
+
+    fn click_components(
+        context: &mut ToolContext<'_>,
+        input: &PointerInput<'_, ComponentKey>,
+    ) -> bool {
+        let hit = match input.pick {
+            PickResult::NotPerformed => return false,
+            PickResult::Miss => None,
+            PickResult::Hit { mesh, component } => Self::validate_hit(context, mesh, component),
+        };
+
+        match (hit, input.modifiers.shift) {
+            // Shift-click on empty space does not clear selection
+            (None, true) => return false,
+            (None, false) => Self::clear_selection(context),
+            (Some((mesh, component)), true) => mesh.selection_mut().toggle(&[component]),
+            (Some((mesh, component)), false) => mesh.selection_mut().set(&[component]),
+        }
+
+        true
+    }
+
     fn clear_selection(context: &mut ToolContext<'_>) {
         for mesh in context.active_meshes_mut() {
             mesh.selection_mut().clear();
@@ -43,8 +84,8 @@ impl Tool for SelectTool {
         self
     }
 
-    fn supports_edit_mode(&self, mode: EditMode) -> bool {
-        !mode.selection_level.is_empty()
+    fn supports_edit_mode(&self, _mode: EditMode) -> bool {
+        true
     }
 
     fn activate(&mut self, _context: &mut ToolContext<'_>) {}
@@ -80,33 +121,11 @@ impl Tool for SelectTool {
         context: &mut ToolContext<'_>,
         input: &PointerInput<'_, ComponentKey>,
     ) -> bool {
-        if !self.supports_edit_mode(context.mode()) {
-            return false;
-        }
-
-        let hit = match input.pick {
-            PickResult::NotPerformed => return false,
-            PickResult::Miss => None,
-            PickResult::Hit { mesh, component } => Self::validate_hit(context, mesh, component),
-        };
-
-        let Some((mesh, component)) = hit else {
-            // Shift-click on empty space does not clear selection
-            if input.modifiers.shift {
-                return false;
-            }
-
-            Self::clear_selection(context);
-            return true;
-        };
-
-        if input.modifiers.shift {
-            mesh.selection_mut().toggle(&[component]);
+        if context.mode().selection_level.is_empty() {
+            Self::click_meshes(context, input)
         } else {
-            mesh.selection_mut().set(&[component]);
+            Self::click_components(context, input)
         }
-
-        true
     }
 
     fn confirm(&mut self, _context: &mut ToolContext<'_>) {}
