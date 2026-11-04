@@ -223,6 +223,12 @@ impl MeshEditor {
         Some(ToolAccessor { tool, context })
     }
 
+    /// Borrows a registered tool, active or inactive, for read-only queries from JS.
+    #[cfg(feature = "wasm")]
+    pub(crate) fn tool(&self, id: ToolId) -> Option<&dyn Tool> {
+        self.tools.get(&id).map(Box::as_ref)
+    }
+
     /// Returns a typed handle for a registered tool, active or inactive.
     /// Returns `None` for a foreign or missing ID, or a different concrete tool type.
     /// Does not activate the tool or interrupt its current interaction.
