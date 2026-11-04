@@ -20,7 +20,8 @@ new_key_type! {
 }
 
 /// Owns registered meshes and coordinates their overlays and active tool.
-/// Tool, mode, and active-mesh changes cancel the current interaction first.
+/// Tool, mode, and active-mesh changes cancel the current interaction first,
+/// except active-mesh changes made by the active tool through its [`ToolContext`].
 pub struct MeshEditor {
     meshes: SlotMap<MeshKey, Mesh>,
     overlays: SecondaryMap<MeshKey, TopologyOverlay>,
@@ -96,18 +97,12 @@ impl MeshEditor {
     pub fn set_mesh_active(&mut self, key: MeshKey) -> Result<(), MeshNotFound> {
         self.meshes.get(key).ok_or(MeshNotFound { key })?;
 
-        if self.active_meshes.contains(&key) {
+        if self.is_mesh_active(key) {
             return Ok(());
         }
 
         self.cancel_active_tool();
-
-        self.meshes[key]
-            .selection_mut()
-            .set_level(self.mode.selection_level);
-        self.active_meshes.push(key);
-
-        Ok(())
+        Self::activate_mesh(&mut self.meshes, &mut self.active_meshes, self.mode, key)
     }
 
     /// Stops editing this mesh without changing its selection or selection level.
@@ -115,12 +110,11 @@ impl MeshEditor {
     pub fn set_mesh_inactive(&mut self, key: MeshKey) -> Result<(), MeshNotFound> {
         self.meshes.get(key).ok_or(MeshNotFound { key })?;
 
-        if !self.active_meshes.contains(&key) {
+        if !self.is_mesh_active(key) {
             return Ok(());
         }
 
         self.cancel_active_tool();
-
         self.active_meshes.retain(|&mesh_key| mesh_key != key);
 
         Ok(())
@@ -209,7 +203,7 @@ impl MeshEditor {
         }
 
         let tool = self.tools.get_mut(&id)?.as_mut();
-        let context = ToolContext::new(&mut self.meshes, &self.active_meshes, self.mode);
+        let context = ToolContext::new(&mut self.meshes, &mut self.active_meshes, self.mode);
 
         Some(ToolAccessor {
             tool,
@@ -276,6 +270,26 @@ impl MeshEditor {
     /// Mesh changes are applied during [`Self::update`].
     pub fn overlay_buffers(&self, key: MeshKey) -> Option<&OverlayBuffers> {
         Some(self.overlays.get(key)?.buffers())
+    }
+
+    /// Helper used by set_mesh_active, but also available to the crate so that
+    /// tools can activate meshes without cancelling the active tool.
+    pub(crate) fn activate_mesh(
+        meshes: &mut SlotMap<MeshKey, Mesh>,
+        active_meshes: &mut Vec<MeshKey>,
+        mode: EditMode,
+        key: MeshKey,
+    ) -> Result<(), MeshNotFound> {
+        let mesh = meshes.get_mut(key).ok_or(MeshNotFound { key })?;
+
+        if active_meshes.contains(&key) {
+            return Ok(());
+        }
+
+        mesh.selection_mut().set_level(mode.selection_level);
+        active_meshes.push(key);
+
+        Ok(())
     }
 
     fn cancel_active_tool(&mut self) {
