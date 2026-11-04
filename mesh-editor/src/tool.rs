@@ -56,7 +56,8 @@ impl<ToolType: Tool> ToolHandle<ToolType> {
 
 /// Tool behavior. The editor supplies mesh access for each call.
 /// Only one tool is active at a time. Tool, mode, and active-mesh changes cancel
-/// the current interaction before altering its editing context.
+/// the current interaction before altering its editing context, except active-mesh changes
+/// the tool makes itself through its [`ToolContext`].
 /// Other commands that change selection, topology, or placement must cancel it first.
 pub trait Tool: Any {
     /// Returns this tool for checked, concrete-type configuration access.
