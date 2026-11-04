@@ -32,10 +32,8 @@ impl SelectTool {
     }
 
     fn clear_selection(context: &mut ToolContext<'_>) {
-        for &key in context.active_meshes() {
-            if let Some(mesh) = context.mesh_mut(key) {
-                mesh.selection_mut().clear();
-            }
+        for mesh in context.active_meshes_mut() {
+            mesh.selection_mut().clear();
         }
     }
 }
