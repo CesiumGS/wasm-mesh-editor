@@ -288,6 +288,20 @@ impl MeshEditor {
         self.active_tool().map(ToolId::raw)
     }
 
+    /// Whether a registered tool, active or inactive, can be active with `components` selectable.
+    /// Does not change the active tool. Throws for an unknown tool or bits outside `ComponentMask`.
+    #[wasm_bindgen(js_name = toolSupportsMode)]
+    pub fn tool_supports_mode(
+        &self,
+        id: ToolId,
+        #[wasm_bindgen(unchecked_param_type = "ComponentMask")] components: u32,
+    ) -> Result<bool, JsError> {
+        let mode = EditMode::from_js_components(components)?;
+        let tool = self.tool(id).ok_or(ToolActivationError::NotFound { id })?;
+
+        Ok(tool.supports_edit_mode(mode))
+    }
+
     /// Activates a registered tool, cancelling the current one's interaction.
     /// Throws for an unknown tool or one that doesn't support the current mode.
     #[wasm_bindgen(js_name = setActiveTool)]
