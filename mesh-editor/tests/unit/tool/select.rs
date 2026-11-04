@@ -316,40 +316,165 @@ fn lifecycle_and_non_click_callbacks_preserve_selection() {
     assert_eq!(context.mesh(target).unwrap().selection().len(), 1);
 }
 
+const EMPTY_SELECTION_MODES: [EditMode; 2] = [
+    EditMode::NONE,
+    EditMode {
+        renderable_components: ComponentMask::all(),
+        selection_level: ComponentMask::empty(),
+    },
+];
+
+fn mesh_click(pick: PickResult<ComponentKey>, shift: bool) -> PointerInput<'static, ComponentKey> {
+    PointerInput {
+        pick,
+        modifiers: Modifiers {
+            shift,
+            ..Modifiers::default()
+        },
+        ..PointerInput::default()
+    }
+}
+
+fn face_hit(meshes: &SlotMap<MeshKey, Mesh>, mesh: MeshKey) -> PickResult<ComponentKey> {
+    PickResult::Hit {
+        mesh,
+        component: meshes[mesh].topology().faces().next().unwrap().into(),
+    }
+}
+
 #[test]
-fn empty_selection_levels_are_incompatible_and_ignore_clicks() {
+fn every_mode_is_supported() {
+    for mode in
+        EMPTY_SELECTION_MODES
+            .into_iter()
+            .chain([EditMode::VERTEX, EditMode::EDGE, EditMode::FACE])
+    {
+        assert!(SelectTool.supports_edit_mode(mode));
+    }
+}
+
+#[test]
+fn empty_selection_levels_make_plain_hits_the_only_active_mesh() {
+    for mode in EMPTY_SELECTION_MODES {
+        let mut meshes = SlotMap::with_key();
+        let first = meshes.insert(triangle_mesh());
+        let second = meshes.insert(triangle_mesh());
+        let clicked = meshes.insert(triangle_mesh());
+        let vertex = meshes[first].topology().verts().next().unwrap();
+
+        meshes[first].selection_mut().select(&[vertex]);
+        meshes[clicked]
+            .selection_mut()
+            .set_level(ComponentMask::VERTEX);
+
+        let hit = face_hit(&meshes, clicked);
+        let mut active_meshes = vec![first, second];
+
+        {
+            let mut context = ToolContext::new(&mut meshes, &mut active_meshes, mode);
+
+            for _ in 0..2 {
+                assert!(SelectTool.pointer_click(&mut context, &mesh_click(hit, false)));
+                assert_eq!(context.active_meshes(), &[clicked]);
+            }
+        }
+
+        assert_eq!(
+            meshes[clicked].selection().level(),
+            mode.selection_level,
+            "activation applies the mode"
+        );
+        assert!(
+            meshes[first].selection().contains(vertex),
+            "deactivation preserves selection"
+        );
+    }
+}
+
+#[test]
+fn empty_selection_levels_toggle_shift_hits_and_preserve_other_meshes() {
+    for mode in EMPTY_SELECTION_MODES {
+        let mut meshes = SlotMap::with_key();
+        let active = meshes.insert(triangle_mesh());
+        let target = meshes.insert(triangle_mesh());
+        let hit = face_hit(&meshes, target);
+        let mut active_meshes = vec![active];
+        let mut context = ToolContext::new(&mut meshes, &mut active_meshes, mode);
+
+        assert!(SelectTool.pointer_click(&mut context, &mesh_click(hit, true)));
+        assert_eq!(context.active_meshes(), &[active, target]);
+
+        assert!(SelectTool.pointer_click(&mut context, &mesh_click(hit, true)));
+        assert_eq!(context.active_meshes(), &[active]);
+    }
+}
+
+#[test]
+fn empty_selection_levels_deactivate_all_only_on_plain_misses() {
+    for mode in EMPTY_SELECTION_MODES {
+        let mut meshes = SlotMap::with_key();
+        let first = meshes.insert(triangle_mesh());
+        let second = meshes.insert(triangle_mesh());
+        let removed = meshes.insert(triangle_mesh());
+        let removed_hit = face_hit(&meshes, removed);
+
+        meshes.remove(removed).unwrap();
+
+        let unknown_hits = [
+            removed_hit,
+            PickResult::Hit {
+                mesh: MeshKey::null(),
+                component: VertKey::null().into(),
+            },
+        ];
+        let mut active_meshes = vec![first, second];
+        let mut context = ToolContext::new(&mut meshes, &mut active_meshes, mode);
+
+        for (pick, shift) in [
+            (PickResult::NotPerformed, false),
+            (PickResult::NotPerformed, true),
+            (PickResult::Miss, true),
+            (unknown_hits[0], true),
+            (unknown_hits[1], true),
+        ] {
+            assert!(!SelectTool.pointer_click(&mut context, &mesh_click(pick, shift)));
+            assert_eq!(context.active_meshes(), &[first, second]);
+        }
+
+        for pick in [PickResult::Miss, unknown_hits[0], unknown_hits[1]] {
+            context.retain_active_meshes(|_| false);
+            context.set_mesh_active(first).unwrap();
+            context.set_mesh_active(second).unwrap();
+
+            assert!(SelectTool.pointer_click(&mut context, &mesh_click(pick, false)));
+            assert!(context.active_meshes().is_empty());
+        }
+    }
+}
+
+#[test]
+fn empty_selection_levels_ignore_hit_components() {
     let mut meshes = SlotMap::with_key();
     let target = meshes.insert(triangle_mesh());
     let vertex = meshes[target].topology().verts().next().unwrap();
-    meshes[target].selection_mut().select(&[vertex]);
+    let edge = meshes[target].topology().edges().next().unwrap();
+    let mut active_meshes = Vec::new();
+    let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::NONE);
 
-    for mode in [
-        EditMode::NONE,
-        EditMode {
-            renderable_components: ComponentMask::all(),
-            selection_level: ComponentMask::empty(),
-        },
+    for component in [
+        ComponentKey::from(vertex),
+        edge.into(),
+        VertKey::null().into(),
     ] {
-        assert!(!SelectTool.supports_edit_mode(mode));
+        let hit = PickResult::Hit {
+            mesh: target,
+            component,
+        };
 
-        let mut active_meshes = vec![target];
-        let mut context = ToolContext::new(&mut meshes, &mut active_meshes, mode);
-        for pick in [
-            PickResult::Miss,
-            PickResult::Hit {
-                mesh: target,
-                component: vertex.into(),
-            },
-        ] {
-            assert!(!SelectTool.pointer_click(
-                &mut context,
-                &PointerInput {
-                    pick,
-                    ..PointerInput::default()
-                }
-            ));
-        }
+        context.retain_active_meshes(|_| false);
 
-        assert!(context.mesh(target).unwrap().selection().contains(vertex));
+        assert!(SelectTool.pointer_click(&mut context, &mesh_click(hit, false)));
+        assert_eq!(context.active_meshes(), &[target]);
+        assert!(context.mesh(target).unwrap().selection().is_empty());
     }
 }
