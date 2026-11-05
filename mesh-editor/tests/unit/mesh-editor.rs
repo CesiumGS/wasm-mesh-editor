@@ -564,6 +564,46 @@ fn update_does_not_expose_buffers_for_removed_mesh_keys() {
 }
 
 #[test]
+fn update_reports_active_mesh_changes_once() {
+    let mut editor = MeshEditor::new();
+    let mut result = UpdateResult::default();
+    let first = editor.add_mesh(triangle_mesh());
+    let second = editor.add_mesh(triangle_mesh());
+    let toggled = editor.add_mesh(triangle_mesh());
+
+    editor.set_mesh_active(second).unwrap();
+    editor.set_mesh_active(first).unwrap();
+    editor.set_mesh_active(first).unwrap();
+    editor.update(0.016, &mut result);
+
+    assert_eq!(result.activated_meshes, vec![second, first]);
+    assert!(result.deactivated_meshes.is_empty());
+
+    result.activated_meshes.reserve(4);
+    result.deactivated_meshes.reserve(4);
+
+    // Result buffers alternate with the editor's recording buffers, so they return every other update.
+    let activated_allocation = result.activated_meshes.as_ptr();
+    let deactivated_allocation = result.deactivated_meshes.as_ptr();
+
+    editor.update(0.016, &mut result);
+
+    assert!(result.activated_meshes.is_empty());
+    assert!(result.deactivated_meshes.is_empty());
+
+    editor.set_mesh_inactive(first).unwrap();
+    editor.remove_mesh(second).unwrap();
+    editor.set_mesh_active(toggled).unwrap();
+    editor.set_mesh_inactive(toggled).unwrap();
+    editor.update(0.016, &mut result);
+
+    assert!(result.activated_meshes.is_empty());
+    assert_eq!(result.deactivated_meshes, vec![first, second]);
+    assert_eq!(result.activated_meshes.as_ptr(), activated_allocation);
+    assert_eq!(result.deactivated_meshes.as_ptr(), deactivated_allocation);
+}
+
+#[test]
 fn new_creates_empty_editor() {
     let editor = MeshEditor::new();
 

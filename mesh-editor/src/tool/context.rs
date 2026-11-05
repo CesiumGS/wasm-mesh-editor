@@ -1,19 +1,20 @@
 use mesh::Mesh;
 use slotmap::SlotMap;
 
-use crate::{EditMode, MeshEditor, MeshKey, MeshNotFound};
+use crate::mesh_editor::ActiveMeshes;
+use crate::{EditMode, MeshKey, MeshNotFound};
 
 /// Active mesh access borrowed for a tool call. Tools retain keys, not mesh references.
 pub struct ToolContext<'editor> {
     meshes: &'editor mut SlotMap<MeshKey, Mesh>,
-    active_meshes: &'editor mut Vec<MeshKey>,
+    active_meshes: &'editor mut ActiveMeshes,
     mode: EditMode,
 }
 
 impl<'editor> ToolContext<'editor> {
     pub(crate) fn new(
         meshes: &'editor mut SlotMap<MeshKey, Mesh>,
-        active_meshes: &'editor mut Vec<MeshKey>,
+        active_meshes: &'editor mut ActiveMeshes,
         mode: EditMode,
     ) -> Self {
         Self {
@@ -28,11 +29,11 @@ impl<'editor> ToolContext<'editor> {
     }
 
     pub fn active_meshes(&self) -> &[MeshKey] {
-        self.active_meshes
+        self.active_meshes.keys()
     }
 
     pub fn is_mesh_active(&self, key: MeshKey) -> bool {
-        self.active_meshes.contains(&key)
+        self.active_meshes.contains(key)
     }
 
     /// Returns an active mesh, or `None` if inactive or missing.
@@ -59,13 +60,13 @@ impl<'editor> ToolContext<'editor> {
 
         self.meshes
             .iter_mut()
-            .filter(move |(key, _)| active_meshes.contains(key))
+            .filter(move |(key, _)| active_meshes.contains(*key))
             .map(|(_, mesh)| mesh)
     }
 
-    /// Similar to mesh editor's method (relies on same internal kernel), but does not cancel the active tool.
+    /// Like [`crate::MeshEditor::set_mesh_active`], but does not cancel the active tool.
     pub fn set_mesh_active(&mut self, key: MeshKey) -> Result<(), MeshNotFound> {
-        MeshEditor::activate_mesh(self.meshes, self.active_meshes, self.mode, key)
+        self.active_meshes.activate(self.meshes, self.mode, key)
     }
 
     /// Keeps only the active meshes for which `keep` returns `true`, preserving their order.
