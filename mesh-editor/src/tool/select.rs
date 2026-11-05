@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use mesh::{ComponentKey, Mesh};
+use mesh::ComponentKey;
 
 use crate::{EditMode, MeshKey, PickResult, PointerInput, Tool, ToolContext};
 
@@ -9,11 +9,11 @@ use crate::{EditMode, MeshKey, PickResult, PointerInput, Tool, ToolContext};
 pub struct SelectTool;
 
 impl SelectTool {
-    fn validate_hit<'context>(
-        context: &'context mut ToolContext<'_>,
+    fn validate_hit(
+        context: &ToolContext<'_>,
         mesh: MeshKey,
         component: ComponentKey,
-    ) -> Option<(&'context mut Mesh, ComponentKey)> {
+    ) -> Option<(MeshKey, ComponentKey)> {
         if !context
             .mode()
             .selection_level
@@ -22,8 +22,7 @@ impl SelectTool {
             return None;
         }
 
-        let mesh = context.mesh_mut(mesh)?;
-        mesh.component(component)?;
+        context.mesh(mesh)?.component(component)?;
 
         Some((mesh, component))
     }
@@ -65,11 +64,47 @@ impl SelectTool {
             // Shift-click on empty space does not clear selection
             (None, true) => return false,
             (None, false) => Self::clear_selection(context),
-            (Some((mesh, component)), true) => mesh.selection_mut().toggle(&[component]),
-            (Some((mesh, component)), false) => mesh.selection_mut().set(&[component]),
+            (Some((mesh, component)), true) => Self::toggle_component(context, mesh, component),
+            (Some((mesh, component)), false) => Self::replace_selection(context, mesh, component),
         }
 
         true
+    }
+
+    fn toggle_component(context: &mut ToolContext<'_>, mesh: MeshKey, component: ComponentKey) {
+        let Some(mesh) = context.mesh_mut(mesh) else {
+            return;
+        };
+
+        mesh.selection_mut().toggle(&[component]);
+    }
+
+    /// Selects only `component` on `hit_mesh` and clears the selection of every other active mesh.
+    fn replace_selection(
+        context: &mut ToolContext<'_>,
+        hit_mesh: MeshKey,
+        component: ComponentKey,
+    ) {
+        let other_meshes: Vec<MeshKey> = context
+            .active_meshes()
+            .iter()
+            .copied()
+            .filter(|&key| key != hit_mesh)
+            .collect();
+
+        for key in other_meshes {
+            let Some(mesh) = context.mesh_mut(key) else {
+                continue;
+            };
+
+            mesh.selection_mut().clear();
+        }
+
+        let Some(mesh) = context.mesh_mut(hit_mesh) else {
+            return;
+        };
+
+        mesh.selection_mut().set(&[component]);
     }
 
     fn clear_selection(context: &mut ToolContext<'_>) {
