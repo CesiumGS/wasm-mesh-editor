@@ -706,6 +706,59 @@ fn select_tool_clicks_in_empty_modes_resolve_inactive_meshes_and_change_active_m
 }
 
 #[test]
+fn update_reports_active_mesh_changes_from_select_tool_clicks() {
+    let mut editor = MeshEditor::new();
+    let mut result = UpdateResult::default();
+    let first = editor.add_mesh(triangle_mesh());
+    let second = editor.add_mesh(triangle_mesh());
+    let tool = editor.add_tool(SelectTool);
+    let click = |pick, shift| PointerInput {
+        pick,
+        modifiers: Modifiers {
+            shift,
+            ..Modifiers::default()
+        },
+        ..PointerInput::default()
+    };
+    let hit = |mesh| PickResult::Hit {
+        mesh,
+        component: OverlayComponent {
+            kind: ComponentType::Face,
+            index: 0,
+        },
+    };
+
+    editor.set_active_tool(Some(tool.id())).unwrap();
+
+    let mut click_and_update = |pick, shift| {
+        assert!(
+            editor
+                .active_tool_mut()
+                .unwrap()
+                .pointer_click(&click(pick, shift))
+        );
+        editor.update(0.016, &mut result);
+
+        (
+            result.activated_meshes.clone(),
+            result.deactivated_meshes.clone(),
+        )
+    };
+
+    assert_eq!(click_and_update(hit(first), false), (vec![first], vec![]));
+    assert_eq!(click_and_update(hit(second), true), (vec![second], vec![]));
+    assert_eq!(click_and_update(hit(first), true), (vec![], vec![first]));
+    assert_eq!(
+        click_and_update(hit(first), false),
+        (vec![first], vec![second])
+    );
+    assert_eq!(
+        click_and_update(PickResult::Miss, false),
+        (vec![], vec![first])
+    );
+}
+
+#[test]
 fn update_without_tools_uploads_all_registered_meshes_once() {
     let mut editor = MeshEditor::new();
     let mut result = crate::UpdateResult::default();
