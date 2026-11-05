@@ -5,4 +5,9 @@ use super::MeshKey;
 pub struct UpdateResult {
     /// Meshes whose overlay buffers changed during this update.
     pub changed_overlays: Vec<MeshKey>,
+    /// Meshes that became active since the previous update, by a tool or the consumer.
+    pub activated_meshes: Vec<MeshKey>,
+    /// Meshes that became inactive since the previous update, including active meshes that
+    /// were removed. A mesh whose activation was undone before the update is in neither list.
+    pub deactivated_meshes: Vec<MeshKey>,
 }
