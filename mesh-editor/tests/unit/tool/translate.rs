@@ -2,6 +2,7 @@ use glam::{DMat4, Vec3};
 use mesh::{Mesh, MeshBuffers};
 use slotmap::SlotMap;
 
+use crate::mesh_editor::ActiveMeshes;
 use crate::{MeshKey, MeshTransform, SceneInput, WorldRay};
 
 use super::*;
@@ -85,7 +86,7 @@ fn drag_update_advances_the_baseline_and_cancellation_ignores_pending_motion() {
 fn translation_is_deferred_incremental_and_release_flushes_final_motion() {
     let mut meshes = SlotMap::with_key();
     let key = meshes.insert(selected_mesh(&[Vec3::ZERO]));
-    let mut active = vec![key];
+    let mut active = ActiveMeshes::from(vec![key]);
     let transforms = [MeshTransform::new(key, DMat4::IDENTITY).unwrap()];
     let mut context = ToolContext::new(&mut meshes, &mut active, EditMode::VERTEX);
     let mut tool = TranslateTool::default();
@@ -116,7 +117,7 @@ fn translation_is_deferred_incremental_and_release_flushes_final_motion() {
 fn cancel_reverses_applied_movement_and_ignores_pending_movement() {
     let mut meshes = SlotMap::with_key();
     let key = meshes.insert(selected_mesh(&[Vec3::ZERO]));
-    let mut active = vec![key];
+    let mut active = ActiveMeshes::from(vec![key]);
     let transforms = [MeshTransform::new(key, DMat4::IDENTITY).unwrap()];
     let mut context = ToolContext::new(&mut meshes, &mut active, EditMode::VERTEX);
     let mut tool = TranslateTool::default();
@@ -139,7 +140,7 @@ fn missing_transform_rejects_entire_drag_and_preserves_selection() {
     let mut meshes = SlotMap::with_key();
     let first = meshes.insert(selected_mesh(&[Vec3::ZERO]));
     let second = meshes.insert(selected_mesh(&[Vec3::X]));
-    let mut active = vec![first, second];
+    let mut active = ActiveMeshes::from(vec![first, second]);
     let transforms = [MeshTransform::new(first, DMat4::IDENTITY).unwrap()];
     let mut context = ToolContext::new(&mut meshes, &mut active, EditMode::VERTEX);
     let mut tool = TranslateTool::default();
@@ -163,7 +164,7 @@ fn collecting_active_transforms_reuses_storage_and_clears_partial_results() {
     let empty = meshes.insert(selected_mesh(&[Vec3::Y]));
     let inactive = meshes.insert(selected_mesh(&[Vec3::Z]));
     meshes[empty].selection_mut().clear();
-    let mut active = vec![first, empty, second];
+    let mut active = ActiveMeshes::from(vec![first, empty, second]);
     let transforms = [
         MeshTransform::new(inactive, DMat4::IDENTITY).unwrap(),
         MeshTransform::new(second, DMat4::from_translation(8.0 * DVec3::Z)).unwrap(),
@@ -195,7 +196,7 @@ fn collecting_active_transforms_reuses_storage_and_clears_partial_results() {
         collect_active_mesh_transforms(&context, &transforms, &mut output),
         Some(())
     );
-    let mut empty_active = vec![empty];
+    let mut empty_active = ActiveMeshes::from(vec![empty]);
     let context = ToolContext::new(&mut meshes, &mut empty_active, EditMode::VERTEX);
     assert_eq!(
         collect_active_mesh_transforms(&context, &transforms, &mut output),
@@ -210,7 +211,7 @@ fn selection_centroid_weights_vertices_and_requires_complete_placements() {
     let mut meshes = SlotMap::with_key();
     let first = meshes.insert(selected_mesh(&[Vec3::ZERO]));
     let second = meshes.insert(selected_mesh(&[Vec3::ZERO; 3]));
-    let mut active = vec![first, second];
+    let mut active = ActiveMeshes::from(vec![first, second]);
     let transforms = [
         MeshTransform::new(first, DMat4::IDENTITY).unwrap(),
         MeshTransform::new(second, DMat4::from_translation(8.0 * DVec3::Z)).unwrap(),
@@ -230,7 +231,7 @@ fn invalid_selected_positions_prevent_drag_start() {
     for position in [Vec3::NAN, Vec3::splat(f32::INFINITY)] {
         let mut meshes = SlotMap::with_key();
         let key = meshes.insert(selected_mesh(&[position]));
-        let mut active = vec![key];
+        let mut active = ActiveMeshes::from(vec![key]);
         let transforms = [MeshTransform::new(key, DMat4::IDENTITY).unwrap()];
         let mut context = ToolContext::new(&mut meshes, &mut active, EditMode::VERTEX);
 
@@ -248,7 +249,7 @@ fn weighted_anchor_sets_plane_depth_and_drag_start_values_are_copied() {
     let mut meshes = SlotMap::with_key();
     let first = meshes.insert(selected_mesh(&[Vec3::ZERO]));
     let second = meshes.insert(selected_mesh(&[Vec3::ZERO, Vec3::X, Vec3::Y]));
-    let mut active = vec![first, second];
+    let mut active = ActiveMeshes::from(vec![first, second]);
     let mut transforms = [
         MeshTransform::new(first, DMat4::IDENTITY).unwrap(),
         MeshTransform::new(second, DMat4::from_translation(8.0 * DVec3::Z)).unwrap(),
@@ -284,7 +285,7 @@ fn world_displacement_maps_through_each_inverse_as_a_vector() {
     let first = meshes.insert(selected_mesh(&[Vec3::ZERO]));
     let second = meshes.insert(selected_mesh(&[Vec3::ZERO]));
     let third = meshes.insert(selected_mesh(&[Vec3::ZERO]));
-    let mut active = vec![first, second, third];
+    let mut active = ActiveMeshes::from(vec![first, second, third]);
     let transforms = [
         MeshTransform::new(first, DMat4::IDENTITY).unwrap(),
         MeshTransform::new(
@@ -325,7 +326,7 @@ fn confirmation_and_release_use_the_last_valid_pointer_position() {
     for finish in 0..3 {
         let mut meshes = SlotMap::with_key();
         let key = meshes.insert(selected_mesh(&[Vec3::ZERO]));
-        let mut active = vec![key];
+        let mut active = ActiveMeshes::from(vec![key]);
         let transforms = [MeshTransform::new(key, DMat4::IDENTITY).unwrap()];
         let mut context = ToolContext::new(&mut meshes, &mut active, EditMode::VERTEX);
         let mut tool = TranslateTool::default();
@@ -368,7 +369,7 @@ fn confirmation_and_release_use_the_last_valid_pointer_position() {
 fn invalid_latest_movement_preserves_unapplied_motion_and_recovers() {
     let mut meshes = SlotMap::with_key();
     let key = meshes.insert(selected_mesh(&[Vec3::ZERO]));
-    let mut active = vec![key];
+    let mut active = ActiveMeshes::from(vec![key]);
     let transforms = [MeshTransform::new(key, DMat4::IDENTITY).unwrap()];
     let mut context = ToolContext::new(&mut meshes, &mut active, EditMode::VERTEX);
     let mut tool = TranslateTool::default();
@@ -408,7 +409,7 @@ fn invalid_latest_movement_preserves_unapplied_motion_and_recovers() {
 fn invalid_start_data_does_not_leave_a_drag() {
     let mut meshes = SlotMap::with_key();
     let key = meshes.insert(selected_mesh(&[Vec3::ZERO]));
-    let mut active = vec![key];
+    let mut active = ActiveMeshes::from(vec![key]);
     let mut context = ToolContext::new(&mut meshes, &mut active, EditMode::VERTEX);
     let mut tool = TranslateTool::default();
     let transforms = [MeshTransform::new(key, DMat4::IDENTITY).unwrap()];
@@ -449,7 +450,7 @@ fn only_active_meshes_with_selected_vertices_participate() {
     let empty = meshes.insert(selected_mesh(&[Vec3::Y]));
     let inactive = meshes.insert(selected_mesh(&[Vec3::X]));
     meshes[empty].selection_mut().clear();
-    let mut active = vec![key, empty];
+    let mut active = ActiveMeshes::from(vec![key, empty]);
     let transforms = [MeshTransform::new(key, DMat4::IDENTITY).unwrap()];
     let mut context = ToolContext::new(&mut meshes, &mut active, EditMode::VERTEX);
     let mut tool = TranslateTool::default();
@@ -472,7 +473,7 @@ fn supplied_empty_selection_meshes_are_excluded_at_start() {
         let key = meshes.insert(selected_mesh(&[Vec3::ZERO]));
         let empty = meshes.insert(selected_mesh(&[Vec3::Y]));
         meshes[empty].selection_mut().clear();
-        let mut active = vec![key, empty];
+        let mut active = ActiveMeshes::from(vec![key, empty]);
         let transforms = [
             MeshTransform::new(
                 empty,
@@ -520,7 +521,7 @@ fn full_scene_transforms_only_resolve_active_selected_meshes() {
     let inactive = meshes.insert(selected_mesh(&[Vec3::X]));
     let empty = meshes.insert(selected_mesh(&[Vec3::Y]));
     meshes[empty].selection_mut().clear();
-    let mut active_keys = vec![active, empty];
+    let mut active_keys = ActiveMeshes::from(vec![active, empty]);
     let transforms = [
         MeshTransform::new(inactive, DMat4::from_translation(100.0 * DVec3::Z)).unwrap(),
         MeshTransform::new(empty, DMat4::from_translation(50.0 * DVec3::Z)).unwrap(),
@@ -545,7 +546,7 @@ fn full_scene_transforms_only_resolve_active_selected_meshes() {
 fn empty_selections_and_empty_modes_cannot_start_a_drag() {
     let mut meshes = SlotMap::with_key();
     let key = meshes.insert(selected_mesh(&[Vec3::ZERO]));
-    let mut active = vec![key];
+    let mut active = ActiveMeshes::from(vec![key]);
     let transforms = [MeshTransform::new(key, DMat4::IDENTITY).unwrap()];
     let mut tool = TranslateTool::default();
     let mut context = ToolContext::new(&mut meshes, &mut active, EditMode::NONE);
@@ -571,7 +572,7 @@ fn unrepresentable_local_movement_violates_the_debug_contract() {
     let mut meshes = SlotMap::with_key();
     let first = meshes.insert(selected_mesh(&[Vec3::ZERO]));
     let second = meshes.insert(selected_mesh(&[Vec3::ZERO]));
-    let mut active = vec![first, second];
+    let mut active = ActiveMeshes::from(vec![first, second]);
     let transforms = [
         MeshTransform::new(first, DMat4::IDENTITY).unwrap(),
         MeshTransform::new(second, DMat4::from_scale(DVec3::new(1e-40, 1.0, 1.0))).unwrap(),
@@ -591,7 +592,7 @@ fn unrepresentable_cancellation_total_violates_the_debug_contract() {
     let initial = Vec3::new(-2e38, 0.0, 0.0);
     let mut meshes = SlotMap::with_key();
     let key = meshes.insert(selected_mesh(&[initial]));
-    let mut active = vec![key];
+    let mut active = ActiveMeshes::from(vec![key]);
     let transforms = [MeshTransform::new(key, DMat4::IDENTITY).unwrap()];
     let mut context = ToolContext::new(&mut meshes, &mut active, EditMode::VERTEX);
     let mut tool = TranslateTool::default();
@@ -620,7 +621,7 @@ fn long_drag_at_world_scale_cancels_with_bounded_drift_and_reuses_storage() {
     let key = meshes.insert(selected_mesh(&[initial]));
     let rotated = meshes.insert(selected_mesh(&[initial]));
     let reflected = meshes.insert(selected_mesh(&[initial]));
-    let mut active = vec![key, rotated, reflected];
+    let mut active = ActiveMeshes::from(vec![key, rotated, reflected]);
     let transforms = [
         MeshTransform::new(key, DMat4::from_translation(world)).unwrap(),
         MeshTransform::new(
