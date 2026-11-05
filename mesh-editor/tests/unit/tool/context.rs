@@ -6,7 +6,7 @@ use super::*;
 #[test]
 fn empty_context_has_no_mesh_access() {
     let mut meshes = SlotMap::with_key();
-    let mut active_meshes = Vec::new();
+    let mut active_meshes = ActiveMeshes::default();
     let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::NONE);
 
     assert_eq!(context.mode(), EditMode::NONE);
@@ -30,8 +30,8 @@ fn context_exposes_mode_and_borrowed_active_meshes() {
         .selection_mut()
         .set_level(ComponentMask::EDGE);
 
-    let mut active_meshes = vec![second, first];
-    let active_meshes_ptr = active_meshes.as_ptr();
+    let mut active_meshes = ActiveMeshes::from(vec![second, first]);
+    let active_meshes_ptr = active_meshes.keys().as_ptr();
     let mode = EditMode {
         renderable_components: ComponentMask::FACE,
         selection_level: ComponentMask::VERTEX.union(ComponentMask::EDGE),
@@ -64,7 +64,7 @@ fn inactive_and_missing_meshes_are_inaccessible() {
     meshes.remove(removed).unwrap();
 
     let replacement = meshes.insert(Mesh::new());
-    let mut active_meshes = vec![active, removed, MeshKey::null()];
+    let mut active_meshes = ActiveMeshes::from(vec![active, removed, MeshKey::null()]);
     let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::VERTEX);
 
     assert!(context.mesh(active).is_some());
@@ -89,7 +89,7 @@ fn active_meshes_mut_edits_only_active_meshes() {
         meshes[key].selection_mut().set_level(ComponentMask::FACE);
     }
 
-    let mut active_meshes = vec![second, first];
+    let mut active_meshes = ActiveMeshes::from(vec![second, first]);
 
     {
         let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::FACE);
@@ -116,7 +116,7 @@ fn activation_applies_mode_and_appends_once() {
         .selection_mut()
         .set_level(ComponentMask::FACE);
 
-    let mut active_meshes = vec![first];
+    let mut active_meshes = ActiveMeshes::from(vec![first]);
     let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::VERTEX);
 
     context.set_mesh_active(second).unwrap();
@@ -146,7 +146,7 @@ fn retain_active_meshes_preserves_order_and_deactivated_selection() {
         .selection_mut()
         .set_level(ComponentMask::VERTEX);
 
-    let mut active_meshes = vec![last, middle, first];
+    let mut active_meshes = ActiveMeshes::from(vec![last, middle, first]);
 
     {
         let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::VERTEX);
@@ -158,7 +158,7 @@ fn retain_active_meshes_preserves_order_and_deactivated_selection() {
         assert!(context.mesh(middle).is_none());
     }
 
-    assert_eq!(active_meshes, [last, first]);
+    assert_eq!(active_meshes.keys(), [last, first]);
     assert_eq!(meshes[middle].selection().level(), ComponentMask::VERTEX);
 }
 
@@ -169,7 +169,7 @@ fn activation_rejects_unknown_keys() {
 
     meshes.remove(removed).unwrap();
 
-    let mut active_meshes = Vec::new();
+    let mut active_meshes = ActiveMeshes::default();
     let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::VERTEX);
 
     for key in [removed, MeshKey::null()] {
