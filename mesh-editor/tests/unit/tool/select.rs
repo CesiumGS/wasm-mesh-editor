@@ -1,6 +1,7 @@
 use mesh::{ComponentKey, ComponentMask, Mesh, MeshBuffers, VertKey};
 use slotmap::{Key, SlotMap};
 
+use crate::mesh_editor::ActiveMeshes;
 use crate::{MeshKey, Modifiers};
 
 use super::*;
@@ -31,7 +32,7 @@ fn plain_hit_replaces_selection_across_active_meshes() {
     meshes[first].selection_mut().select(&[vertices[0]]);
     meshes[second].selection_mut().select(&[other_vertex]);
 
-    let mut active_meshes = vec![first, second];
+    let mut active_meshes = ActiveMeshes::from(vec![first, second]);
     let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::VERTEX);
     let input = PointerInput {
         pick: PickResult::Hit {
@@ -77,7 +78,7 @@ fn shift_hit_toggles_each_selectable_kind_and_preserves_other_meshes() {
         } else {
             meshes[target].topology().faces().next().unwrap().into()
         };
-        let mut active_meshes = vec![target, other];
+        let mut active_meshes = ActiveMeshes::from(vec![target, other]);
         let mut context = ToolContext::new(&mut meshes, &mut active_meshes, mode);
         let input = PointerInput {
             pick: PickResult::Hit {
@@ -132,7 +133,7 @@ fn only_plain_explicit_misses_clear_active_meshes() {
         meshes[key].selection_mut().select(&[vertex]);
     }
 
-    let mut active_meshes = vec![first, second];
+    let mut active_meshes = ActiveMeshes::from(vec![first, second]);
     let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::VERTEX);
 
     for (pick, shift) in [
@@ -184,7 +185,7 @@ fn rejected_hits_act_as_misses() {
         meshes[key].selection_mut().select(&[selected]);
     }
 
-    let mut active_meshes = vec![target, other];
+    let mut active_meshes = ActiveMeshes::from(vec![target, other]);
     let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::VERTEX);
 
     for (mesh, component) in [
@@ -244,7 +245,7 @@ fn combined_selection_levels_accept_each_enabled_kind() {
     let vertex = meshes[target].topology().verts().next().unwrap();
     let edge = meshes[target].topology().edges().next().unwrap();
     let face = meshes[target].topology().faces().next().unwrap();
-    let mut active_meshes = vec![target];
+    let mut active_meshes = ActiveMeshes::from(vec![target]);
     let mut context = ToolContext::new(&mut meshes, &mut active_meshes, mode);
 
     assert!(SelectTool.supports_edit_mode(mode));
@@ -288,7 +289,7 @@ fn lifecycle_and_non_click_callbacks_preserve_selection() {
     let target = meshes.insert(triangle_mesh());
     let vertex = meshes[target].topology().verts().next().unwrap();
     meshes[target].selection_mut().select(&[vertex]);
-    let mut active_meshes = vec![target];
+    let mut active_meshes = ActiveMeshes::from(vec![target]);
     let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::VERTEX);
     let mut tool = SelectTool;
     let input = PointerInput {
@@ -362,7 +363,7 @@ fn empty_selection_levels_make_plain_hits_the_only_active_mesh() {
             .set_level(ComponentMask::VERTEX);
 
         let hit = face_hit(&meshes, clicked);
-        let mut active_meshes = vec![first, second];
+        let mut active_meshes = ActiveMeshes::from(vec![first, second]);
 
         {
             let mut context = ToolContext::new(&mut meshes, &mut active_meshes, mode);
@@ -392,7 +393,7 @@ fn empty_selection_levels_toggle_shift_hits_and_preserve_other_meshes() {
         let active = meshes.insert(triangle_mesh());
         let target = meshes.insert(triangle_mesh());
         let hit = face_hit(&meshes, target);
-        let mut active_meshes = vec![active];
+        let mut active_meshes = ActiveMeshes::from(vec![active]);
         let mut context = ToolContext::new(&mut meshes, &mut active_meshes, mode);
 
         assert!(SelectTool.pointer_click(&mut context, &mesh_click(hit, true)));
@@ -421,7 +422,7 @@ fn empty_selection_levels_deactivate_all_only_on_plain_misses() {
                 component: VertKey::null().into(),
             },
         ];
-        let mut active_meshes = vec![first, second];
+        let mut active_meshes = ActiveMeshes::from(vec![first, second]);
         let mut context = ToolContext::new(&mut meshes, &mut active_meshes, mode);
 
         for (pick, shift) in [
@@ -452,7 +453,7 @@ fn empty_selection_levels_ignore_hit_components() {
     let target = meshes.insert(triangle_mesh());
     let vertex = meshes[target].topology().verts().next().unwrap();
     let edge = meshes[target].topology().edges().next().unwrap();
-    let mut active_meshes = Vec::new();
+    let mut active_meshes = ActiveMeshes::default();
     let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::NONE);
 
     for component in [
