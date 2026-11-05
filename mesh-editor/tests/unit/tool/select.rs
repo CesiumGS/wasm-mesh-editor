@@ -21,7 +21,7 @@ fn triangle_mesh() -> Mesh {
 }
 
 #[test]
-fn plain_hit_replaces_only_the_hit_mesh_selection() {
+fn plain_hit_replaces_selection_across_active_meshes() {
     let mut meshes = SlotMap::with_key();
     let first = meshes.insert(triangle_mesh());
     let second = meshes.insert(triangle_mesh());
@@ -52,13 +52,7 @@ fn plain_hit_replaces_only_the_hit_mesh_selection() {
     let selected = context.mesh(first).unwrap().selection();
     assert!(selected.contains(vertices[1]));
     assert_eq!(selected.len(), 1);
-    assert!(
-        context
-            .mesh(second)
-            .unwrap()
-            .selection()
-            .contains(other_vertex)
-    );
+    assert!(context.mesh(second).unwrap().selection().is_empty());
 
     assert!(SelectTool.pointer_click(&mut context, &input));
     assert_eq!(context.mesh(first).unwrap().selection().len(), 1);
