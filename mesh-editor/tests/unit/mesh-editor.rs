@@ -3,13 +3,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 
-use glam::{DMat4, DVec3};
+use glam::{DMat4, DVec3, Vec3};
 use mesh::{ComponentKey, ComponentMask, ComponentType, MeshBuffers};
 use slotmap::Key;
 
 use crate::{
-    MeshTransform, Modifiers, OverlayComponent, PickResult, PointerInput, SceneInput, ToolContext,
-    WorldRay,
+    MeshTransform, Modifiers, OverlayComponent, PickResult, PointerInput, SceneInput, SelectTool,
+    ToolContext, TranslateTool, WorldRay,
 };
 
 use super::*;
@@ -295,6 +295,483 @@ fn assert_no_overlay_changes(buffers: &OverlayBuffers) {
     ] {
         assert!(selection.dirty_range.is_none());
     }
+}
+
+#[test]
+fn translate_tool_updates_selected_components_and_overlay_positions() {
+    for (mode, kind) in [
+        (EditMode::VERTEX, ComponentType::Vertex),
+        (EditMode::EDGE, ComponentType::Edge),
+        (EditMode::FACE, ComponentType::Face),
+    ] {
+        let mut mesh = triangle_mesh();
+        let component: ComponentKey = match kind {
+            ComponentType::Vertex => mesh.topology().verts().next().unwrap().into(),
+            ComponentType::Edge => mesh.topology().edges().next().unwrap().into(),
+            ComponentType::Face => mesh.topology().faces().next().unwrap().into(),
+        };
+        mesh.selection_mut().set_level(mode.selection_level);
+        mesh.selection_mut().select(&[component]);
+        let selected: Vec<_> = mesh.selection().verts().collect();
+        let original: Vec<_> = mesh
+            .topology()
+            .verts()
+            .map(|key| (key, mesh.attributes().positions[key]))
+            .collect();
+        let mut editor = MeshEditor::new();
+        let target = editor.add_mesh(mesh);
+        let inactive = editor.add_mesh(triangle_mesh());
+        let tool = editor.add_tool(TranslateTool::default());
+        let mut result = UpdateResult::default();
+        editor.set_mode(mode);
+        editor.set_mesh_active(target).unwrap();
+        editor.set_active_tool(Some(tool.id())).unwrap();
+        editor.update(0.0, &mut result);
+
+        let allocation = editor
+            .overlay_buffers(target)
+            .unwrap()
+            .positions
+            .data
+            .as_ptr();
+        let transforms: Vec<_> = editor
+            .mesh_keys()
+            .iter()
+            .map(|&key| MeshTransform::new(key, DMat4::IDENTITY).unwrap())
+            .collect();
+        let start = PointerInput {
+            ray: Some(WorldRay {
+                origin: DVec3::Z,
+                direction: -DVec3::Z,
+            }),
+            scene: Some(SceneInput {
+                view_direction: -DVec3::Z,
+                mesh_transforms: &transforms,
+            }),
+            ..PointerInput::default()
+        };
+        let movement = PointerInput {
+            ray: Some(WorldRay {
+                origin: DVec3::new(1.0, 0.0, 1.0),
+                direction: -DVec3::Z,
+            }),
+            ..PointerInput::default()
+        };
+
+        assert!(editor.active_tool_mut().unwrap().pointer_down(&start));
+        assert!(editor.active_tool_mut().unwrap().pointer_move(&movement));
+        assert_eq!(
+            editor.mesh(target).unwrap().attributes().positions[original[0].0],
+            original[0].1
+        );
+
+        editor.update(0.016, &mut result);
+
+        assert_eq!(result.changed_overlays, vec![target]);
+        assert_eq!(
+            editor
+                .overlay_buffers(target)
+                .unwrap()
+                .positions
+                .data
+                .as_ptr(),
+            allocation
+        );
+        assert_no_overlay_changes(editor.overlay_buffers(inactive).unwrap());
+
+        for (vertex, position) in &original {
+            let expected = if selected.contains(vertex) {
+                *position + Vec3::X
+            } else {
+                *position
+            };
+            assert_eq!(
+                editor.mesh(target).unwrap().attributes().positions[*vertex],
+                expected
+            );
+        }
+
+        assert!(editor.active_tool_mut().unwrap().pointer_move(&movement));
+        editor.update(0.016, &mut result);
+
+        assert!(result.changed_overlays.is_empty());
+
+        editor.update(0.016, &mut result);
+        assert!(result.changed_overlays.is_empty());
+
+        let release = PointerInput {
+            ray: Some(WorldRay {
+                origin: DVec3::new(2.0, 1.0, 1.0),
+                direction: -DVec3::Z,
+            }),
+            ..PointerInput::default()
+        };
+        assert!(editor.active_tool_mut().unwrap().pointer_up(&release));
+
+        for (vertex, position) in &original {
+            let expected = if selected.contains(vertex) {
+                *position + Vec3::new(2.0, 1.0, 0.0)
+            } else {
+                *position
+            };
+            assert_eq!(
+                editor.mesh(target).unwrap().attributes().positions[*vertex],
+                expected
+            );
+        }
+
+        editor.update(0.016, &mut result);
+
+        assert_eq!(result.changed_overlays, vec![target]);
+        let buffers = editor.overlay_buffers(target).unwrap();
+        let selected_indices: Vec<usize> = original
+            .iter()
+            .enumerate()
+            .filter(|(_, (vertex, _))| selected.contains(vertex))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(
+            buffers.positions.dirty_range,
+            Some(selected_indices[0]..selected_indices[selected_indices.len() - 1] + 1)
+        );
+
+        for (index, (vertex, _)) in original.iter().enumerate() {
+            assert_eq!(
+                buffers.positions.data[index],
+                editor.mesh(target).unwrap().attributes().positions[*vertex]
+                    .extend(0.0)
+                    .to_array()
+            );
+        }
+
+        editor.active_tool_mut().unwrap().cancel();
+        editor.update(0.016, &mut result);
+
+        assert!(result.changed_overlays.is_empty());
+    }
+}
+
+#[test]
+fn translate_tool_cancels_before_editor_context_transitions() {
+    for transition in ["tool", "mode", "none", "inactive", "active", "remove"] {
+        let mut mesh = triangle_mesh();
+        let vertex = mesh.topology().verts().next().unwrap();
+        mesh.selection_mut().select(&[vertex]);
+        let mut editor = MeshEditor::new();
+        let target = editor.add_mesh(mesh);
+        let other = editor.add_mesh(triangle_mesh());
+        let tool = editor.add_tool(TranslateTool::default());
+        let select = editor.add_tool(SelectTool);
+        let mut result = UpdateResult::default();
+        editor.set_mode(EditMode::VERTEX);
+        editor.set_mesh_active(target).unwrap();
+        editor.set_active_tool(Some(tool.id())).unwrap();
+        let transforms: Vec<_> = editor
+            .mesh_keys()
+            .iter()
+            .map(|&key| MeshTransform::new(key, DMat4::IDENTITY).unwrap())
+            .collect();
+        let start = PointerInput {
+            ray: Some(WorldRay {
+                origin: DVec3::Z,
+                direction: -DVec3::Z,
+            }),
+            scene: Some(SceneInput {
+                view_direction: -DVec3::Z,
+                mesh_transforms: &transforms,
+            }),
+            ..PointerInput::default()
+        };
+        assert!(editor.active_tool_mut().unwrap().pointer_down(&start));
+        let mut movement = PointerInput {
+            ray: Some(WorldRay {
+                origin: DVec3::new(2.0, 0.0, 1.0),
+                direction: -DVec3::Z,
+            }),
+            ..PointerInput::default()
+        };
+        editor.active_tool_mut().unwrap().pointer_move(&movement);
+        editor.update(0.016, &mut result);
+
+        assert_eq!(
+            editor.mesh(target).unwrap().attributes().positions[vertex],
+            2.0 * Vec3::X
+        );
+
+        movement.ray.as_mut().unwrap().origin.x = 4.0;
+        editor.active_tool_mut().unwrap().pointer_move(&movement);
+        let mut removed = None;
+
+        match transition {
+            "tool" => editor.set_active_tool(Some(select.id())).unwrap(),
+            "mode" => editor.set_mode(EditMode::FACE),
+            "none" => editor.set_mode(EditMode::NONE),
+            "inactive" => editor.set_mesh_inactive(target).unwrap(),
+            "active" => editor.set_mesh_active(other).unwrap(),
+            "remove" => removed = editor.remove_mesh(target),
+            _ => unreachable!(),
+        }
+
+        let mesh = removed.as_ref().or_else(|| editor.mesh(target)).unwrap();
+        assert_eq!(
+            mesh.attributes().positions[vertex],
+            Vec3::ZERO,
+            "{transition}"
+        );
+
+        if let Some(mut active) = editor.active_tool_mut() {
+            assert!(!active.pointer_up(&movement));
+            active.cancel();
+        }
+
+        editor.update(0.016, &mut result);
+
+        if let Some(buffers) = editor.overlay_buffers(target) {
+            assert_eq!(buffers.positions.data[0], [0.0; 4]);
+        }
+    }
+}
+
+#[test]
+fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
+    for (mode, kind, selected_vertices) in [
+        (EditMode::VERTEX, ComponentType::Vertex, 1),
+        (EditMode::EDGE, ComponentType::Edge, 2),
+        (EditMode::FACE, ComponentType::Face, 3),
+    ] {
+        let mut editor = MeshEditor::new();
+        let mut result = UpdateResult::default();
+        let target = editor.add_mesh(triangle_mesh());
+        let inactive = editor.add_mesh(triangle_mesh());
+        let tool = editor.add_tool(SelectTool);
+
+        editor.set_mode(mode);
+        editor.set_mesh_active(target).unwrap();
+        editor.set_active_tool(Some(tool.id())).unwrap();
+        editor.update(0.0, &mut result);
+
+        assert!(editor.tool_config_mut(&tool).is_some());
+
+        let component = editor
+            .overlay(target)
+            .unwrap()
+            .component_key(OverlayComponent { kind, index: 0 })
+            .unwrap();
+        let positions = editor
+            .overlay_buffers(target)
+            .unwrap()
+            .positions
+            .data
+            .as_ptr();
+        let selection = editor.overlay_buffers(target).unwrap().selection[kind]
+            .data
+            .as_ptr();
+        let mut input = PointerInput {
+            pick: PickResult::Hit {
+                mesh: target,
+                component: OverlayComponent { kind, index: 0 },
+            },
+            ..PointerInput::default()
+        };
+
+        assert!(editor.tool_mut(tool.id()).unwrap().pointer_click(&input));
+        assert!(editor.mesh(target).unwrap().selection().contains(component));
+        assert_eq!(
+            editor.mesh(target).unwrap().selection().verts().count(),
+            selected_vertices
+        );
+        assert_eq!(
+            editor.overlay_buffers(target).unwrap().selection[kind].data[0],
+            0
+        );
+
+        editor.update(0.016, &mut result);
+
+        assert_eq!(result.changed_overlays, vec![target]);
+
+        let buffers = editor.overlay_buffers(target).unwrap();
+        assert!(!buffers.full_refresh);
+        assert_eq!(buffers.positions.data.as_ptr(), positions);
+        assert!(buffers.positions.dirty_range.is_none());
+        assert_eq!(buffers.selection[kind].data.as_ptr(), selection);
+        assert_eq!(buffers.selection[kind].data[0], 255);
+        assert_eq!(buffers.selection[kind].dirty_range, Some(0..1));
+        assert_eq!(
+            buffers
+                .selection
+                .verts
+                .data
+                .iter()
+                .filter(|&&value| value == 255)
+                .count(),
+            selected_vertices
+        );
+        assert_no_overlay_changes(editor.overlay_buffers(inactive).unwrap());
+
+        input.modifiers.shift = true;
+
+        assert!(editor.active_tool_mut().unwrap().pointer_click(&input));
+        assert!(editor.mesh(target).unwrap().selection().is_empty());
+        assert_eq!(
+            editor.overlay_buffers(target).unwrap().selection[kind].data[0],
+            255
+        );
+
+        editor.update(0.016, &mut result);
+
+        assert_eq!(result.changed_overlays, vec![target]);
+        let buffers = editor.overlay_buffers(target).unwrap();
+        for selection in [
+            &buffers.selection.verts,
+            &buffers.selection.edges,
+            &buffers.selection.faces,
+        ] {
+            assert!(selection.data.iter().all(|&value| value == 0));
+        }
+
+        assert!(
+            !editor
+                .active_tool_mut()
+                .unwrap()
+                .pointer_click(&PointerInput::default())
+        );
+        editor.update(0.016, &mut result);
+
+        assert!(result.changed_overlays.is_empty());
+        assert_no_overlay_changes(editor.overlay_buffers(target).unwrap());
+    }
+}
+
+#[test]
+fn select_tool_stays_active_across_modes() {
+    let mut editor = MeshEditor::new();
+    let tool = editor.add_tool(SelectTool);
+
+    editor.set_active_tool(Some(tool.id())).unwrap();
+
+    for mode in [
+        EditMode::EDGE,
+        EditMode::FACE,
+        EditMode::NONE,
+        EditMode::VERTEX,
+    ] {
+        editor.set_mode(mode);
+
+        assert_eq!(editor.active_tool(), Some(tool.id()));
+    }
+}
+
+#[test]
+fn select_tool_clicks_in_empty_modes_resolve_inactive_meshes_and_change_active_meshes() {
+    let mut editor = MeshEditor::new();
+    let first = editor.add_mesh(triangle_mesh());
+    let second = editor.add_mesh(triangle_mesh());
+    let tool = editor.add_tool(SelectTool);
+    let click = |mesh, shift| PointerInput {
+        pick: PickResult::Hit {
+            mesh,
+            component: OverlayComponent {
+                kind: ComponentType::Face,
+                index: 0,
+            },
+        },
+        modifiers: Modifiers {
+            shift,
+            ..Modifiers::default()
+        },
+        ..PointerInput::default()
+    };
+
+    editor.set_active_tool(Some(tool.id())).unwrap();
+
+    assert!(
+        editor
+            .active_tool_mut()
+            .unwrap()
+            .pointer_click(&click(first, false))
+    );
+    assert_eq!(editor.active_meshes(), &[first]);
+
+    assert!(
+        editor
+            .active_tool_mut()
+            .unwrap()
+            .pointer_click(&click(second, true))
+    );
+    assert_eq!(editor.active_meshes(), &[first, second]);
+
+    assert!(
+        editor
+            .active_tool_mut()
+            .unwrap()
+            .pointer_click(&click(second, false))
+    );
+    assert_eq!(editor.active_meshes(), &[second]);
+
+    assert!(
+        editor
+            .active_tool_mut()
+            .unwrap()
+            .pointer_click(&PointerInput {
+                pick: PickResult::Miss,
+                ..PointerInput::default()
+            })
+    );
+    assert!(editor.active_meshes().is_empty());
+    assert_eq!(editor.active_tool(), Some(tool.id()));
+}
+
+#[test]
+fn update_reports_active_mesh_changes_from_select_tool_clicks() {
+    let mut editor = MeshEditor::new();
+    let mut result = UpdateResult::default();
+    let first = editor.add_mesh(triangle_mesh());
+    let second = editor.add_mesh(triangle_mesh());
+    let tool = editor.add_tool(SelectTool);
+    let click = |pick, shift| PointerInput {
+        pick,
+        modifiers: Modifiers {
+            shift,
+            ..Modifiers::default()
+        },
+        ..PointerInput::default()
+    };
+    let hit = |mesh| PickResult::Hit {
+        mesh,
+        component: OverlayComponent {
+            kind: ComponentType::Face,
+            index: 0,
+        },
+    };
+
+    editor.set_active_tool(Some(tool.id())).unwrap();
+
+    let mut click_and_update = |pick, shift| {
+        assert!(
+            editor
+                .active_tool_mut()
+                .unwrap()
+                .pointer_click(&click(pick, shift))
+        );
+        editor.update(0.016, &mut result);
+
+        (
+            result.activated_meshes.clone(),
+            result.deactivated_meshes.clone(),
+        )
+    };
+
+    assert_eq!(click_and_update(hit(first), false), (vec![first], vec![]));
+    assert_eq!(click_and_update(hit(second), true), (vec![second], vec![]));
+    assert_eq!(click_and_update(hit(first), true), (vec![], vec![first]));
+    assert_eq!(
+        click_and_update(hit(first), false),
+        (vec![first], vec![second])
+    );
+    assert_eq!(
+        click_and_update(PickResult::Miss, false),
+        (vec![], vec![first])
+    );
 }
 
 #[test]
@@ -1051,6 +1528,58 @@ fn mesh_not_found_reports_the_missing_key() {
     let error: &dyn std::error::Error = &error;
 
     assert_eq!(error.to_string(), format!("mesh {key:?} is not registered"));
+}
+
+#[test]
+fn tool_handle_lookup_supports_active_and_inactive_configuration() {
+    let mut editor = MeshEditor::new();
+    let first = editor.add_tool(TestTool { value: 1_u32 });
+    let second = editor.add_tool(TestTool { value: 2_u32 });
+
+    let recovered = editor.tool_handle::<TestTool<u32>>(first.id()).unwrap();
+
+    assert_eq!(recovered.id(), first.id());
+    editor.tool_config_mut(&recovered).unwrap().value = 10;
+    assert_eq!(editor.active_tool(), None);
+
+    editor.active_tool = Some(first.id());
+
+    let active = {
+        let editor = &editor;
+        editor
+            .tool_handle::<TestTool<u32>>(editor.active_tool().unwrap())
+            .unwrap()
+    };
+    let inactive = editor.tool_handle::<TestTool<u32>>(second.id()).unwrap();
+
+    editor.tool_config_mut(&active).unwrap().value = 11;
+    editor.tool_config_mut(&inactive).unwrap().value = 20;
+
+    assert_eq!(editor.tool_config_mut(&first).unwrap().value, 11);
+    assert_eq!(editor.tool_config_mut(&second).unwrap().value, 20);
+    assert_eq!(editor.active_tool(), Some(first.id()));
+    assert!(editor.tool_mut(second.id()).is_none());
+}
+
+#[test]
+fn tool_handle_lookup_rejects_wrong_types_and_unregistered_ids() {
+    let mut editor = MeshEditor::new();
+    let mut other_editor = MeshEditor::new();
+    let number = editor.add_tool(TestTool { value: 1_u32 });
+    let foreign = other_editor.add_tool(TestTool { value: 2_u32 });
+
+    assert!(
+        editor
+            .tool_handle::<TestTool<String>>(number.id())
+            .is_none()
+    );
+    assert!(editor.tool_handle::<TestTool<u32>>(foreign.id()).is_none());
+    assert!(editor.tool_handle::<TestTool<u32>>(ToolId::new()).is_none());
+    assert_eq!(editor.tool_config_mut(&number).unwrap().value, 1);
+
+    editor.tools.remove(&number.id()).unwrap();
+
+    assert!(editor.tool_handle::<TestTool<u32>>(number.id()).is_none());
 }
 
 #[test]

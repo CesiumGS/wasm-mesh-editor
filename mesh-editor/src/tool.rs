@@ -3,12 +3,17 @@ use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod access;
+mod common;
 mod context;
 mod input;
+mod select;
+mod translate;
 
 pub use access::ToolAccessor;
 pub use context::ToolContext;
 pub use input::{Modifiers, PickResult, PointerInput, SceneInput};
+pub use select::SelectTool;
+pub use translate::TranslateTool;
 
 use mesh::ComponentKey;
 
@@ -59,6 +64,10 @@ impl<ToolType: Tool> ToolHandle<ToolType> {
 /// the current interaction before altering its editing context, except active-mesh changes
 /// the tool makes itself through its [`ToolContext`].
 /// Other commands that change selection, topology, or placement must cancel it first.
+///
+/// Pointer methods return `true` if the tool consumed the input, whether or not any state
+/// changed, and `false` if it ignored the input. Hosts may route ignored input elsewhere,
+/// such as to camera controls. To detect state changes, use the editor's update results.
 pub trait Tool: Any {
     /// Returns this tool for checked, concrete-type configuration access.
     fn as_any_mut(&mut self) -> &mut dyn Any;
