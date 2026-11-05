@@ -11,8 +11,16 @@ pub struct UpdateResult {
     )]
     pub changed_overlays: Vec<MeshKey>,
     /// Meshes that became active since the previous update, by a tool or the consumer.
+    #[cfg_attr(
+        feature = "wasm",
+        wasm_bindgen(readonly, getter_with_clone, js_name = activatedMeshes)
+    )]
     pub activated_meshes: Vec<MeshKey>,
     /// Meshes that became inactive since the previous update, including active meshes that
     /// were removed. A mesh whose activation was undone before the update is in neither list.
+    #[cfg_attr(
+        feature = "wasm",
+        wasm_bindgen(readonly, getter_with_clone, js_name = deactivatedMeshes)
+    )]
     pub deactivated_meshes: Vec<MeshKey>,
 }
