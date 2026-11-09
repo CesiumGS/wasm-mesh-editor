@@ -257,6 +257,34 @@ impl MeshEditor {
         Ok(OverlayViews::from(buffers).into_ts()?)
     }
 
+    /// Writes a mesh's local-space bounds to `result` as `[minX, minY, minZ, maxX, maxY, maxZ]`.
+    /// Returns `false` and leaves `result` unchanged for a mesh with no vertices.
+    /// Throws for an unknown mesh key or a `result` whose length isn't 6.
+    #[wasm_bindgen(js_name = meshBounds)]
+    pub fn mesh_bounds(
+        &self,
+        key: MeshKey,
+        result: &js_sys::Float64Array,
+    ) -> Result<bool, JsError> {
+        let mesh = self.mesh(key).ok_or(MeshNotFound { key })?;
+        let length = result.length();
+
+        if length != 6 {
+            return Err(JsError::new(&format!("result length {length} is not 6")));
+        }
+
+        let Some(bounds) = mesh.bounds() else {
+            return Ok(false);
+        };
+
+        let (min, max) = (bounds.min.as_dvec3(), bounds.max.as_dvec3());
+
+        // A JS-owned output avoids wasm allocations
+        result.copy_from(&[min.x, min.y, min.z, max.x, max.y, max.z]);
+
+        Ok(true)
+    }
+
     /// Makes `components` selectable.
     /// Applies the selection level to active meshes and deactivates incompatible tools.
     /// Throws for bits outside `ComponentMask`.
