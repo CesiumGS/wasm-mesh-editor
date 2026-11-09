@@ -20,6 +20,12 @@ vec2 topologyOverlay_viewportSize()
     return u_viewportSize;
 }
 
+// No cap on the depth bias.
+float topologyOverlay_nearDistance()
+{
+    return 0.0;
+}
+
 void topologyOverlay_setVertexOutputs(vec4 positionEC, uint componentIndex)
 {
 }
