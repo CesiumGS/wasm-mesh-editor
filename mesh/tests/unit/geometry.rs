@@ -190,3 +190,61 @@ fn corner_angles_handle_convex_concave_and_collapsed_corners() {
     assert_eq!(corner_angle(DVec3::ZERO, DVec3::X, DVec3::Z), 0.0);
     assert_eq!(corner_angle(DVec3::X, DVec3::ZERO, DVec3::Z), 0.0);
 }
+
+#[test]
+fn aabb_from_points_takes_per_axis_extremes() {
+    assert_eq!(Aabb::from_points([]), None);
+
+    let point = Vec3::new(1.0, -2.0, 3.0);
+    assert_eq!(
+        Aabb::from_points([point]),
+        Some(Aabb {
+            min: point,
+            max: point
+        })
+    );
+
+    let aabb = Aabb::from_points([
+        Vec3::new(1.0, 5.0, -1.0),
+        Vec3::new(-2.0, 0.0, 4.0),
+        Vec3::new(0.0, 3.0, 2.0),
+    ])
+    .unwrap();
+    assert_eq!(aabb.min, Vec3::new(-2.0, 0.0, -1.0));
+    assert_eq!(aabb.max, Vec3::new(1.0, 5.0, 4.0));
+}
+
+#[test]
+fn aabb_union_contains_both_boxes_in_either_order() {
+    let a = Aabb {
+        min: Vec3::new(-2.0, 0.0, -1.0),
+        max: Vec3::new(1.0, 5.0, 4.0),
+    };
+    let b = Aabb {
+        min: Vec3::splat(-3.0),
+        max: Vec3::ZERO,
+    };
+    let union = Aabb {
+        min: Vec3::splat(-3.0),
+        max: Vec3::new(1.0, 5.0, 4.0),
+    };
+
+    assert_eq!(a.union(b), union);
+    assert_eq!(b.union(a), union);
+}
+
+#[test]
+fn aabb_translated_moves_both_corners() {
+    let aabb = Aabb {
+        min: Vec3::new(-2.0, 0.0, -1.0),
+        max: Vec3::new(1.0, 5.0, 4.0),
+    };
+
+    assert_eq!(
+        aabb.translated(Vec3::ONE),
+        Aabb {
+            min: Vec3::new(-1.0, 1.0, 0.0),
+            max: Vec3::new(2.0, 6.0, 5.0),
+        }
+    );
+}

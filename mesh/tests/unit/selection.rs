@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Mesh, MeshBuffers};
+use crate::{Aabb, Mesh, MeshBuffers};
 use event_emitter::Event;
 use glam::Vec3;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -1584,4 +1584,110 @@ fn missing_keys_and_disabled_toggle_inputs_are_ignored() {
     mesh.selection_mut().toggle(&missing);
     mesh.selection_mut().deselect(&missing);
     assert!(mesh.selection().is_empty());
+}
+
+/// Bounds recomputed from current positions: (selected, whole mesh).
+fn recomputed_bounds(mesh: &Mesh) -> (Option<Aabb>, Option<Aabb>) {
+    let positions = &mesh.attributes.positions;
+    let selected = Aabb::from_points(mesh.selection().verts().map(|key| positions[key]));
+    let all = Aabb::from_points(mesh.topology.verts.keys().map(|key| positions[key]));
+
+    (selected, all)
+}
+
+fn assert_bounds_match_positions(mesh: &Mesh) {
+    assert_eq!(
+        (mesh.selection().bounds(), mesh.bounds()),
+        recomputed_bounds(mesh)
+    );
+}
+
+fn bounds_cache_state(mesh: &Mesh) -> [bool; 2] {
+    let cache = &mesh.selection.bounds;
+
+    [
+        cache.selected.get().is_some(),
+        cache.unselected.get().is_some(),
+    ]
+}
+
+#[test]
+fn bounds_of_empty_mesh_and_empty_selection() {
+    let empty = Mesh::new();
+    assert_eq!(empty.bounds(), None);
+    assert_eq!(empty.selection().bounds(), None);
+
+    let mesh = quad_grid(2, 1);
+    assert_eq!(mesh.selection().bounds(), None);
+    assert_eq!(
+        mesh.bounds(),
+        Some(Aabb {
+            min: Vec3::ZERO,
+            max: Vec3::new(2.0, 1.0, 0.0),
+        })
+    );
+}
+
+#[test]
+fn bounds_are_lazy_and_invalidate_only_on_vertex_selection_changes() {
+    let mut mesh = quad_grid(2, 2);
+    let verts: Vec<_> = mesh.topology.verts.keys().collect();
+    assert_eq!(bounds_cache_state(&mesh), [false, false]);
+
+    mesh.selection().bounds();
+    assert_eq!(bounds_cache_state(&mesh), [true, false]);
+    mesh.bounds();
+    assert_eq!(bounds_cache_state(&mesh), [true, true]);
+
+    mesh.selection_mut().select(&verts[..2]);
+    assert_eq!(bounds_cache_state(&mesh), [false, false]);
+    assert_bounds_match_positions(&mesh);
+
+    mesh.selection_mut().select(&verts[..1]);
+    assert_eq!(bounds_cache_state(&mesh), [true, true]);
+
+    mesh.selection_mut().deselect(&verts[..1]);
+    assert_eq!(bounds_cache_state(&mesh), [false, false]);
+    assert_bounds_match_positions(&mesh);
+
+    mesh.selection_mut().clear();
+    assert_eq!(bounds_cache_state(&mesh), [false, false]);
+    assert_bounds_match_positions(&mesh);
+
+    let faces: Vec<_> = mesh.topology.faces.keys().collect();
+    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.selection_mut().select(&faces[..1]);
+    assert_bounds_match_positions(&mesh);
+}
+
+#[test]
+fn translation_shifts_cached_bounds_exactly() {
+    let mut mesh = quad_grid(3, 3);
+    let verts: Vec<_> = mesh.topology.verts.keys().collect();
+    mesh.selection_mut().select(&verts[5..7]);
+    assert_bounds_match_positions(&mesh);
+
+    for step in 0..500 {
+        let delta = Vec3::new(0.1, -0.37, 0.013) * (step % 7) as f32 - Vec3::splat(0.2);
+        mesh.translate_selected(delta);
+        assert_eq!(bounds_cache_state(&mesh), [true, true]);
+        assert_bounds_match_positions(&mesh);
+    }
+}
+
+#[test]
+fn translation_leaves_uncomputed_bounds_uncomputed() {
+    let mut mesh = quad_grid(2, 2);
+    let verts: Vec<_> = mesh.topology.verts.keys().collect();
+    mesh.selection_mut().select(&verts[..1]);
+
+    mesh.translate_selected(Vec3::Z);
+    assert_eq!(bounds_cache_state(&mesh), [false, false]);
+    assert_bounds_match_positions(&mesh);
+
+    mesh.selection_mut().set(&verts);
+    mesh.bounds();
+    mesh.translate_selected(-Vec3::X);
+    assert_eq!(mesh.selection.bounds.unselected.get().copied(), Some(None));
+    assert_bounds_match_positions(&mesh);
 }

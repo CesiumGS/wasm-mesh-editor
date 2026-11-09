@@ -1,6 +1,7 @@
 //! Selection state and the accessors used to read and edit it.
 
 mod boundary;
+mod bounds;
 
 pub use boundary::{SelectionBoundary, SelectionStep};
 
@@ -8,10 +9,12 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use boundary::BoundaryCache;
+use bounds::BoundsCache;
 use event_emitter::EventEmitter;
+use glam::Vec3;
 
 use crate::{
-    Attributes, ComponentKey, ComponentMask, ComponentRef, ComponentType, EdgeKey, FaceKey,
+    Aabb, Attributes, ComponentKey, ComponentMask, ComponentRef, ComponentType, EdgeKey, FaceKey,
     MeshChange, SelectionChange, SelectionKeys, Topology, VertKey,
 };
 
@@ -27,6 +30,7 @@ pub(crate) struct SelectionState {
     pub(crate) faces: HashSet<FaceKey>,
     pub(crate) level: ComponentMask,
     boundary: BoundaryCache,
+    bounds: BoundsCache,
 }
 
 impl Default for SelectionState {
@@ -37,6 +41,7 @@ impl Default for SelectionState {
             faces: HashSet::new(),
             level: ComponentMask::VERTEX,
             boundary: BoundaryCache::default(),
+            bounds: BoundsCache::default(),
         }
     }
 }
@@ -46,6 +51,44 @@ impl SelectionState {
         self.boundary = BoundaryCache::default();
     }
 
+    /// Call after selection edits and any position edit other than [`Self::translate_bounds`].
+    pub(crate) fn invalidate_bounds(&mut self) {
+        self.bounds = BoundsCache::default();
+    }
+
+    /// Keeps cached bounds exact after the selected vertices move by `delta`.
+    pub(crate) fn translate_bounds(&mut self, delta: Vec3) {
+        if let Some(Some(aabb)) = self.bounds.selected.get_mut() {
+            *aabb = aabb.translated(delta);
+        }
+    }
+
+    /// `None` for an empty selection.
+    pub(crate) fn selected_bounds(&self, attrs: &Attributes) -> Option<Aabb> {
+        *self
+            .bounds
+            .selected
+            .get_or_init(|| Aabb::from_points(self.verts.iter().map(|&key| attrs.positions[key])))
+    }
+
+    /// The bounds for the entire mesh -- combining the bounds of the selected components and unselected components. `None` for an empty mesh.
+    pub(crate) fn mesh_bounds(&self, topo: &Topology, attrs: &Attributes) -> Option<Aabb> {
+        let selected = self.selected_bounds(attrs);
+        let unselected = *self.bounds.unselected.get_or_init(|| {
+            Aabb::from_points(
+                topo.verts
+                    .keys()
+                    .filter(|key| !self.verts.contains(key))
+                    .map(|key| attrs.positions[key]),
+            )
+        });
+
+        match (selected, unselected) {
+            (Some(selected), Some(unselected)) => Some(selected.union(unselected)),
+            _ => selected.or(unselected),
+        }
+    }
+
     fn insert(&mut self, key: ComponentKey) -> bool {
         let changed = match key {
             ComponentKey::Vert(key) => {
@@ -53,6 +96,7 @@ impl SelectionState {
                     return false;
                 }
 
+                self.invalidate_bounds();
                 Rc::make_mut(&mut self.verts).insert(key)
             }
             ComponentKey::Edge(key) => self.edges.insert(key),
@@ -71,6 +115,7 @@ impl SelectionState {
                     return false;
                 }
 
+                self.invalidate_bounds();
                 Rc::make_mut(&mut self.verts).remove(&key)
             }
             ComponentKey::Edge(key) => self.edges.remove(&key),
@@ -160,6 +205,11 @@ impl<'a> SelectionView<'a> {
     /// Lazy boundary sets shared across views, independent of the selection mode.
     pub fn boundary(&self) -> SelectionBoundary<'a> {
         SelectionBoundary::new(self.state, self.topo)
+    }
+
+    /// Local-space bounds of the selected vertices, or `None` for an empty selection.
+    pub fn bounds(&self) -> Option<Aabb> {
+        self.state.selected_bounds(self.attrs)
     }
 }
 
@@ -253,6 +303,7 @@ impl<'a> Selection<'a> {
         }
 
         self.state.invalidate_boundary();
+        self.state.invalidate_bounds();
 
         let verts = match Rc::get_mut(&mut self.state.verts) {
             Some(verts) => verts.drain().collect(),

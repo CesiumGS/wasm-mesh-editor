@@ -12,8 +12,8 @@ use glam::{DVec3, Vec3};
 use crate::geometry::corner_angle;
 use crate::selection::{SelectionBoundary, SelectionState};
 use crate::{
-    AttributeChange, Attributes, ComponentKey, ComponentRef, EdgeKey, EdgeRef, FaceKey, FaceRef,
-    LoopKey, MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
+    Aabb, AttributeChange, Attributes, ComponentKey, ComponentRef, EdgeKey, EdgeRef, FaceKey,
+    FaceRef, LoopKey, MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
 };
 
 pub use build::{MeshBuffers, MeshBuildError};
@@ -53,6 +53,11 @@ impl Mesh {
 
     pub fn attributes(&self) -> &Attributes {
         &self.attributes
+    }
+
+    /// Local-space bounds of every vertex, or `None` for an empty mesh.
+    pub fn bounds(&self) -> Option<Aabb> {
+        self.selection.mesh_bounds(&self.topology, &self.attributes)
     }
 
     /// Returns a view of a vertex, edge, or face, or `None` for a missing handle.
@@ -115,6 +120,8 @@ impl Mesh {
         for &key in selection.verts.iter() {
             attributes.positions[key] += delta;
         }
+
+        selection.translate_bounds(delta);
 
         let boundary = SelectionBoundary::new(selection, topology);
         let loops = Rc::clone(boundary.mixed_face_loops());
