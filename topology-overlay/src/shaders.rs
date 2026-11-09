@@ -74,8 +74,8 @@ pub mod uniforms {
     // ---- Style ----
 
     /// `float`, in every shader: pulls the overlay toward the camera by this fraction of its
-    /// eye-space depth. Set per draw, e.g. larger for points than edges, and edges than faces,
-    /// so points draw over edges and edges over faces.
+    /// eye-space depth, but not past `topologyOverlay_nearDistance()`. Set per draw, e.g. larger
+    /// for points than edges, and edges than faces, so points draw over edges and edges over faces.
     pub const DEPTH_BIAS: &str = "u_depthBias";
     /// `float`, in the point shader: diameter in pixels.
     pub const POINT_SIZE: &str = "u_pointSize";

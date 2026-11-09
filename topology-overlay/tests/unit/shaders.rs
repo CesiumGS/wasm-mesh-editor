@@ -36,6 +36,7 @@ fn shaders_declare_the_hook_interface() {
                 "topologyOverlay_modelToEye",
                 "topologyOverlay_eyeToClip",
                 "topologyOverlay_viewportSize",
+                "topologyOverlay_nearDistance",
                 "topologyOverlay_setVertexOutputs",
             ],
             "{name}"

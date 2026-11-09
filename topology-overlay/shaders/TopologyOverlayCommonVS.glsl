@@ -16,6 +16,9 @@ vec4 topologyOverlay_modelToEye(vec3 positionMC);
 vec4 topologyOverlay_eyeToClip(vec4 positionEC);
 // Viewport size in pixels. Point and edge sizes are in the same pixels.
 vec2 topologyOverlay_viewportSize();
+// Distance from the eye to the near plane, positive. The depth bias stops short of it, so a
+// tight near plane doesn't clip biased points and edges. 0 disables the cap.
+float topologyOverlay_nearDistance();
 // Called once per vertex, after `gl_Position` is final, with the vertex's eye position (before
 // any screen-space offset) and the drawn component's overlay index. The place for per-vertex
 // outputs such as custom depth and pick colors. May adjust `gl_Position`'s depth.
@@ -50,7 +53,9 @@ float topologyOverlay_fetchSelected(uint componentIndex)
 
 vec4 topologyOverlay_applyDepthBias(vec4 positionEC)
 {
-    positionEC.z += abs(positionEC.z) * u_depthBias;
+    float biased = positionEC.z + abs(positionEC.z) * u_depthBias;
+    float limit = -topologyOverlay_nearDistance() * (1.0 + 1e-5);
+    positionEC.z = min(biased, max(positionEC.z, limit));
     return positionEC;
 }
 
