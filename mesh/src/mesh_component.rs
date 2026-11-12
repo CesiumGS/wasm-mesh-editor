@@ -1,14 +1,90 @@
 //! Component handles, kinds, and composed component views.
 
-use slotmap::new_key_type;
+use std::cmp::Ordering;
+use std::fmt;
+use std::hash::{Hash, Hasher};
+
+use slotmap::{Key, KeyData, new_key_type};
 
 use crate::{Attributes, EdgeRef, FaceRef, Topology, VertRef};
 
-new_key_type! {
+/// Mirrors SlotMap's `new_key_type!` macro, but explicitly stores the key's `KeyData::as_ffi` value so slices of keys can be
+/// shared across FFI as `u64`s without any conversion from SlotMap's key type, to save on overhead.
+macro_rules! ffi_key_type {
+    ($($(#[$meta:meta])* $vis:vis struct $name:ident;)*) => {$(
+        $(#[$meta])*
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        #[repr(transparent)]
+        $vis struct $name(u64);
+
+        const _: () = assert!(size_of::<$name>() == 8 && align_of::<$name>() == 8);
+
+        impl $name {
+            /// Returns the key whose `KeyData::as_ffi` value is `id`, or `None` if no slot map
+            /// could have issued it.
+            pub const fn try_from_ffi(id: u64) -> Option<Self> {
+                // Slot maps only issue odd versions, and `from_ffi` forces the version to be odd. An even version
+                // would decode as a different key, so its equality would no longer match `KeyData`'s. This check ensures we only accept valid FFI keys.
+                if (id >> 32) & 1 == 1 { Some(Self(id)) } else { None }
+            }
+        }
+
+        impl From<KeyData> for $name {
+            fn from(data: KeyData) -> Self {
+                Self(data.as_ffi())
+            }
+        }
+
+        // SAFETY: slotmap requires our keys to behave exactly like their `KeyData`:
+        // - The private `u64` only holds `KeyData::as_ffi` values, which `from_ffi` decodes exactly.
+        // - `as_ffi` is one-to-one, so derived equality on the `u64` matches `KeyData`'s.
+        // - `Ord`, `Hash`, `Debug`, and `Default` delegate to `KeyData`.
+        unsafe impl Key for $name {
+            fn data(&self) -> KeyData {
+                KeyData::from_ffi(self.0)
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                KeyData::default().into()
+            }
+        }
+
+        impl PartialOrd for $name {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl Ord for $name {
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.data().cmp(&other.data())
+            }
+        }
+
+        impl Hash for $name {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                self.data().hash(state);
+            }
+        }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.data().fmt(f)
+            }
+        }
+    )*};
+}
+
+ffi_key_type! {
     pub struct VertKey;
     pub struct EdgeKey;
-    pub struct LoopKey;
     pub struct FaceKey;
+}
+
+new_key_type! {
+    pub struct LoopKey;
 }
 
 /// A selectable component kind. Loops are internal and excluded.
