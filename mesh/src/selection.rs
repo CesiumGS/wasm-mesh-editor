@@ -14,8 +14,9 @@ use event_emitter::EventEmitter;
 use glam::Vec3;
 
 use crate::{
-    Aabb, Attributes, ComponentKey, ComponentKeys, ComponentMask, ComponentRef, ComponentType,
-    EdgeKey, FaceKey, MeshChange, SelectionChange, Topology, VertKey,
+    Aabb, AttributeLookupError, AttributeValue, Attributes, ComponentKey, ComponentKeys,
+    ComponentMask, ComponentRef, ComponentType, EdgeKey, FaceKey, MeshChange, SelectionChange,
+    Topology, VertKey,
 };
 
 /// A component kind that can be selected: the three handle types and
@@ -277,6 +278,33 @@ impl<'a> Selection<'a> {
         let delta = self.apply_action(keys, Action::Toggle, self.state.level);
 
         self.emit_change(delta);
+    }
+
+    /// Selects every vertex whose `name` attribute equals `value`. Works just like
+    /// [`Self::select`], so it does nothing unless vertices are selectable.
+    ///
+    /// # Errors
+    /// If there's no vertex attribute called `name`, or it holds a different type than `T`.
+    pub fn select_verts_by_attribute<T: AttributeValue + PartialEq>(
+        &mut self,
+        name: &str,
+        value: T,
+    ) -> Result<(), AttributeLookupError> {
+        let values = self
+            .attrs
+            .vertex_attribute(name)
+            .ok_or_else(|| AttributeLookupError::NotFound { name: name.into() })?
+            .typed::<T>()
+            .ok_or_else(|| AttributeLookupError::WrongType { name: name.into() })?;
+
+        let verts: Vec<_> = values
+            .iter()
+            .filter(|&(_, &vert_value)| vert_value == value)
+            .map(|(vert, _)| vert)
+            .collect();
+
+        self.select(&verts);
+        Ok(())
     }
 
     /// Clears all selected components, regardless of the current mode.

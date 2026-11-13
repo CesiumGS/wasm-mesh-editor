@@ -1,5 +1,7 @@
 //! Struct-of-Arrays geometry attribute storage.
 
+use std::fmt;
+
 use glam::{Vec2, Vec3, Vec4};
 use slotmap::{Key, SecondaryMap};
 
@@ -202,6 +204,29 @@ impl Attributes {
         self.vertex_attribute(name).is_some() || self.corner_attribute(name).is_some()
     }
 }
+
+/// Why a custom attribute couldn't be read as requested.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttributeLookupError {
+    /// No custom attribute with this name in the requested domain.
+    NotFound { name: String },
+    /// The attribute stores a different value type than the one requested.
+    WrongType { name: String },
+}
+
+impl fmt::Display for AttributeLookupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound { name } => write!(formatter, "custom attribute {name:?} not found"),
+            Self::WrongType { name } => write!(
+                formatter,
+                "custom attribute {name:?} stores a different value type"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AttributeLookupError {}
 
 /// Meshes typically have few custom attributes, so a linear scan is as fast as hashing.
 fn find_custom<'a, K: Key>(
