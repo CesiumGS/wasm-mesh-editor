@@ -117,6 +117,36 @@ impl OverlayBufferView {
     }
 }
 
+/// The location of one component type's keys in the module's linear memory, like
+/// `OverlayBufferView`. Read them with a `BigUint64Array`.
+#[derive(Serialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayKeyView {
+    address: usize,
+    element_count: usize,
+}
+
+impl OverlayKeyView {
+    fn new<K>(keys: &[K]) -> Self {
+        // Mesh component keys are `repr(transparent)` over `u64`s.
+        const { assert!(size_of::<K>() == 8 && align_of::<K>() == 8) };
+
+        Self {
+            address: keys.as_ptr() as usize,
+            element_count: keys.len(),
+        }
+    }
+}
+
+/// Component keys in buffer order, to pass as `PickHit.componentKey`. `faces` is indexed by each triangle's
+/// face index, not by triangle.
+#[derive(Serialize, Tsify)]
+pub struct OverlayKeyViews {
+    verts: OverlayKeyView,
+    edges: OverlayKeyView,
+    faces: OverlayKeyView,
+}
+
 /// Selection buffers by component kind. One value per component: 0 unselected, 255 selected.
 /// Each binds to the same uniform, in the draw for its component kind.
 #[derive(Serialize, Tsify)]
@@ -143,6 +173,8 @@ pub struct OverlayViews {
     /// Three vertex indices and a face index per triangle.
     triangles: OverlayBufferView,
     selection: OverlaySelectionViews,
+    /// Changes only when `fullRefresh` is set.
+    component_keys: OverlayKeyViews,
 }
 
 impl From<&OverlayBuffers> for OverlayViews {
@@ -165,6 +197,11 @@ impl From<&OverlayBuffers> for OverlayViews {
                     &buffers.selection.faces,
                     uniforms::SELECTION_TEXTURE,
                 ),
+            },
+            component_keys: OverlayKeyViews {
+                verts: OverlayKeyView::new(&buffers.component_keys.verts),
+                edges: OverlayKeyView::new(&buffers.component_keys.edges),
+                faces: OverlayKeyView::new(&buffers.component_keys.faces),
             },
         }
     }

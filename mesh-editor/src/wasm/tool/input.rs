@@ -2,15 +2,15 @@
 //! [`PointerInput`].
 
 use glam::{DMat4, DVec3};
-use mesh::ComponentType;
+use mesh::{ComponentKey, ComponentType, EdgeKey, FaceKey, VertKey};
 use serde::{Deserialize, Deserializer};
 use slotmap::KeyData;
 use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    MeshEditor, MeshKey, MeshTransform, Modifiers, OverlayComponent, PickResult, PointerInput,
-    SceneInput, ToolAccessor, WorldRay,
+    MeshEditor, MeshKey, MeshTransform, Modifiers, PickResult, PointerInput, SceneInput,
+    ToolAccessor, WorldRay,
 };
 
 // Doc comments on these JS-facing types also document the generated TypeScript.
@@ -33,7 +33,8 @@ pub struct PointerModifiers {
     meta: bool,
 }
 
-/// A picked component. `index` is the component's index in the mesh's overlay buffers.
+/// A picked component. `componentKey` is from the mesh's `OverlayViews.componentKeys` for
+/// `componentType`.
 #[derive(Deserialize, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct PickHit {
@@ -41,7 +42,8 @@ pub struct PickHit {
     mesh: u64,
     #[tsify(type = "ComponentType")]
     component_type: u8,
-    index: u32,
+    #[tsify(type = "bigint")]
+    component_key: u64,
 }
 
 /// World-space ray, such as a Cesium `Ray`. The direction is normalized.
@@ -76,7 +78,7 @@ pub struct PointerInputJs {
     #[serde(default)]
     modifiers: PointerModifiers,
     /// Omit when picking wasn't performed; pass `null` when it found nothing.
-    /// Picks that no longer match the mesh's overlay (unknown mesh or index) are treated as misses.
+    /// Picks of unknown meshes or components are treated as misses.
     // Absent: picking not performed. `Some(None)`: `null`, a miss.
     #[serde(default, deserialize_with = "present")]
     #[tsify(optional, type = "PickHit | null")]
@@ -137,7 +139,7 @@ pub(in crate::wasm) fn dispatch_pointer(
         .is_some_and(|mut tool| handler(&mut tool, &input)))
 }
 
-/// Converts the JS pick. The tool accessor resolves it against the overlays.
+/// Converts the JS pick. The tool accessor checks that the component is still in the mesh.
 fn pick_hit(pick: &PickHit) -> Result<PickResult, JsError> {
     const KINDS: [ComponentType; 3] = [
         ComponentType::Vertex,
@@ -149,14 +151,18 @@ fn pick_hit(pick: &PickHit) -> Result<PickResult, JsError> {
         .into_iter()
         .find(|&kind| kind as u8 == pick.component_type)
         .ok_or_else(|| JsError::new("pick.componentType must be a ComponentType"))?;
+    let component = match kind {
+        ComponentType::Vertex => VertKey::try_from_ffi(pick.component_key).map(ComponentKey::from),
+        ComponentType::Edge => EdgeKey::try_from_ffi(pick.component_key).map(ComponentKey::from),
+        ComponentType::Face => FaceKey::try_from_ffi(pick.component_key).map(ComponentKey::from),
+    };
 
-    Ok(PickResult::Hit {
-        mesh: MeshKey::from(KeyData::from_ffi(pick.mesh)),
-        component: OverlayComponent {
-            kind,
-            index: pick.index,
-        },
-    })
+    Ok(
+        component.map_or(PickResult::Miss, |component| PickResult::Hit {
+            mesh: MeshKey::from(KeyData::from_ffi(pick.mesh)),
+            component,
+        }),
+    )
 }
 
 fn world_ray(ray: RayLike) -> Result<WorldRay, JsError> {
