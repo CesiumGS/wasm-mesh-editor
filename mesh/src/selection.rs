@@ -280,7 +280,7 @@ impl<'a> Selection<'a> {
         self.emit_change(delta);
     }
 
-    /// Selects every vertex whose `name` attribute equals `value`. Works just like
+    /// Selects every vertex whose `name` custom attribute equals `value`. Works just like
     /// [`Self::select`], so it does nothing unless vertices are selectable.
     ///
     /// # Errors
