@@ -11,6 +11,7 @@ fn triangle() -> Mesh {
         uvs: None,
         indices: vec![0, 1, 2],
         face_vertex_counts: None,
+        ..Default::default()
     })
     .unwrap()
 }
@@ -223,6 +224,7 @@ fn quad_grid(columns: usize, rows: usize) -> Mesh {
         uvs: None,
         indices,
         face_vertex_counts: Some(vec![4; columns * rows]),
+        ..Default::default()
     })
     .unwrap()
 }
@@ -799,6 +801,7 @@ fn selected_faces_need_no_interior_vertex_to_have_a_boundary() {
         uvs: None,
         indices: vec![0, 1, 2, 1, 0, 3, 2, 1, 4, 0, 2, 5],
         face_vertex_counts: None,
+        ..Default::default()
     })
     .unwrap();
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
@@ -835,6 +838,7 @@ fn boundary_handles_non_manifold_faces_wires_and_isolated_vertices() {
         uvs: None,
         indices: vec![0, 1, 2, 1, 0, 3, 0, 1, 4],
         face_vertex_counts: None,
+        ..Default::default()
     })
     .unwrap();
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
@@ -997,6 +1001,7 @@ fn boundary_operations_preserve_unrelated_partial_edge_selections() {
                 uvs: None,
                 indices: vec![0, 1, 2, 3, 4, 5],
                 face_vertex_counts: None,
+                ..Default::default()
             })
             .unwrap();
             let faces: Vec<_> = mesh.topology.faces.keys().collect();
@@ -1449,6 +1454,7 @@ fn face_removal_preserves_shared_geometry_and_unrelated_selections() {
         uvs: None,
         indices: vec![0, 1, 2, 1, 0, 3, 0, 1, 4],
         face_vertex_counts: None,
+        ..Default::default()
     })
     .unwrap();
     let faces: Vec<_> = mesh.topology.faces.keys().collect();
@@ -1482,6 +1488,7 @@ fn polygon_wire_and_isolated_vertices_follow_the_same_rules() {
         uvs: None,
         indices: vec![0, 1, 2, 3],
         face_vertex_counts: Some(vec![4]),
+        ..Default::default()
     })
     .unwrap();
     let verts: Vec<_> = mesh.topology.verts.keys().collect();

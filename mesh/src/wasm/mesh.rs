@@ -26,6 +26,8 @@ impl Mesh {
             uvs: uvs.map(|uvs| vectors::<Vec2>("uvs", uvs)).transpose()?,
             indices,
             face_vertex_counts,
+            vertex_attributes: Vec::new(),
+            corner_attributes: Vec::new(),
         })?;
 
         Ok(mesh)
