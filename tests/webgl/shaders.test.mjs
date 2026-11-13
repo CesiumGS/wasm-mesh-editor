@@ -264,6 +264,18 @@ function defaultHookUniforms() {
   };
 }
 
+/** `OverlayViews.componentKeys` field by `ComponentType`. */
+const KEY_VIEWS = {
+  [ComponentType.Vertex]: "verts",
+  [ComponentType.Edge]: "edges",
+  [ComponentType.Face]: "faces",
+};
+
+/** Copies one component type's keys out of wasm memory. */
+function readKeys(view) {
+  return Array.from(new BigUint64Array(memory.buffer, view.address, view.elementCount));
+}
+
 /** Vertices at clip (-0.5, -0.5), (0.5, -0.5), and (0, 0.5) with identity transforms. */
 const TRIANGLE = [-0.5, -0.5, 0, 0.5, -0.5, 0, 0, 0.5, 0];
 
@@ -278,12 +290,13 @@ function triangleOverlay(positions, selection) {
   );
 
   if (selection) {
-    editor.setMode(1 << selection.componentType);
+    const { componentType, index } = selection;
+    const keys = readKeys(editor.overlayViews(key).componentKeys[KEY_VIEWS[componentType]]);
+
+    editor.setMode(1 << componentType);
     editor.setMeshActive(key);
     editor.setActiveTool(SelectTool.addTo(editor));
-    editor.pointerClick({
-      pick: { mesh: key, componentType: selection.componentType, index: selection.index },
-    });
+    editor.pointerClick({ pick: { mesh: key, componentType, componentKey: keys[index] } });
   }
 
   const result = new UpdateResult();
@@ -513,9 +526,12 @@ void topologyOverlay_writeColor(vec4 color)
   };
 }
 
-test("setVertexOutputs receives each drawn component's overlay index", async () => {
-  // Two triangles sharing an edge, so faces 0 and 1 are distinguishable:
-  // (-0.5, -0.5), (0.5, -0.5), (0, 0.5), and (0.5, 0.5).
+/**
+ * Two triangles sharing an edge, so faces 0 and 1 are distinguishable:
+ * (-0.5, -0.5), (0.5, -0.5), (0, 0.5), and (0.5, 0.5). Face 0 covers pixel (32, 24); face 1
+ * covers (44, 36).
+ */
+function twoTriangleEditor() {
   const editor = new MeshEditor();
   const key = editor.addMesh(
     Mesh.fromBuffers(
@@ -526,6 +542,37 @@ test("setVertexOutputs receives each drawn component's overlay index", async () 
   const result = new UpdateResult();
   editor.update(0, result);
   result.free();
+
+  return { editor, key };
+}
+
+function facePickDraw(views) {
+  return {
+    textures: [
+      overlayTexture(views.positions),
+      overlayTexture(views.selection.faces),
+      overlayTexture(views.triangles),
+    ],
+    uniforms: { [uniforms.face.isPickPass]: { type: "bool", value: true } },
+    mode: "TRIANGLES",
+    vertexCount: 3,
+    instanceCount: views.triangles.elementCount,
+  };
+}
+
+/** Renders `draw` with the pick hooks and returns a reader of the overlay index at a pixel. */
+async function renderPick(name, draw) {
+  const { error, pixels } = await page.evaluate((args) => window.renderShader(args), {
+    sources: withPickHooks(name),
+    ...draw,
+    uniforms: { ...defaultHookUniforms(), ...draw.uniforms },
+  });
+  assert.equal(error, undefined);
+  return (x, y) => pixelAt(pixels, x, y)[0] - 1;
+}
+
+test("setVertexOutputs receives each drawn component's overlay index", async () => {
+  const { editor, key } = twoTriangleEditor();
   const views = editor.overlayViews(key);
   const positions = overlayTexture(views.positions);
   const edges = readElements(views.edges);
@@ -550,25 +597,11 @@ test("setVertexOutputs receives each drawn component's overlay index", async () 
       vertexCount: 4,
       instanceCount: views.edges.elementCount,
     },
-    face: {
-      textures: [positions, overlayTexture(views.selection.faces), overlayTexture(views.triangles)],
-      uniforms: { [uniforms.face.isPickPass]: { type: "bool", value: true } },
-      mode: "TRIANGLES",
-      vertexCount: 3,
-      instanceCount: views.triangles.elementCount,
-    },
+    face: facePickDraw(views),
   };
   editor.free();
 
-  const render = async (name) => {
-    const { error, pixels } = await page.evaluate((args) => window.renderShader(args), {
-      sources: withPickHooks(name),
-      ...draws[name],
-      uniforms: { ...defaultHookUniforms(), ...draws[name].uniforms },
-    });
-    assert.equal(error, undefined);
-    return (x, y) => pixelAt(pixels, x, y)[0] - 1;
-  };
+  const render = (name) => renderPick(name, draws[name]);
 
   // Vertices land on pixels (16, 16), (48, 16), (32, 48), and (48, 48).
   const point = await render("point");
@@ -584,7 +617,44 @@ test("setVertexOutputs receives each drawn component's overlay index", async () 
     assert.equal(edge(...pixel([(ax + bx) / 2, (ay + by) / 2])), index, `edge ${a}-${b}`);
   });
 
-  // Face 0 covers (32, 24); face 1 covers (44, 36). Uncovered pixels read as -1.
+  // Uncovered pixels read as -1.
   const face = await render("face");
   assert.deepEqual([face(32, 24), face(44, 36), face(8, 56)], [0, 1, -1]);
+});
+
+test("a picked overlay index selects its component through componentKeys", async () => {
+  const { editor, key } = twoTriangleEditor();
+  const views = editor.overlayViews(key);
+  const faceKeys = readKeys(views.componentKeys.faces);
+
+  const index = (await renderPick("face", facePickDraw(views)))(44, 36);
+  assert.equal(index, 1);
+
+  editor.setMode(1 << ComponentType.Face);
+  editor.setMeshActive(key);
+  editor.setActiveTool(SelectTool.addTo(editor));
+  editor.pointerClick({
+    pick: { mesh: key, componentType: ComponentType.Face, componentKey: faceKeys[index] },
+  });
+  const result = new UpdateResult();
+  editor.update(0, result);
+  result.free();
+
+  const { address, elementCount } = editor.overlayViews(key).selection.faces;
+  assert.deepEqual(Array.from(new Uint8Array(memory.buffer, address, elementCount)), [0, 255]);
+  editor.free();
+});
+
+test("pointerClick rejects a pick with an unknown componentType", () => {
+  const editor = new MeshEditor();
+  const key = editor.addMesh(
+    Mesh.fromBuffers(new Float32Array(TRIANGLE), new Uint32Array([0, 1, 2])),
+  );
+  const [componentKey] = readKeys(editor.overlayViews(key).componentKeys.verts);
+
+  assert.throws(
+    () => editor.pointerClick({ pick: { mesh: key, componentType: 3, componentKey } }),
+    /pick\.componentType must be a ComponentType/,
+  );
+  editor.free();
 });
