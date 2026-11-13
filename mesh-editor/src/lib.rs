@@ -21,4 +21,3 @@ pub use tool::{
     Modifiers, PickResult, PointerInput, SceneInput, Tool, ToolAccessor, ToolContext, ToolHandle,
     ToolId,
 };
-pub use topology_overlay::OverlayComponent;

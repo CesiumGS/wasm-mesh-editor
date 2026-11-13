@@ -4,12 +4,11 @@ use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 
 use glam::{DMat4, DVec3};
-use mesh::{ComponentKey, ComponentMask, ComponentType, MeshBuffers};
+use mesh::{ComponentMask, ComponentType, MeshBuffers, VertKey};
 use slotmap::Key;
 
 use crate::{
-    MeshTransform, Modifiers, OverlayComponent, PickResult, PointerInput, SceneInput, ToolContext,
-    WorldRay,
+    MeshTransform, Modifiers, PickResult, PointerInput, SceneInput, ToolContext, WorldRay,
 };
 
 use super::*;
@@ -35,35 +34,19 @@ impl<Value: 'static> Tool for TestTool<Value> {
         panic!("unexpected tool callback");
     }
 
-    fn pointer_down(
-        &mut self,
-        _context: &mut ToolContext<'_>,
-        _input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_down(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
         panic!("unexpected tool callback");
     }
 
-    fn pointer_up(
-        &mut self,
-        _context: &mut ToolContext<'_>,
-        _input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_up(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
         panic!("unexpected tool callback");
     }
 
-    fn pointer_move(
-        &mut self,
-        _context: &mut ToolContext<'_>,
-        _input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_move(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
         panic!("unexpected tool callback");
     }
 
-    fn pointer_click(
-        &mut self,
-        _context: &mut ToolContext<'_>,
-        _input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_click(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
         panic!("unexpected tool callback");
     }
 
@@ -85,13 +68,13 @@ impl<Value: 'static> Tool for TestTool<Value> {
 #[derive(Debug, PartialEq)]
 struct ReceivedInput {
     modifiers: Modifiers,
-    pick: PickResult<ComponentKey>,
+    pick: PickResult,
     ray: Option<WorldRay>,
     scene: Option<(DVec3, *const MeshTransform)>,
 }
 
 impl ReceivedInput {
-    fn new(input: &PointerInput<'_, ComponentKey>) -> Self {
+    fn new(input: &PointerInput<'_>) -> Self {
         Self {
             modifiers: input.modifiers,
             pick: input.pick,
@@ -170,41 +153,25 @@ impl Tool for RecordingTool {
         self.record("deactivate", context);
     }
 
-    fn pointer_down(
-        &mut self,
-        context: &mut ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_down(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         self.record("pointer_down", context);
         self.received_inputs.push(ReceivedInput::new(input));
         true
     }
 
-    fn pointer_up(
-        &mut self,
-        context: &mut ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_up(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         self.record("pointer_up", context);
         self.received_inputs.push(ReceivedInput::new(input));
         false
     }
 
-    fn pointer_move(
-        &mut self,
-        context: &mut ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_move(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         self.record("pointer_move", context);
         self.received_inputs.push(ReceivedInput::new(input));
         true
     }
 
-    fn pointer_click(
-        &mut self,
-        context: &mut ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_click(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         self.record("pointer_click", context);
         self.received_inputs.push(ReceivedInput::new(input));
 
@@ -271,6 +238,22 @@ fn triangle_mesh() -> Mesh {
         uvs: None,
         indices: vec![0, 1, 2],
         face_vertex_counts: None,
+    })
+    .unwrap()
+}
+
+fn quad_mesh() -> Mesh {
+    Mesh::from_buffers(MeshBuffers {
+        positions: vec![
+            [0.0, 0.0, 0.0].into(),
+            [1.0, 0.0, 0.0].into(),
+            [1.0, 1.0, 0.0].into(),
+            [0.0, 1.0, 0.0].into(),
+        ],
+        normals: None,
+        uvs: None,
+        indices: vec![0, 1, 2, 3],
+        face_vertex_counts: Some(vec![4]),
     })
     .unwrap()
 }
@@ -761,7 +744,7 @@ fn removed_mesh_key_cannot_access_or_remove_replacement() {
 }
 
 /// Clicks through the editor's tool accessor and returns the pick the tool received.
-fn pick_received_by_tool(editor: &mut MeshEditor, pick: PickResult) -> PickResult<ComponentKey> {
+fn pick_received_by_tool(editor: &mut MeshEditor, pick: PickResult) -> PickResult {
     let calls = Rc::new(RefCell::new(Vec::new()));
     let tool = editor.add_tool(RecordingTool::new("tool", &calls));
 
@@ -780,61 +763,79 @@ fn pick_received_by_tool(editor: &mut MeshEditor, pick: PickResult) -> PickResul
 }
 
 #[test]
-fn tool_accessors_resolve_overlay_indices_to_components() {
+fn tool_accessors_pass_current_picks_through() {
     let mut editor = MeshEditor::new();
     let mesh = editor.add_mesh(triangle_mesh());
+    let keys = editor.overlay_buffers(mesh).unwrap().component_keys.clone();
 
-    for (kind, count) in [
-        (ComponentType::Vertex, 3),
-        (ComponentType::Edge, 3),
-        (ComponentType::Face, 1),
+    for kind in [
+        ComponentType::Vertex,
+        ComponentType::Edge,
+        ComponentType::Face,
     ] {
-        for index in 0..count {
-            let component = editor
-                .overlay(mesh)
-                .unwrap()
-                .component_key(OverlayComponent { kind, index })
-                .unwrap();
+        for component in keys.iter(kind) {
+            let pick = PickResult::Hit { mesh, component };
 
-            assert_eq!(component.kind(), kind);
-            assert_eq!(
-                pick_received_by_tool(
-                    &mut editor,
-                    PickResult::Hit {
-                        mesh,
-                        component: OverlayComponent { kind, index }
-                    }
-                ),
-                PickResult::Hit { mesh, component }
-            );
+            assert_eq!(pick_received_by_tool(&mut editor, pick), pick);
         }
+    }
 
+    for pick in [PickResult::NotPerformed, PickResult::Miss] {
+        assert_eq!(pick_received_by_tool(&mut editor, pick), pick);
+    }
+}
+
+#[test]
+fn tool_accessors_receive_stale_or_unknown_components_as_misses() {
+    let mut editor = MeshEditor::new();
+    let mesh = editor.add_mesh(triangle_mesh());
+    let vert = editor.overlay_buffers(mesh).unwrap().component_keys.verts[0];
+    // Same slot, later version: what a key looks like after its slot is reused.
+    let stale = VertKey::try_from_ffi(vert.data().as_ffi() + (2 << 32)).unwrap();
+
+    for component in [stale, VertKey::null()] {
         assert_eq!(
             pick_received_by_tool(
                 &mut editor,
                 PickResult::Hit {
                     mesh,
-                    component: OverlayComponent { kind, index: count }
+                    component: component.into()
                 }
             ),
             PickResult::Miss
         );
     }
+}
+
+#[test]
+fn tool_accessors_receive_components_of_other_meshes_as_misses() {
+    let mut editor = MeshEditor::new();
+    let triangle = editor.add_mesh(triangle_mesh());
+    let quad = editor.add_mesh(quad_mesh());
+    let fourth_vert = editor.overlay_buffers(quad).unwrap().component_keys.verts[3];
 
     assert_eq!(
-        pick_received_by_tool(&mut editor, PickResult::NotPerformed),
-        PickResult::NotPerformed
-    );
-    assert_eq!(
-        pick_received_by_tool(&mut editor, PickResult::Miss),
+        pick_received_by_tool(
+            &mut editor,
+            PickResult::Hit {
+                mesh: triangle,
+                component: fourth_vert.into()
+            }
+        ),
         PickResult::Miss
     );
 }
 
 #[test]
-fn tool_accessors_resolve_unknown_and_removed_meshes_as_misses() {
+fn tool_accessors_receive_picks_on_unknown_and_removed_meshes_as_misses() {
     let mut editor = MeshEditor::new();
     let removed = editor.add_mesh(triangle_mesh());
+    let component = editor
+        .overlay_buffers(removed)
+        .unwrap()
+        .component_keys
+        .verts[0]
+        .into();
 
     assert!(editor.remove_mesh(removed).is_some());
 
@@ -842,27 +843,16 @@ fn tool_accessors_resolve_unknown_and_removed_meshes_as_misses() {
 
     for mesh in [MeshKey::null(), removed] {
         assert_eq!(
-            pick_received_by_tool(
-                &mut editor,
-                PickResult::Hit {
-                    mesh,
-                    component: OverlayComponent {
-                        kind: ComponentType::Vertex,
-                        index: 0
-                    }
-                }
-            ),
+            pick_received_by_tool(&mut editor, PickResult::Hit { mesh, component }),
             PickResult::Miss
         );
     }
 
-    assert!(matches!(
-        pick_received_by_tool(
-            &mut editor,
-            PickResult::Hit { mesh: replacement, component: OverlayComponent { kind: ComponentType::Vertex, index: 0 } }
-        ),
-        PickResult::Hit { mesh, .. } if mesh == replacement
-    ));
+    let pick = PickResult::Hit {
+        mesh: replacement,
+        component,
+    };
+    assert_eq!(pick_received_by_tool(&mut editor, pick), pick);
 }
 
 #[test]
@@ -1524,14 +1514,7 @@ fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
         scene: down.scene,
         ..Default::default()
     };
-    let edge = editor
-        .overlay(active)
-        .unwrap()
-        .component_key(OverlayComponent {
-            kind: ComponentType::Edge,
-            index: 0,
-        })
-        .unwrap();
+    let edge = editor.overlay_buffers(active).unwrap().component_keys.edges[0].into();
     let click = PointerInput {
         modifiers: Modifiers {
             shift: true,
@@ -1541,10 +1524,7 @@ fn tool_accessors_forward_pointer_input_and_actions_with_active_context() {
         },
         pick: PickResult::Hit {
             mesh: active,
-            component: OverlayComponent {
-                kind: ComponentType::Edge,
-                index: 0,
-            },
+            component: edge,
         },
         scene: down.scene,
         ..Default::default()

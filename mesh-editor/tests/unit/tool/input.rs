@@ -1,15 +1,14 @@
 use glam::{DMat4, DVec3};
-use mesh::{ComponentType, Mesh};
+use mesh::{Mesh, VertKey};
+use slotmap::Key;
 
-use crate::{
-    MeshEditor, MeshTransform, Modifiers, OverlayComponent, PickResult, PointerInput, WorldRay,
-};
+use crate::{MeshEditor, MeshTransform, Modifiers, PickResult, PointerInput, WorldRay};
 
 use super::SceneInput;
 
 #[test]
 fn default_input_does_not_imply_a_pick_miss_or_spatial_data() {
-    let input: PointerInput = PointerInput::default();
+    let input = PointerInput::default();
 
     assert_eq!(input.modifiers, Modifiers::default());
     assert_eq!(input.pick, PickResult::NotPerformed);
@@ -24,10 +23,7 @@ fn selection_input_carries_a_hit_without_spatial_data() {
     let mesh = editor.add_mesh(Mesh::new());
     let pick = PickResult::Hit {
         mesh,
-        component: OverlayComponent {
-            kind: ComponentType::Vertex,
-            index: 0,
-        },
+        component: VertKey::null().into(),
     };
     let input = PointerInput {
         modifiers: Modifiers {
@@ -54,7 +50,7 @@ fn pointer_input_borrows_optional_scene_context() {
         origin: offset + DVec3::Z,
         direction: DVec3::NEG_Z,
     };
-    let start: PointerInput = PointerInput {
+    let start = PointerInput {
         ray: Some(ray),
         scene: Some(SceneInput {
             view_direction: DVec3::NEG_Z,
@@ -73,7 +69,7 @@ fn pointer_input_borrows_optional_scene_context() {
     );
     assert_eq!(copied.ray.unwrap().origin.x, offset.x);
 
-    let moved: PointerInput = PointerInput {
+    let moved = PointerInput {
         ray: Some(WorldRay {
             origin: ray.origin + DVec3::X,
             ..ray

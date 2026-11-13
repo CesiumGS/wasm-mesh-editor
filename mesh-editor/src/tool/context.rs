@@ -1,4 +1,4 @@
-use mesh::Mesh;
+use mesh::{ComponentKey, Mesh};
 use slotmap::SlotMap;
 
 use crate::mesh_editor::ActiveMeshes;
@@ -34,6 +34,13 @@ impl<'editor> ToolContext<'editor> {
 
     pub fn is_mesh_active(&self, key: MeshKey) -> bool {
         self.active_meshes.contains(key)
+    }
+
+    /// Whether a registered mesh, active or not, contains `component`.
+    pub(crate) fn contains_component(&self, mesh: MeshKey, component: ComponentKey) -> bool {
+        self.meshes
+            .get(mesh)
+            .is_some_and(|mesh| mesh.topology().contains(component))
     }
 
     /// Returns an active mesh, or `None` if inactive or missing.
