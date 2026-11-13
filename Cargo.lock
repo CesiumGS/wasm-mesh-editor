@@ -32,7 +32,9 @@ dependencies = [
 name = "mesh-editor"
 version = "0.1.0"
 dependencies = [
+ "glam",
  "mesh",
+ "slotmap",
  "topology-overlay",
 ]
 
