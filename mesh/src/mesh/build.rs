@@ -1,16 +1,17 @@
 //! Validated buffer import into a newly constructed mesh.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use glam::{Vec2, Vec3};
 
 use super::Mesh;
 use crate::selection::SelectionState;
-use crate::{Attributes, EdgeKey, FaceRef, Topology, Vert, VertKey};
+use crate::{AttributeBuffer, Attributes, EdgeKey, FaceKey, FaceRef, Topology, Vert, VertKey};
 
 /// Decoded vertex attribute and face index buffers describing a mesh to build.
 /// File-format accessors, byte strides, and component types must be resolved first.
+#[derive(Default)]
 pub struct MeshBuffers {
     /// One entry per vertex; coincident positions are not welded.
     pub positions: Vec<Vec3>,
@@ -23,6 +24,11 @@ pub struct MeshBuffers {
     pub indices: Vec<u32>,
     /// Vertices per face, for n-gons; triangles are assumed when absent.
     pub face_vertex_counts: Option<Vec<u32>>,
+    /// Named custom attributes with one value per vertex, in `positions` order.
+    pub vertex_attributes: Vec<(String, AttributeBuffer)>,
+    /// Named custom attributes with one value per face corner, in `indices` order,
+    /// so corners of a shared vertex can have different values.
+    pub corner_attributes: Vec<(String, AttributeBuffer)>,
 }
 
 /// Invalid input buffers supplied to [`Mesh::from_buffers`].
@@ -52,6 +58,20 @@ pub enum MeshBuildError {
     RepeatedFaceVertex {
         face: usize,
         index: u32,
+    },
+    /// Expected one value per vertex, or per corner for corner attributes.
+    CustomAttributeLengthMismatch {
+        name: String,
+        expected: usize,
+        actual: usize,
+    },
+    /// Names must be unique across vertex and corner attributes.
+    DuplicateAttributeName {
+        name: String,
+    },
+    /// See [`Attributes::RESERVED_NAMES`].
+    ReservedAttributeName {
+        name: String,
     },
 }
 
@@ -96,6 +116,24 @@ impl fmt::Display for MeshBuildError {
                     "face {face} references vertex index {index} more than once"
                 )
             }
+            Self::CustomAttributeLengthMismatch {
+                name,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "custom attribute {name:?} has {actual} values; expected {expected}"
+            ),
+            Self::DuplicateAttributeName { name } => {
+                write!(
+                    formatter,
+                    "custom attribute name {name:?} is used more than once"
+                )
+            }
+            Self::ReservedAttributeName { name } => write!(
+                formatter,
+                "custom attribute name {name:?} is reserved for a built-in attribute"
+            ),
         }
     }
 }
@@ -103,7 +141,8 @@ impl fmt::Display for MeshBuildError {
 impl std::error::Error for MeshBuildError {}
 
 impl MeshBuffers {
-    /// Checks buffer lengths, finite normals, face sizes, index bounds, and repeated indices per face.
+    /// Checks buffer lengths, finite normals, face sizes, index bounds, repeated indices per face,
+    /// and custom attribute names.
     /// Runs in linear time, temporarily storing the last-seen face ID per vertex
     /// to detect repeated indices without allocating per face.
     pub fn validate(&self) -> Result<(), MeshBuildError> {
@@ -122,6 +161,8 @@ impl MeshBuffers {
                 });
             }
         }
+
+        self.validate_custom_attributes()?;
 
         if let Some(normals) = &self.normals {
             for (vertex, normal) in normals.iter().enumerate() {
@@ -173,6 +214,41 @@ impl MeshBuffers {
         Ok(())
     }
 
+    /// Checks custom attribute lengths (`positions` or `indices`), and that names are unique
+    /// across both lists and not reserved.
+    fn validate_custom_attributes(&self) -> Result<(), MeshBuildError> {
+        let vertex_attributes = self
+            .vertex_attributes
+            .iter()
+            .map(|attribute| (attribute, self.positions.len()));
+
+        let corner_attributes = self
+            .corner_attributes
+            .iter()
+            .map(|attribute| (attribute, self.indices.len()));
+
+        let mut names = HashSet::new();
+        for ((name, values), expected) in vertex_attributes.chain(corner_attributes) {
+            if Attributes::RESERVED_NAMES.contains(&name.as_str()) {
+                return Err(MeshBuildError::ReservedAttributeName { name: name.clone() });
+            }
+
+            if !names.insert(name.as_str()) {
+                return Err(MeshBuildError::DuplicateAttributeName { name: name.clone() });
+            }
+
+            if values.len() != expected {
+                return Err(MeshBuildError::CustomAttributeLengthMismatch {
+                    name: name.clone(),
+                    expected,
+                    actual: values.len(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     fn face_indices(&self) -> impl Iterator<Item = &[u32]> {
         let face_count = self
             .face_vertex_counts
@@ -221,10 +297,47 @@ pub(super) fn from_buffers(mut buffers: MeshBuffers) -> Result<Mesh, MeshBuildEr
         .collect();
 
     let mut edges = HashMap::new();
-    for indices in buffers.face_indices() {
-        import_face(&mut mesh, &buffers, indices, &verts, &mut edges);
-    }
+    let faces: Vec<_> = buffers
+        .face_indices()
+        .map(|indices| import_face(&mut mesh, &buffers, indices, &verts, &mut edges))
+        .collect();
+
+    add_custom_attributes(&mut mesh, buffers, &verts, &faces);
     Ok(mesh)
+}
+
+/// Moves validated custom attribute buffers into the mesh. Vertex values pair with `verts`.
+/// Corner values pair with the corners of `faces` in input order.
+fn add_custom_attributes(
+    mesh: &mut Mesh,
+    buffers: MeshBuffers,
+    verts: &[VertKey],
+    faces: &[FaceKey],
+) {
+    let MeshBuffers {
+        vertex_attributes,
+        corner_attributes,
+        ..
+    } = buffers;
+
+    for (name, values) in vertex_attributes {
+        let values = values.into_map(verts.iter().copied());
+        mesh.attributes.add_vertex_attribute(name, values);
+    }
+
+    if corner_attributes.is_empty() {
+        return;
+    }
+
+    let corners: Vec<_> = faces
+        .iter()
+        .flat_map(|&face| mesh.topology.face_loops(face))
+        .collect();
+
+    for (name, values) in corner_attributes {
+        let values = values.into_map(corners.iter().copied());
+        mesh.attributes.add_corner_attribute(name, values);
+    }
 }
 
 fn import_face(
@@ -233,7 +346,7 @@ fn import_face(
     indices: &[u32],
     verts: &[VertKey],
     edges: &mut HashMap<(u32, u32), EdgeKey>,
-) {
+) -> FaceKey {
     let corners: Vec<_> = indices
         .iter()
         .enumerate()
@@ -264,7 +377,7 @@ fn import_face(
     }
 
     if buffers.normals.is_some() {
-        return;
+        return face;
     }
 
     let normal = FaceRef {
@@ -279,4 +392,6 @@ fn import_face(
         mesh.attributes.normals.insert(current, normal);
         current = mesh.topology.loops[current].next;
     }
+
+    face
 }

@@ -1,5 +1,8 @@
 //! JS adapters for [`MeshEditor`] and the types in its module.
 
+#[path = "mesh-editor/selection.rs"]
+mod selection;
+
 use std::ops::Range;
 
 use serde::Serialize;

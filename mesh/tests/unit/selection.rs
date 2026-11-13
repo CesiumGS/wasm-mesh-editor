@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Aabb, Mesh, MeshBuffers};
+use crate::{Aabb, AttributeBuffer, AttributeMap, Mesh, MeshBuffers};
 use event_emitter::Event;
 use glam::Vec3;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -11,6 +11,7 @@ fn triangle() -> Mesh {
         uvs: None,
         indices: vec![0, 1, 2],
         face_vertex_counts: None,
+        ..Default::default()
     })
     .unwrap()
 }
@@ -223,6 +224,7 @@ fn quad_grid(columns: usize, rows: usize) -> Mesh {
         uvs: None,
         indices,
         face_vertex_counts: Some(vec![4; columns * rows]),
+        ..Default::default()
     })
     .unwrap()
 }
@@ -799,6 +801,7 @@ fn selected_faces_need_no_interior_vertex_to_have_a_boundary() {
         uvs: None,
         indices: vec![0, 1, 2, 1, 0, 3, 2, 1, 4, 0, 2, 5],
         face_vertex_counts: None,
+        ..Default::default()
     })
     .unwrap();
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
@@ -835,6 +838,7 @@ fn boundary_handles_non_manifold_faces_wires_and_isolated_vertices() {
         uvs: None,
         indices: vec![0, 1, 2, 1, 0, 3, 0, 1, 4],
         face_vertex_counts: None,
+        ..Default::default()
     })
     .unwrap();
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
@@ -997,6 +1001,7 @@ fn boundary_operations_preserve_unrelated_partial_edge_selections() {
                 uvs: None,
                 indices: vec![0, 1, 2, 3, 4, 5],
                 face_vertex_counts: None,
+                ..Default::default()
             })
             .unwrap();
             let faces: Vec<_> = mesh.topology.faces.keys().collect();
@@ -1449,6 +1454,7 @@ fn face_removal_preserves_shared_geometry_and_unrelated_selections() {
         uvs: None,
         indices: vec![0, 1, 2, 1, 0, 3, 0, 1, 4],
         face_vertex_counts: None,
+        ..Default::default()
     })
     .unwrap();
     let faces: Vec<_> = mesh.topology.faces.keys().collect();
@@ -1482,6 +1488,7 @@ fn polygon_wire_and_isolated_vertices_follow_the_same_rules() {
         uvs: None,
         indices: vec![0, 1, 2, 3],
         face_vertex_counts: Some(vec![4]),
+        ..Default::default()
     })
     .unwrap();
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
@@ -1626,4 +1633,119 @@ fn translation_leaves_uncomputed_bounds_uncomputed() {
     mesh.translate_selected(-Vec3::X);
     assert_eq!(mesh.selection.bounds.unselected.get().copied(), Some(None));
     assert_bounds_match_positions(&mesh);
+}
+
+/// Two triangles sharing the edge between vertices 0 and 1. `_FEATURE_ID` is 7 on the first
+/// triangle's vertices and 8 on the second triangle's other vertex.
+fn feature_triangles() -> Mesh {
+    Mesh::from_buffers(MeshBuffers {
+        positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z],
+        indices: vec![0, 1, 2, 1, 0, 3],
+        vertex_attributes: vec![("_FEATURE_ID".into(), AttributeBuffer::U32(vec![7, 7, 7, 8]))],
+        corner_attributes: vec![("_CORNER".into(), AttributeBuffer::U32(vec![7; 6]))],
+        ..Default::default()
+    })
+    .unwrap()
+}
+
+#[test]
+fn select_by_attribute_also_selects_faces_whose_verts_all_match() {
+    let mut mesh = feature_triangles();
+    let verts: Vec<_> = mesh.topology.verts().collect();
+    let first_face = mesh.topology.faces().next().unwrap();
+    let mut expected: Vec<_> = verts[..3].iter().map(|&key| key.into()).collect();
+    expected.extend(
+        mesh.face(first_face)
+            .unwrap()
+            .edges()
+            .map(ComponentKey::from),
+    );
+    expected.push(first_face.into());
+    let changes = mesh.subscribe();
+
+    assert_eq!(
+        mesh.selection_mut()
+            .select_verts_by_attribute("_FEATURE_ID", 7u32),
+        Ok(())
+    );
+    assert_selection_event(&changes, &expected, &[]);
+}
+
+#[test]
+fn select_by_attribute_keeps_the_existing_selection() {
+    let mut mesh = feature_triangles();
+    let verts: Vec<_> = mesh.topology.verts().collect();
+    mesh.selection_mut().select(&verts[3..]);
+
+    mesh.selection_mut()
+        .select_verts_by_attribute("_FEATURE_ID", 7u32)
+        .unwrap();
+    assert!(verts.iter().all(|&vert| mesh.selection().contains(vert)));
+}
+
+#[test]
+fn select_by_attribute_does_nothing_when_verts_arent_selectable() {
+    for level in [ComponentMask::EDGE, ComponentMask::FACE] {
+        let mut mesh = feature_triangles();
+        mesh.selection_mut().set_level(level);
+        let changes = mesh.subscribe();
+
+        assert_eq!(
+            mesh.selection_mut()
+                .select_verts_by_attribute("_FEATURE_ID", 7u32),
+            Ok(())
+        );
+        assert!(mesh.selection().is_empty());
+        assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+    }
+}
+
+#[test]
+fn select_by_attribute_skips_verts_without_a_value() {
+    let mut mesh = feature_triangles();
+    let verts: Vec<_> = mesh.topology.verts().collect();
+    let mut partial = slotmap::SecondaryMap::new();
+    partial.insert(verts[0], 1.5f32);
+    mesh.attributes
+        .add_vertex_attribute("_PARTIAL".into(), AttributeMap::F32(partial));
+
+    mesh.selection_mut()
+        .select_verts_by_attribute("_PARTIAL", 1.5f32)
+        .unwrap();
+    assert_eq!(mesh.selection().verts().collect::<Vec<_>>(), [verts[0]]);
+}
+
+#[test]
+fn select_by_attribute_with_unknown_name_or_type_selects_nothing() {
+    let mut mesh = feature_triangles();
+    let changes = mesh.subscribe();
+    let not_found = |name: &str| AttributeLookupError::NotFound { name: name.into() };
+
+    // Corner attributes aren't vertex attributes, even with a matching name.
+    for name in ["_MISSING", "_CORNER"] {
+        assert_eq!(
+            mesh.selection_mut().select_verts_by_attribute(name, 7u32),
+            Err(not_found(name))
+        );
+    }
+    assert_eq!(
+        mesh.selection_mut()
+            .select_verts_by_attribute("_FEATURE_ID", 7i32),
+        Err(AttributeLookupError::WrongType {
+            name: "_FEATURE_ID".into()
+        })
+    );
+    assert!(mesh.selection().is_empty());
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn attribute_lookup_errors_describe_the_attribute() {
+    let not_found = AttributeLookupError::NotFound { name: "_A".into() };
+    let wrong_type = AttributeLookupError::WrongType { name: "_A".into() };
+    assert_eq!(not_found.to_string(), "custom attribute \"_A\" not found");
+    assert_eq!(
+        wrong_type.to_string(),
+        "custom attribute \"_A\" stores a different value type"
+    );
 }
