@@ -3,19 +3,10 @@ use std::sync::mpsc::Receiver;
 
 use event_emitter::Event;
 use mesh::{
-    AttributeChange, ComponentKey, ComponentType, EdgeKey, FaceKey, Mesh, MeshChange,
+    AttributeChange, ComponentKeys, ComponentType, EdgeKey, FaceKey, Mesh, MeshChange,
     SelectionChange, VertKey,
 };
 use slotmap::{Key, SecondaryMap};
-
-/// A component as the renderer identifies it, e.g. from a picking pass: its index in the
-/// overlay buffers for that component kind. Faces use the triangle's face index.
-/// Indices can change after topology edits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct OverlayComponent {
-    pub kind: ComponentType,
-    pub index: u32,
-}
 
 /// A buffer and the entries changed by the latest update.
 #[derive(Default)]
@@ -114,7 +105,11 @@ pub struct OverlayBuffers {
     pub triangles: OverlayBuffer<[u32; 4]>,
     /// Selection by vertex, edge, or face index: 0 unselected, 255 selected.
     pub selection: SelectionBuffers,
-    /// Upload all buffers and refresh picking maps. Dirty ranges are `None` when this is set.
+    /// Mesh component keys in the same order as each buffer, mapping buffer elements to mesh components. For faces,
+    /// an entry here corresponds to a face (the 4th element) in the `triangles` buffer entry.
+    /// Changes only on a full refresh.
+    pub component_keys: ComponentKeys,
+    /// Upload all buffers and re-read `component_keys`. Dirty ranges are `None` when this is set.
     /// True on the first update and after topology edits.
     pub full_refresh: bool,
 }
@@ -122,13 +117,17 @@ pub struct OverlayBuffers {
 impl OverlayBuffers {
     fn new(
         mesh: &Mesh,
-        vertices: &[VertKey],
-        edges: &[EdgeKey],
-        faces: &[FaceKey],
+        component_keys: ComponentKeys,
         vertex_indices: &SecondaryMap<VertKey, u32>,
         edge_indices: &SecondaryMap<EdgeKey, u32>,
         face_indices: &SecondaryMap<FaceKey, u32>,
     ) -> Self {
+        let ComponentKeys {
+            verts: vertices,
+            edges,
+            faces,
+        } = &component_keys;
+
         let positions = vertices
             .iter()
             .map(|&key| mesh.attributes().positions[key].extend(0.0).to_array())
@@ -182,6 +181,7 @@ impl OverlayBuffers {
             edges: OverlayBuffer::new(edge_endpoints),
             triangles: OverlayBuffer::new(triangles),
             selection,
+            component_keys,
             full_refresh: true,
         }
     }
@@ -222,17 +222,12 @@ impl PendingChanges {
 
 /// Translates mesh data into a GPU-friendly representation. This is not the renderer, just a translation layer.
 /// It triangulates the mesh and creates + maintains CPU-side arrays, but does not manage any GPU resources itself.
-#[allow(dead_code)]
 pub struct TopologyOverlay {
     buffers: OverlayBuffers,
     // Structures for mapping between mesh keys and buffer keys
     vertex_key_to_buffer_index: SecondaryMap<VertKey, u32>,
     edge_key_to_buffer_index: SecondaryMap<EdgeKey, u32>,
     face_key_to_buffer_index: SecondaryMap<FaceKey, u32>,
-    // Structures for mapping between buffer indices and mesh keys (e.g. for picking)
-    buffer_index_to_vertex_key: Vec<VertKey>,
-    buffer_index_to_edge_key: Vec<EdgeKey>,
-    buffer_index_to_face_key: Vec<FaceKey>,
     pending_upload: PendingChanges,
     mesh_changes: Receiver<Event<MeshChange>>,
 }
@@ -245,9 +240,6 @@ impl TopologyOverlay {
             vertex_key_to_buffer_index: SecondaryMap::new(),
             edge_key_to_buffer_index: SecondaryMap::new(),
             face_key_to_buffer_index: SecondaryMap::new(),
-            buffer_index_to_vertex_key: Vec::new(),
-            buffer_index_to_edge_key: Vec::new(),
-            buffer_index_to_face_key: Vec::new(),
             pending_upload: PendingChanges::None,
             mesh_changes: mesh.subscribe(),
         };
@@ -280,29 +272,6 @@ impl TopologyOverlay {
     /// Borrows the packed buffers. Queued mesh changes are applied by [`Self::update`].
     pub fn buffers(&self) -> &OverlayBuffers {
         &self.buffers
-    }
-
-    /// Returns the component key for an overlay component, or `None` if its index is out of bounds.
-    pub fn component_key(&self, component: OverlayComponent) -> Option<ComponentKey> {
-        let index = component.index as usize;
-
-        match component.kind {
-            ComponentType::Vertex => self
-                .buffer_index_to_vertex_key
-                .get(index)
-                .copied()
-                .map(ComponentKey::Vert),
-            ComponentType::Edge => self
-                .buffer_index_to_edge_key
-                .get(index)
-                .copied()
-                .map(ComponentKey::Edge),
-            ComponentType::Face => self
-                .buffer_index_to_face_key
-                .get(index)
-                .copied()
-                .map(ComponentKey::Face),
-        }
     }
 
     fn process_mesh_changes(&mut self, mesh: &Mesh) {
@@ -395,31 +364,22 @@ impl TopologyOverlay {
 
     fn rebuild(&mut self, mesh: &Mesh) {
         let topology = mesh.topology();
+        let component_keys = ComponentKeys {
+            verts: topology.verts().collect(),
+            edges: topology.edges().collect(),
+            faces: topology.faces().collect(),
+        };
 
-        let buffer_index_to_vertex_key: Vec<VertKey> = topology.verts().collect();
-        let buffer_index_to_edge_key: Vec<EdgeKey> = topology.edges().collect();
-        let buffer_index_to_face_key: Vec<FaceKey> = topology.faces().collect();
-
-        let vertex_key_to_buffer_index = build_key_to_buffer_index(&buffer_index_to_vertex_key);
-        let edge_key_to_buffer_index = build_key_to_buffer_index(&buffer_index_to_edge_key);
-        let face_key_to_buffer_index = build_key_to_buffer_index(&buffer_index_to_face_key);
-
+        self.vertex_key_to_buffer_index = build_key_to_buffer_index(&component_keys.verts);
+        self.edge_key_to_buffer_index = build_key_to_buffer_index(&component_keys.edges);
+        self.face_key_to_buffer_index = build_key_to_buffer_index(&component_keys.faces);
         self.buffers = OverlayBuffers::new(
             mesh,
-            &buffer_index_to_vertex_key,
-            &buffer_index_to_edge_key,
-            &buffer_index_to_face_key,
-            &vertex_key_to_buffer_index,
-            &edge_key_to_buffer_index,
-            &face_key_to_buffer_index,
+            component_keys,
+            &self.vertex_key_to_buffer_index,
+            &self.edge_key_to_buffer_index,
+            &self.face_key_to_buffer_index,
         );
-
-        self.vertex_key_to_buffer_index = vertex_key_to_buffer_index;
-        self.edge_key_to_buffer_index = edge_key_to_buffer_index;
-        self.face_key_to_buffer_index = face_key_to_buffer_index;
-        self.buffer_index_to_vertex_key = buffer_index_to_vertex_key;
-        self.buffer_index_to_edge_key = buffer_index_to_edge_key;
-        self.buffer_index_to_face_key = buffer_index_to_face_key;
         self.pending_upload = PendingChanges::Full;
     }
 }

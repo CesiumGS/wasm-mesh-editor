@@ -107,7 +107,7 @@ fn mixed_face_mesh() -> Mesh {
 }
 
 #[test]
-fn new_packs_buffers_and_bidirectional_maps() {
+fn new_packs_buffers_with_keys_in_buffer_order() {
     let mut mesh = mixed_face_mesh();
     let overlay = TopologyOverlay::new(&mut mesh);
     let buffers = &overlay.buffers;
@@ -122,46 +122,24 @@ fn new_packs_buffers_and_bidirectional_maps() {
     assert_eq!(overlay.edge_key_to_buffer_index.len(), 6);
     assert_eq!(overlay.face_key_to_buffer_index.len(), 2);
 
-    for (index, &key) in overlay.buffer_index_to_vertex_key.iter().enumerate() {
+    for (index, &key) in buffers.component_keys.verts.iter().enumerate() {
         assert_eq!(overlay.vertex_key_to_buffer_index[key], index as u32);
-        assert_eq!(
-            overlay.component_key(OverlayComponent {
-                kind: ComponentType::Vertex,
-                index: index as u32
-            }),
-            Some(key.into())
-        );
         assert_eq!(
             buffers.positions.data[index],
             mesh.attributes().positions[key].extend(0.0).to_array()
         );
     }
 
-    for (index, &key) in overlay.buffer_index_to_edge_key.iter().enumerate() {
+    for (index, &key) in buffers.component_keys.edges.iter().enumerate() {
         assert_eq!(overlay.edge_key_to_buffer_index[key], index as u32);
         assert_eq!(
-            overlay.component_key(OverlayComponent {
-                kind: ComponentType::Edge,
-                index: index as u32
-            }),
-            Some(key.into())
-        );
-        assert_eq!(
-            buffers.edges.data[index]
-                .map(|vertex| overlay.buffer_index_to_vertex_key[vertex as usize]),
+            buffers.edges.data[index].map(|vertex| buffers.component_keys.verts[vertex as usize]),
             mesh.edge(key).unwrap().verts()
         );
     }
 
-    for (index, &key) in overlay.buffer_index_to_face_key.iter().enumerate() {
+    for (index, &key) in buffers.component_keys.faces.iter().enumerate() {
         assert_eq!(overlay.face_key_to_buffer_index[key], index as u32);
-        assert_eq!(
-            overlay.component_key(OverlayComponent {
-                kind: ComponentType::Face,
-                index: index as u32
-            }),
-            Some(key.into())
-        );
 
         let triangles: Vec<_> = buffers
             .triangles
@@ -170,7 +148,7 @@ fn new_packs_buffers_and_bidirectional_maps() {
             .filter(|triangle| triangle[3] == index as u32)
             .map(|triangle| {
                 [triangle[0], triangle[1], triangle[2]]
-                    .map(|vertex| overlay.buffer_index_to_vertex_key[vertex as usize])
+                    .map(|vertex| buffers.component_keys.verts[vertex as usize])
             })
             .collect();
 
@@ -197,64 +175,20 @@ fn new_packs_buffers_and_bidirectional_maps() {
 }
 
 #[test]
-fn component_key_uses_face_indices_not_triangle_indices() {
+fn face_keys_follow_triangle_face_indices_not_triangle_indices() {
     let mut mesh = mixed_face_mesh();
     let faces: Vec<_> = mesh.topology().faces().collect();
     let overlay = TopologyOverlay::new(&mut mesh);
-    let picked_faces: Vec<_> = overlay
-        .buffers()
+    let buffers = overlay.buffers();
+    let picked_faces: Vec<_> = buffers
         .triangles
         .data
         .iter()
-        .map(|triangle| {
-            overlay.component_key(OverlayComponent {
-                kind: ComponentType::Face,
-                index: triangle[3],
-            })
-        })
+        .map(|triangle| buffers.component_keys.faces[triangle[3] as usize])
         .collect();
 
-    assert_eq!(
-        picked_faces,
-        vec![
-            Some(faces[0].into()),
-            Some(faces[0].into()),
-            Some(faces[1].into())
-        ]
-    );
-    assert_eq!(
-        overlay.component_key(OverlayComponent {
-            kind: ComponentType::Face,
-            index: 2
-        }),
-        None
-    );
-}
-
-#[test]
-fn component_key_rejects_out_of_bounds_indices() {
-    let mut mesh = mixed_face_mesh();
-    let overlay = TopologyOverlay::new(&mut mesh);
-
-    for kind in [
-        ComponentType::Vertex,
-        ComponentType::Edge,
-        ComponentType::Face,
-    ] {
-        let count = overlay.buffers().selection[kind].data.len() as u32;
-
-        assert_eq!(
-            overlay.component_key(OverlayComponent { kind, index: count }),
-            None
-        );
-        assert_eq!(
-            overlay.component_key(OverlayComponent {
-                kind,
-                index: u32::MAX
-            }),
-            None
-        );
-    }
+    assert_eq!(picked_faces, vec![faces[0], faces[0], faces[1]]);
+    assert_eq!(buffers.component_keys.faces, faces);
 }
 
 #[test]
@@ -275,7 +209,7 @@ fn new_seeds_selection_and_subscribes_to_future_changes() {
         vec![0, 255]
     );
 
-    for (index, &key) in overlay.buffer_index_to_edge_key.iter().enumerate() {
+    for (index, &key) in overlay.buffers.component_keys.edges.iter().enumerate() {
         assert_eq!(
             overlay.buffers.selection[ComponentType::Edge].data[index],
             if mesh.selection().contains(key) {
@@ -311,9 +245,9 @@ fn new_accepts_an_empty_mesh() {
     assert!(overlay.vertex_key_to_buffer_index.is_empty());
     assert!(overlay.edge_key_to_buffer_index.is_empty());
     assert!(overlay.face_key_to_buffer_index.is_empty());
-    assert!(overlay.buffer_index_to_vertex_key.is_empty());
-    assert!(overlay.buffer_index_to_edge_key.is_empty());
-    assert!(overlay.buffer_index_to_face_key.is_empty());
+    assert!(overlay.buffers.component_keys.verts.is_empty());
+    assert!(overlay.buffers.component_keys.edges.is_empty());
+    assert!(overlay.buffers.component_keys.faces.is_empty());
 
     for kind in [
         ComponentType::Vertex,
@@ -321,17 +255,6 @@ fn new_accepts_an_empty_mesh() {
         ComponentType::Face,
     ] {
         assert!(overlay.buffers.selection[kind].data.is_empty());
-        assert_eq!(
-            overlay.component_key(OverlayComponent { kind, index: 0 }),
-            None
-        );
-        assert_eq!(
-            overlay.component_key(OverlayComponent {
-                kind,
-                index: u32::MAX
-            }),
-            None
-        );
     }
 
     assert!(overlay.buffers.full_refresh);
@@ -587,7 +510,7 @@ fn update_ignores_shading_changes() {
 }
 
 #[test]
-fn update_rebuilds_buffers_and_maps_on_topology_events() {
+fn update_rebuilds_buffers_keys_and_maps_on_topology_events() {
     let mut mesh = Mesh::new();
     let mut overlay = TopologyOverlay::new(&mut mesh);
     overlay.update(&mesh).unwrap();
@@ -630,6 +553,18 @@ fn update_rebuilds_buffers_and_maps_on_topology_events() {
                 .is_none()
         );
         assert_eq!(
+            buffers.component_keys.verts,
+            topology.verts().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            buffers.component_keys.edges,
+            topology.edges().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            buffers.component_keys.faces,
+            topology.faces().collect::<Vec<_>>()
+        );
+        assert_eq!(
             overlay.vertex_key_to_buffer_index.len(),
             topology.vert_count()
         );
@@ -641,51 +576,6 @@ fn update_rebuilds_buffers_and_maps_on_topology_events() {
             overlay.face_key_to_buffer_index.len(),
             topology.face_count()
         );
-        assert_eq!(
-            overlay.buffer_index_to_vertex_key,
-            topology.verts().collect::<Vec<_>>()
-        );
-        assert_eq!(
-            overlay.buffer_index_to_edge_key,
-            topology.edges().collect::<Vec<_>>()
-        );
-        assert_eq!(
-            overlay.buffer_index_to_face_key,
-            topology.faces().collect::<Vec<_>>()
-        );
-
-        for (kind, keys) in [
-            (
-                ComponentType::Vertex,
-                topology.verts().map(ComponentKey::from).collect::<Vec<_>>(),
-            ),
-            (
-                ComponentType::Edge,
-                topology.edges().map(ComponentKey::from).collect(),
-            ),
-            (
-                ComponentType::Face,
-                topology.faces().map(ComponentKey::from).collect(),
-            ),
-        ] {
-            for (index, &key) in keys.iter().enumerate() {
-                assert_eq!(
-                    overlay.component_key(OverlayComponent {
-                        kind,
-                        index: index as u32
-                    }),
-                    Some(key)
-                );
-            }
-
-            assert_eq!(
-                overlay.component_key(OverlayComponent {
-                    kind,
-                    index: keys.len() as u32
-                }),
-                None
-            );
-        }
 
         assert!(overlay.update(&mesh).is_none());
     }
