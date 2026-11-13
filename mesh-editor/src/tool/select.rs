@@ -27,7 +27,7 @@ impl SelectTool {
         Some((mesh, component))
     }
 
-    fn click_meshes(context: &mut ToolContext<'_>, input: &PointerInput<'_, ComponentKey>) -> bool {
+    fn click_meshes(context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         let clicked = match input.pick {
             PickResult::NotPerformed => return false,
             PickResult::Miss => None,
@@ -50,10 +50,7 @@ impl SelectTool {
         }
     }
 
-    fn click_components(
-        context: &mut ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn click_components(context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         let hit = match input.pick {
             PickResult::NotPerformed => return false,
             PickResult::Miss => None,
@@ -127,35 +124,19 @@ impl Tool for SelectTool {
 
     fn deactivate(&mut self, _context: &mut ToolContext<'_>) {}
 
-    fn pointer_down(
-        &mut self,
-        _context: &mut ToolContext<'_>,
-        _input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_down(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
         false
     }
 
-    fn pointer_up(
-        &mut self,
-        _context: &mut ToolContext<'_>,
-        _input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_up(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
         false
     }
 
-    fn pointer_move(
-        &mut self,
-        _context: &mut ToolContext<'_>,
-        _input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_move(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
         false
     }
 
-    fn pointer_click(
-        &mut self,
-        context: &mut ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_click(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         if context.mode().selection_level.is_empty() {
             Self::click_meshes(context, input)
         } else {

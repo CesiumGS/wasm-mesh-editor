@@ -1,7 +1,7 @@
 use std::any::Any;
 
 use glam::DVec3;
-use mesh::{ComponentKey, Plane};
+use mesh::Plane;
 
 use crate::{EditMode, MeshTransform, PointerInput, Tool, ToolContext};
 
@@ -31,7 +31,7 @@ impl TranslateTool {
     fn begin(
         &mut self,
         context: &ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
+        input: &PointerInput<'_>,
     ) -> Option<TranslationDrag> {
         let ray = input.ray?;
         let scene = input.scene?;
@@ -83,11 +83,7 @@ impl Tool for TranslateTool {
         self.cancel(context);
     }
 
-    fn pointer_down(
-        &mut self,
-        context: &mut ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_down(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         if self.drag.is_some() || !self.supports_edit_mode(context.mode()) {
             return false;
         }
@@ -102,11 +98,7 @@ impl Tool for TranslateTool {
         true
     }
 
-    fn pointer_up(
-        &mut self,
-        context: &mut ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_up(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         if self.drag.is_none() {
             return false;
         }
@@ -117,11 +109,7 @@ impl Tool for TranslateTool {
         true
     }
 
-    fn pointer_move(
-        &mut self,
-        _context: &mut ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_move(&mut self, _context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool {
         let Some(drag) = &mut self.drag else {
             return false;
         };
@@ -135,11 +123,7 @@ impl Tool for TranslateTool {
         true
     }
 
-    fn pointer_click(
-        &mut self,
-        _context: &mut ToolContext<'_>,
-        _input: &PointerInput<'_, ComponentKey>,
-    ) -> bool {
+    fn pointer_click(&mut self, _context: &mut ToolContext<'_>, _input: &PointerInput<'_>) -> bool {
         false
     }
 
