@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 
 use glam::{DMat4, DVec3, Vec3};
-use mesh::{ComponentMask, ComponentType, MeshBuffers, VertKey};
+use mesh::{ComponentKey, ComponentMask, ComponentType, MeshBuffers, VertKey};
 use slotmap::Key;
 
 use crate::{
@@ -539,9 +539,10 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
         assert!(editor.tool_config_mut(&tool).is_some());
 
         let component = editor
-            .overlay(target)
+            .overlay_buffers(target)
             .unwrap()
-            .component_key(OverlayComponent { kind, index: 0 })
+            .component_keys
+            .get(kind, 0)
             .unwrap();
         let positions = editor
             .overlay_buffers(target)
@@ -555,7 +556,7 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
         let mut input = PointerInput {
             pick: PickResult::Hit {
                 mesh: target,
-                component: OverlayComponent { kind, index: 0 },
+                component,
             },
             ..PointerInput::default()
         };
@@ -653,13 +654,12 @@ fn select_tool_clicks_in_empty_modes_resolve_inactive_meshes_and_change_active_m
     let first = editor.add_mesh(triangle_mesh());
     let second = editor.add_mesh(triangle_mesh());
     let tool = editor.add_tool(SelectTool);
+    // Both meshes are built from the same buffers, so their keys match.
+    let face = editor.overlay_buffers(first).unwrap().component_keys.faces[0].into();
     let click = |mesh, shift| PointerInput {
         pick: PickResult::Hit {
             mesh,
-            component: OverlayComponent {
-                kind: ComponentType::Face,
-                index: 0,
-            },
+            component: face,
         },
         modifiers: Modifiers {
             shift,
@@ -722,12 +722,11 @@ fn update_reports_active_mesh_changes_from_select_tool_clicks() {
         },
         ..PointerInput::default()
     };
+    // Both meshes are built from the same buffers, so their keys match.
+    let face = editor.overlay_buffers(first).unwrap().component_keys.faces[0].into();
     let hit = |mesh| PickResult::Hit {
         mesh,
-        component: OverlayComponent {
-            kind: ComponentType::Face,
-            index: 0,
-        },
+        component: face,
     };
 
     editor.set_active_tool(Some(tool.id())).unwrap();

@@ -319,7 +319,7 @@ const EMPTY_SELECTION_MODES: [EditMode; 2] = [
     },
 ];
 
-fn mesh_click(pick: PickResult<ComponentKey>, shift: bool) -> PointerInput<'static, ComponentKey> {
+fn mesh_click(pick: PickResult, shift: bool) -> PointerInput<'static> {
     PointerInput {
         pick,
         modifiers: Modifiers {
@@ -330,7 +330,7 @@ fn mesh_click(pick: PickResult<ComponentKey>, shift: bool) -> PointerInput<'stat
     }
 }
 
-fn face_hit(meshes: &SlotMap<MeshKey, Mesh>, mesh: MeshKey) -> PickResult<ComponentKey> {
+fn face_hit(meshes: &SlotMap<MeshKey, Mesh>, mesh: MeshKey) -> PickResult {
     PickResult::Hit {
         mesh,
         component: meshes[mesh].topology().faces().next().unwrap().into(),
