@@ -14,6 +14,7 @@ fn selected_mesh(positions: &[Vec3]) -> Mesh {
         uvs: None,
         indices: Vec::new(),
         face_vertex_counts: None,
+        ..Default::default()
     })
     .unwrap();
     let vertices: Vec<_> = mesh.topology().verts().collect();
