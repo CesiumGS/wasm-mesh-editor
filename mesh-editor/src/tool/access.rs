@@ -1,40 +1,37 @@
-use mesh::ComponentKey;
-use slotmap::SecondaryMap;
-use topology_overlay::TopologyOverlay;
-
-use super::{PointerInput, Tool, ToolContext};
-use crate::MeshKey;
+use super::{PickResult, PointerInput, Tool, ToolContext};
 
 /// Short-lived access to a tool and its editor's mesh data.
 /// Obtained from `MeshEditor`; callers do not construct the context.
-/// Pointer methods borrow renderer input only for the duration of the call, resolving its pick
-/// against the editor's overlays before the tool sees it.
+/// Pointer methods borrow renderer input only for the duration of the call.
 pub struct ToolAccessor<'editor> {
     pub(crate) tool: &'editor mut dyn Tool,
     pub(crate) context: ToolContext<'editor>,
-    pub(crate) overlays: &'editor SecondaryMap<MeshKey, TopologyOverlay>,
 }
 
 impl ToolAccessor<'_> {
     /// Handles a pointer press. Returns whether it was handled.
     pub fn pointer_down(&mut self, input: &PointerInput<'_>) -> bool {
-        self.forward(input, Tool::pointer_down)
+        let input = self.validate(input);
+        self.tool.pointer_down(&mut self.context, &input)
     }
 
     /// Handles a pointer release, applying final movement before finishing the drag.
     /// Returns whether it was handled.
     pub fn pointer_up(&mut self, input: &PointerInput<'_>) -> bool {
-        self.forward(input, Tool::pointer_up)
+        let input = self.validate(input);
+        self.tool.pointer_up(&mut self.context, &input)
     }
 
     /// Handles pointer movement. Returns whether it was handled.
     pub fn pointer_move(&mut self, input: &PointerInput<'_>) -> bool {
-        self.forward(input, Tool::pointer_move)
+        let input = self.validate(input);
+        self.tool.pointer_move(&mut self.context, &input)
     }
 
     /// Handles a click. Returns whether it was handled.
     pub fn pointer_click(&mut self, input: &PointerInput<'_>) -> bool {
-        self.forward(input, Tool::pointer_click)
+        let input = self.validate(input);
+        self.tool.pointer_click(&mut self.context, &input)
     }
 
     /// Applies any pending preview and confirms the tool's current interaction.
@@ -47,13 +44,17 @@ impl ToolAccessor<'_> {
         self.tool.cancel(&mut self.context);
     }
 
-    /// Resolves the input's pick against the overlays, then calls `handler` on the tool.
-    fn forward(&mut self, input: &PointerInput<'_>, handler: PointerHandler) -> bool {
-        let input = input.resolve(self.overlays);
+    // Renderers pick from buffers that can lag behind mesh removals and topology edits.
+    fn validate<'input>(&self, input: &PointerInput<'input>) -> PointerInput<'input> {
+        let pick = match input.pick {
+            PickResult::Hit { mesh, component }
+                if !self.context.contains_component(mesh, component) =>
+            {
+                PickResult::Miss
+            }
+            pick => pick,
+        };
 
-        handler(self.tool, &mut self.context, &input)
+        PointerInput { pick, ..*input }
     }
 }
-
-type PointerHandler =
-    fn(&mut dyn Tool, &mut ToolContext<'_>, &PointerInput<'_, ComponentKey>) -> bool;

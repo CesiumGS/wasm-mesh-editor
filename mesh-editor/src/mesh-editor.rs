@@ -214,11 +214,7 @@ impl MeshEditor {
         let tool = self.tools.get_mut(&id)?.as_mut();
         let context = ToolContext::new(&mut self.meshes, &mut self.active_meshes, self.mode);
 
-        Some(ToolAccessor {
-            tool,
-            context,
-            overlays: &self.overlays,
-        })
+        Some(ToolAccessor { tool, context })
     }
 
     /// Borrows a concrete tool for configuration, active or inactive.
@@ -270,7 +266,7 @@ impl MeshEditor {
         Ok(())
     }
 
-    /// Returns an overlay for read-only queries such as picking-key lookup.
+    /// Returns a mesh's overlay, or `None` for an unknown key.
     pub fn overlay(&self, key: MeshKey) -> Option<&TopologyOverlay> {
         self.overlays.get(key)
     }

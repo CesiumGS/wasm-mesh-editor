@@ -10,8 +10,6 @@ pub use access::ToolAccessor;
 pub use context::ToolContext;
 pub use input::{Modifiers, PickResult, PointerInput, SceneInput};
 
-use mesh::ComponentKey;
-
 use crate::EditMode;
 
 /// Identifies a registered tool uniquely across editors.
@@ -69,30 +67,14 @@ pub trait Tool: Any {
 
     fn deactivate(&mut self, context: &mut ToolContext<'_>);
 
-    fn pointer_down(
-        &mut self,
-        context: &mut ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
-    ) -> bool;
+    fn pointer_down(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool;
 
     /// Applies the final pointer input and finishes an active drag before returning.
-    fn pointer_up(
-        &mut self,
-        context: &mut ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
-    ) -> bool;
+    fn pointer_up(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool;
 
-    fn pointer_move(
-        &mut self,
-        context: &mut ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
-    ) -> bool;
+    fn pointer_move(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool;
 
-    fn pointer_click(
-        &mut self,
-        context: &mut ToolContext<'_>,
-        input: &PointerInput<'_, ComponentKey>,
-    ) -> bool;
+    fn pointer_click(&mut self, context: &mut ToolContext<'_>, input: &PointerInput<'_>) -> bool;
 
     /// Applies any pending preview and finishes the interaction without waiting for `update`.
     fn confirm(&mut self, context: &mut ToolContext<'_>);
