@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 use std::sync::mpsc::TryRecvError;
 
-use glam::Vec2;
+use glam::{Vec2, Vec4};
 use slotmap::Key;
 
-use crate::{ComponentMask, SelectionChange, TopologyChange};
+use crate::{AttributeBuffer, AttributeValue, ComponentMask, SelectionChange, TopologyChange};
 
 use super::*;
 
@@ -15,6 +15,7 @@ fn triangle_buffers() -> MeshBuffers {
         uvs: None,
         indices: vec![0, 1, 2],
         face_vertex_counts: None,
+        ..Default::default()
     }
 }
 
@@ -651,6 +652,7 @@ fn face_triangulation_follows_boundary_winding() {
             uvs: None,
             face_vertex_counts: Some(vec![indices.len() as u32]),
             indices,
+            ..Default::default()
         })
         .unwrap();
         let vertices: Vec<_> = mesh.topology().verts().collect();
@@ -809,6 +811,7 @@ fn builds_mixed_polygons_in_input_order() {
         uvs: None,
         indices: vec![0, 1, 2, 3, 4, 5, 0, 2, 5, 0, 2, 3, 5],
         face_vertex_counts: Some(vec![6, 3, 4]),
+        ..Default::default()
     };
     let expected_faces = [vec![0, 1, 2, 3, 4, 5], vec![0, 2, 5], vec![0, 2, 3, 5]];
     let mesh = Mesh::from_buffers(options).unwrap();
@@ -1502,6 +1505,7 @@ fn recompute_smooth_normals_use_interior_angles_of_concave_polygons() {
             uvs: None,
             indices: polygon,
             face_vertex_counts: Some(vec![6, 3]),
+            ..Default::default()
         })
         .unwrap();
         let vertex = mesh.topology.verts.keys().nth(3).unwrap();
@@ -1531,6 +1535,7 @@ fn recompute_smooth_normals_are_unchanged_by_splitting_a_planar_face() {
                 vec![0, 1, 2, 3, 1, 0, 4]
             },
             face_vertex_counts: Some(if split { vec![3, 3, 3] } else { vec![4, 3] }),
+            ..Default::default()
         })
         .unwrap();
         let vertex = mesh.topology.verts.keys().next().unwrap();
@@ -1748,6 +1753,7 @@ fn builds_empty_meshes_and_point_clouds() {
                 uvs: None,
                 indices: vec![],
                 face_vertex_counts,
+                ..Default::default()
             })
             .unwrap();
             assert_eq!(mesh.topology.verts.len(), positions.len());
@@ -1844,6 +1850,230 @@ fn validate_attribute_lengths() {
     );
     options.uvs = Some(vec![Vec2::ZERO; 3]);
     assert_eq!(options.validate(), Ok(()));
+}
+
+/// Two triangles sharing vertices 0 and 1: four vertices, six corners.
+fn two_triangle_buffers() -> MeshBuffers {
+    MeshBuffers {
+        positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z],
+        indices: vec![0, 1, 2, 1, 0, 3],
+        ..Default::default()
+    }
+}
+
+/// A quad and a triangle sharing the edge between vertices 2 and 3: five vertices, seven corners.
+fn quad_and_triangle_buffers() -> MeshBuffers {
+    MeshBuffers {
+        positions: vec![Vec3::ZERO, Vec3::X, Vec3::ONE, Vec3::Y, Vec3::Z],
+        indices: vec![0, 1, 2, 3, 3, 2, 4],
+        face_vertex_counts: Some(vec![4, 3]),
+        ..Default::default()
+    }
+}
+
+fn f32_attribute(name: &str, len: usize) -> (String, AttributeBuffer) {
+    (name.into(), AttributeBuffer::F32(vec![0.0; len]))
+}
+
+/// A custom vertex attribute's values, in vertex order.
+fn vertex_values<T: AttributeValue>(mesh: &Mesh, name: &str) -> Vec<Option<T>> {
+    mesh.topology()
+        .verts()
+        .map(|vert| mesh.vert(vert).unwrap().attribute(name))
+        .collect()
+}
+
+/// A custom corner attribute's values, face by face in winding order: the order of `indices`.
+fn corner_values<T: AttributeValue>(mesh: &Mesh, name: &str) -> Vec<Option<T>> {
+    mesh.topology()
+        .faces()
+        .flat_map(|face| {
+            let face = mesh.face(face).unwrap();
+            face.verts()
+                .map(|vert| face.corner_attribute(name, vert))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn all_some<T: Copy>(values: &[T]) -> Vec<Option<T>> {
+    values.iter().copied().map(Some).collect()
+}
+
+#[test]
+fn validate_custom_attribute_lengths_by_list() {
+    let mut options = two_triangle_buffers();
+    options.vertex_attributes = vec![f32_attribute("_A", 6)];
+    assert_eq!(
+        options.validate(),
+        Err(MeshBuildError::CustomAttributeLengthMismatch {
+            name: "_A".into(),
+            expected: 4,
+            actual: 6,
+        })
+    );
+
+    let mut options = two_triangle_buffers();
+    options.corner_attributes = vec![f32_attribute("_B", 4)];
+    assert_eq!(
+        options.validate(),
+        Err(MeshBuildError::CustomAttributeLengthMismatch {
+            name: "_B".into(),
+            expected: 6,
+            actual: 4,
+        })
+    );
+
+    let mut options = two_triangle_buffers();
+    options.vertex_attributes = vec![f32_attribute("_A", 4)];
+    options.corner_attributes = vec![f32_attribute("_B", 6)];
+    assert_eq!(options.validate(), Ok(()));
+}
+
+#[test]
+fn validate_rejects_reserved_custom_attribute_names() {
+    for name in Attributes::RESERVED_NAMES {
+        let expected = Err(MeshBuildError::ReservedAttributeName { name: name.into() });
+
+        let mut options = two_triangle_buffers();
+        options.vertex_attributes = vec![f32_attribute(name, 4)];
+        assert_eq!(options.validate(), expected);
+
+        let mut options = two_triangle_buffers();
+        options.corner_attributes = vec![f32_attribute(name, 6)];
+        assert_eq!(options.validate(), expected);
+    }
+}
+
+#[test]
+fn validate_reserved_names_match_exactly() {
+    let mut options = two_triangle_buffers();
+    options.vertex_attributes = ["normal", "POSITION ", "TEXCOORD_1"]
+        .map(|name| f32_attribute(name, 4))
+        .into();
+    assert_eq!(options.validate(), Ok(()));
+}
+
+#[test]
+fn validate_rejects_duplicate_custom_attribute_names() {
+    let expected = Err(MeshBuildError::DuplicateAttributeName { name: "_A".into() });
+
+    let mut options = two_triangle_buffers();
+    options.vertex_attributes = vec![f32_attribute("_A", 4), f32_attribute("_A", 4)];
+    assert_eq!(options.validate(), expected);
+
+    let mut options = two_triangle_buffers();
+    options.vertex_attributes = vec![f32_attribute("_A", 4)];
+    options.corner_attributes = vec![f32_attribute("_A", 6)];
+    assert_eq!(options.validate(), expected);
+}
+
+#[test]
+fn builds_vertex_attributes_of_every_type() {
+    let floats = [0.5, 1.5, 2.5, 3.5];
+    let vec2s = floats.map(Vec2::splat);
+    let vec3s = floats.map(Vec3::splat);
+    let vec4s = floats.map(Vec4::splat);
+    let uints = [10, 11, 12, 13];
+    let ints = [-1, -2, -3, -4];
+
+    let mut options = two_triangle_buffers();
+    options.vertex_attributes = vec![
+        ("_F32".into(), AttributeBuffer::F32(floats.into())),
+        ("_VEC2".into(), AttributeBuffer::Vec2(vec2s.into())),
+        ("_VEC3".into(), AttributeBuffer::Vec3(vec3s.into())),
+        ("_VEC4".into(), AttributeBuffer::Vec4(vec4s.into())),
+        ("_U32".into(), AttributeBuffer::U32(uints.into())),
+        ("_I32".into(), AttributeBuffer::I32(ints.into())),
+    ];
+    let mesh = Mesh::from_buffers(options).unwrap();
+
+    assert_eq!(vertex_values(&mesh, "_F32"), all_some(&floats));
+    assert_eq!(vertex_values(&mesh, "_VEC2"), all_some(&vec2s));
+    assert_eq!(vertex_values(&mesh, "_VEC3"), all_some(&vec3s));
+    assert_eq!(vertex_values(&mesh, "_VEC4"), all_some(&vec4s));
+    assert_eq!(vertex_values(&mesh, "_U32"), all_some(&uints));
+    assert_eq!(vertex_values(&mesh, "_I32"), all_some(&ints));
+}
+
+#[test]
+fn builds_custom_attributes_in_input_order() {
+    let mut options = two_triangle_buffers();
+    options.vertex_attributes = vec![f32_attribute("_B", 4), f32_attribute("_A", 4)];
+    options.corner_attributes = vec![f32_attribute("_D", 6), f32_attribute("_C", 6)];
+    let mesh = Mesh::from_buffers(options).unwrap();
+
+    let attributes = mesh.attributes();
+    let vertex_names: Vec<_> = attributes
+        .vertex_attributes()
+        .map(|(name, _)| name)
+        .collect();
+    let corner_names: Vec<_> = attributes
+        .corner_attributes()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(vertex_names, ["_B", "_A"]);
+    assert_eq!(corner_names, ["_D", "_C"]);
+}
+
+#[test]
+fn builds_corner_attributes_in_index_order() {
+    let mut options = quad_and_triangle_buffers();
+    options.corner_attributes = vec![("_CORNER".into(), AttributeBuffer::U32((0..7).collect()))];
+    let mesh = Mesh::from_buffers(options).unwrap();
+
+    assert_eq!(
+        corner_values(&mesh, "_CORNER"),
+        all_some(&(0..7).collect::<Vec<u32>>())
+    );
+}
+
+#[test]
+fn corner_attributes_differ_at_shared_vertices() {
+    let mut options = quad_and_triangle_buffers();
+    options.corner_attributes = vec![("_CORNER".into(), AttributeBuffer::U32((0..7).collect()))];
+    let mesh = Mesh::from_buffers(options).unwrap();
+    let verts: Vec<_> = mesh.topology().verts().collect();
+    let faces: Vec<_> = mesh.topology().faces().collect();
+    let quad = mesh.face(faces[0]).unwrap();
+    let triangle = mesh.face(faces[1]).unwrap();
+
+    // Vertex 2 is the quad's third corner and the triangle's second.
+    assert_eq!(quad.corner_attribute::<u32>("_CORNER", verts[2]), Some(2));
+    assert_eq!(
+        triangle.corner_attribute::<u32>("_CORNER", verts[2]),
+        Some(5)
+    );
+}
+
+#[test]
+fn corner_attributes_share_corner_order() {
+    let ids: Vec<u32> = (0..7).collect();
+    let colors: Vec<_> = (0..7).map(|i| Vec4::splat(i as f32)).collect();
+    let mut options = quad_and_triangle_buffers();
+    options.corner_attributes = vec![
+        ("_ID".into(), AttributeBuffer::U32(ids.clone())),
+        ("_COLOR".into(), AttributeBuffer::Vec4(colors.clone())),
+    ];
+    let mesh = Mesh::from_buffers(options).unwrap();
+
+    assert_eq!(corner_values(&mesh, "_ID"), all_some(&ids));
+    assert_eq!(corner_values(&mesh, "_COLOR"), all_some(&colors));
+}
+
+#[test]
+fn builds_custom_attributes_with_built_in_normals_and_uvs() {
+    let mut options = two_triangle_buffers();
+    options.normals = Some(vec![Vec3::Z; 4]);
+    options.uvs = Some(vec![Vec2::ONE; 4]);
+    options.vertex_attributes = vec![("_ID".into(), AttributeBuffer::U32(vec![7; 4]))];
+    options.corner_attributes = vec![("_W".into(), AttributeBuffer::F32(vec![0.25; 6]))];
+    let mesh = Mesh::from_buffers(options).unwrap();
+
+    assert_eq!(mesh.attributes().normals.len(), 6);
+    assert_eq!(mesh.attributes().uvs.len(), 6);
+    assert_eq!(vertex_values(&mesh, "_ID"), vec![Some(7u32); 4]);
+    assert_eq!(corner_values(&mesh, "_W"), vec![Some(0.25f32); 6]);
 }
 
 #[test]
