@@ -1,6 +1,6 @@
 //! Geometry calculations independent of mesh topology and selection.
 
-use glam::{DMat4, DVec3};
+use glam::{DMat4, DVec3, Vec3};
 
 /// A ray with a finite origin and unit-length direction, in any coordinate space.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -48,6 +48,50 @@ impl Plane {
         let hit = ray.origin + distance * ray.direction;
 
         hit.is_finite().then_some(hit)
+    }
+}
+
+/// An axis-aligned bounding box with `min <= max` on every axis.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Aabb {
+    pub min: Vec3,
+    pub max: Vec3,
+}
+
+impl Aabb {
+    /// Returns `None` for no points.
+    #[must_use]
+    pub fn from_points(points: impl IntoIterator<Item = Vec3>) -> Option<Self> {
+        let mut points = points.into_iter();
+        let first = points.next()?;
+        let initial = Self {
+            min: first,
+            max: first,
+        };
+
+        Some(points.fold(initial, |aabb, point| Self {
+            min: aabb.min.min(point),
+            max: aabb.max.max(point),
+        }))
+    }
+
+    /// The smallest box containing both boxes.
+    #[must_use]
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            min: self.min.min(other.min),
+            max: self.max.max(other.max),
+        }
+    }
+
+    /// Translate the bounding box by the given vector.
+    /// In the future: this should be a full transform method.
+    #[must_use]
+    pub fn translated(self, delta: Vec3) -> Self {
+        Self {
+            min: self.min + delta,
+            max: self.max + delta,
+        }
     }
 }
 

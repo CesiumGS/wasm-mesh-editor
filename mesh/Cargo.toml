@@ -7,5 +7,6 @@ rust-version.workspace = true
 
 [dependencies]
 bitflags.workspace = true
+event-emitter = { path = "../utils/event-emitter" }
 glam.workspace = true
 slotmap.workspace = true

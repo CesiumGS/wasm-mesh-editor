@@ -29,6 +29,7 @@
         "usampler",
         "uvec",
         "verts",
-        "webgl"
+        "webgl",
+        "Aabb",
     ]
 }

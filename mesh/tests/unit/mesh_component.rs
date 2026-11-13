@@ -98,3 +98,82 @@ fn try_from_ffi_rejects_values_no_slot_map_issues() {
     let even_version = (2u64 << 32) | 1;
     assert_eq!(VertKey::try_from_ffi(even_version), None);
 }
+
+#[test]
+fn component_keys_start_empty() {
+    let keys = ComponentKeys::default();
+
+    assert!(keys.is_empty());
+
+    for kind in [
+        ComponentType::Vertex,
+        ComponentType::Edge,
+        ComponentType::Face,
+    ] {
+        assert_eq!(keys.len(kind), 0);
+        assert_eq!(keys.get(kind, 0), None);
+        assert_eq!(keys.iter(kind).count(), 0);
+    }
+}
+
+/// Keys pushed with kinds interleaved and a repeated vertex, and the keys themselves.
+fn pushed_keys() -> (ComponentKeys, [VertKey; 2], EdgeKey, FaceKey) {
+    use slotmap::{Key, SlotMap};
+
+    let mut vertices = SlotMap::<VertKey, ()>::with_key();
+    let verts = [vertices.insert(()), vertices.insert(())];
+    let edge = EdgeKey::null();
+    let face = FaceKey::null();
+    let mut keys = ComponentKeys::default();
+
+    for key in [
+        face.into(),
+        verts[0].into(),
+        edge.into(),
+        verts[1].into(),
+        verts[0].into(),
+    ] {
+        keys.push(key);
+    }
+
+    (keys, verts, edge, face)
+}
+
+#[test]
+fn push_appends_keys_to_their_kind_in_order() {
+    let (keys, verts, edge, face) = pushed_keys();
+
+    assert!(!keys.is_empty());
+    assert_eq!(keys.verts, vec![verts[0], verts[1], verts[0]]);
+    assert_eq!(keys.edges, vec![edge]);
+    assert_eq!(keys.faces, vec![face]);
+}
+
+#[test]
+fn kind_access_matches_typed_lists() {
+    let (keys, _, _, _) = pushed_keys();
+
+    for (kind, expected) in [
+        (
+            ComponentType::Vertex,
+            keys.verts.iter().map(|&key| key.into()).collect::<Vec<_>>(),
+        ),
+        (
+            ComponentType::Edge,
+            keys.edges.iter().map(|&key| key.into()).collect(),
+        ),
+        (
+            ComponentType::Face,
+            keys.faces.iter().map(|&key| key.into()).collect(),
+        ),
+    ] {
+        assert_eq!(keys.len(kind), expected.len());
+        assert_eq!(keys.iter(kind).collect::<Vec<_>>(), expected);
+
+        for (index, &key) in expected.iter().enumerate() {
+            assert_eq!(keys.get(kind, index), Some(key));
+        }
+
+        assert_eq!(keys.get(kind, expected.len()), None);
+    }
+}
