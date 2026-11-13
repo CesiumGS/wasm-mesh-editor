@@ -20,6 +20,7 @@ pub use build::{MeshBuffers, MeshBuildError};
 
 /// A headless, editable mesh: connectivity, geometry attributes, and selection.
 #[derive(Default)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct Mesh {
     pub(crate) topology: Topology,
     pub(crate) attributes: Attributes,

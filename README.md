@@ -8,7 +8,7 @@ A modular mesh-editing library for the web and native. Use it headless, or bring
 | --- | --- |
 | `mesh` | Headless mesh kernel based on a radial edge structure. |
 | `topology-overlay` | A translation layer from the mesh data model to GPU-ready data buffers for drawing the mesh overlay (points, edges, and faces), plus the WebGL2 shaders that draw them. |
-| `mesh-editor` | An orchestration layer for composing multiple meshes and overlays, and manager of global state (like edit mode, tools, etc.). |
+| `mesh-editor` | An orchestration layer for composing multiple meshes and overlays, and manager of global state (like edit mode, tools, etc.). With the `wasm` feature, it also compiles everything into one `.wasm` and exposes the editor to JS via `wasm-bindgen`. |
 
 Small, reusable utility crates live under `utils/`:
 
@@ -35,10 +35,46 @@ cargo fmt           # format
 ## Build the Wasm package
 
 ```sh
-wasm-pack build mesh-editor --target web --out-name mesh-editor -- --features wasm
+wasm-pack build mesh-editor --target web --scope cesium --out-name mesh-editor -- --features wasm
 ```
 
-This emits an npm-ready package (`.wasm` + JS glue + auto-generated `.d.ts`) into `mesh-editor/pkg/`, which CesiumJS imports.
+This emits an npm-ready package (`.wasm` + JS glue + auto-generated `.d.ts`) into `mesh-editor/pkg/`, which CesiumJS imports. The `--scope cesium` flag names the package `@cesium/mesh-editor`.
+
+While the API is unstable the package ships as pre-releases versioned below `1.0.0` (`0.1.0-alpha.N`, set by the workspace `version` in `Cargo.toml`). To publish one, from `mesh-editor/pkg/` run:
+
+```sh
+npm publish --access public --tag alpha
+```
+
+`--access public` is required to publish a scoped package, and `--tag alpha` places it under the `alpha` dist-tag instead of `latest`, so pre-releases aren't installed by default. Publishing to the `@cesium` scope requires npm org membership.
+
+JS bindings are declared with `#[cfg_attr(feature = "wasm", wasm_bindgen)]` beside the Rust items they expose. Key conversions, JS-only types, and adapter methods live under each crate's `src/wasm/`, in modules named after the source modules they adapt (e.g. `mesh/src/wasm/mesh.rs` adapts `mesh.rs`). The `wasm` feature of `mesh-editor` also enables `mesh/wasm`. Native builds never compile `wasm-bindgen`.
+
+Plain JS objects that cross the boundary (such as `PointerInput` and `OverlayViews`) are serde structs deriving [`Tsify`](https://github.com/madonoharu/tsify), passed as `tsify::Ts<T>`, so their TypeScript interfaces and doc comments are generated from Rust. Their Rust names become TypeScript names, and their doc comments become TypeScript docs, so keep both JS-facing. Define them in `mesh-editor`, the crate that builds the `.wasm`: a dependency crate's declarations can be dropped from dev builds' `.d.ts`, since nothing links the object file that holds them.
+
+Tools stay owned by the editor, and JS only holds their `ToolId`s. Each tool type exports a static function that adds a new instance to an editor: `editor.setActiveTool(SelectTool.addTo(editor))`. Each call adds a separate tool, so a type can be added several times and each one configured differently. A crate that ships more tools exports the same kind of function, implemented with `editor.add_tool(MyTool::default()).id()`; tool-specific settings follow the same pattern, taking the editor and a `ToolId` and using `MeshEditor::tool_handle` to reach the concrete tool. Tool crates must be compiled into the same `.wasm` as the editor, so a build that includes extra tool crates needs a top-level crate that depends on `mesh-editor` and on them.
+
+JS sets the edit mode with a `ComponentMask`, the number whose bit `1 << ComponentType` stands for each component type: `editor.setMode(1 << ComponentType.Vertex)` makes vertices selectable, `0` makes nothing selectable, and combined masks are allowed. `editor.renderableComponents` and `editor.selectableComponents` return the current mode's masks, so the renderer tests a component type with `mask & (1 << componentType)`. `setMode` deactivates an active tool that doesn't support the new mode; `editor.toolSupportsMode(id, mask)` checks a tool against a mode without activating it, for example to disable tool buttons.
+
+Add `--dev` for a faster, unoptimized build.
+
+## Overlay shaders
+
+`topology-overlay/shaders/` holds GLSL ES 3.00 shaders that draw the overlay buffers as WebGL2 data textures, one instanced draw per component kind. They're embedded in the `.wasm`: JS reads them from `topologyOverlayShaders()`.
+
+Each shader owns its `main()` and calls hook functions that the consumer defines, so camera transforms, depth writing (such as log depth), gamma correction, and pick encoding stay on the consumer's side:
+
+| Stage | Hook |
+| --- | --- |
+| Vertex | `vec4 topologyOverlay_modelToEye(vec3 positionMC)` |
+| Vertex | `vec4 topologyOverlay_eyeToClip(vec4 positionEC)` |
+| Vertex | `vec2 topologyOverlay_viewportSize()` |
+| Vertex | `void topologyOverlay_setVertexOutputs(vec4 positionEC, uint componentIndex)` |
+| Fragment | `void topologyOverlay_writeColor(vec4 color)` |
+
+`topologyOverlay_eyeToClip` must be linear, like a projection matrix, and free of side effects: edges call it twice per vertex and interpolate its results to clip to the near plane. `topologyOverlay_setVertexOutputs` is called once per vertex after `gl_Position` is final, with the vertex's eye position and the drawn component's overlay index: the place for custom depth (it may adjust `gl_Position`'s depth, as Cesium's `czm_vertexLogDepth()` does) and pick colors. To report a pick, look up that index in `overlayViews(mesh).componentKeys` and pass the key as `PickHit.componentKey`.
+
+Build each stage as `#version 300 es`, then the shader's source, then the hook definitions. `defaultHooks` defines them for plain WebGL2. Bind each overlay buffer's texture to its `layout.uniformName` from `overlayViews`; `topologyOverlayShaders().uniforms` names the rest, such as each shader's sizes and colors, the shared depth bias, and the view uniforms that the default hooks declare. Point and edge sizes are in the pixels of `topologyOverlay_viewportSize()`, so scale them by the device pixel ratio. Upload each buffer as a texture with `NEAREST` min and mag filters: the default filters leave data textures incomplete, and the shaders then read zeros.
 
 ## Docs
 
