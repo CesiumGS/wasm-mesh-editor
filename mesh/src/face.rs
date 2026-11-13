@@ -3,7 +3,7 @@
 use glam::{DVec3, Vec2, Vec3};
 
 use crate::geometry::polygon_normal;
-use crate::{Attributes, EdgeKey, FaceKey, LoopKey, Topology, VertKey};
+use crate::{AttributeValue, Attributes, EdgeKey, FaceKey, LoopKey, Topology, VertKey};
 
 /// A face (n-gon), reached from an entry loop.
 pub struct Face {
@@ -40,7 +40,9 @@ impl<'a> FaceRef<'a> {
 
     /// The stored shading normal at this vertex's corner, or `None` if it is not in the face.
     pub fn corner_normal(&self, vertex: VertKey) -> Option<Vec3> {
-        let key = self.loops().find(|&key| self.topo.loops[key].vert == vertex)?;
+        let key = self
+            .loops()
+            .find(|&key| self.topo.loops[key].vert == vertex)?;
         Some(self.attrs.normals[key])
     }
 
@@ -52,8 +54,20 @@ impl<'a> FaceRef<'a> {
 
     /// The UV at this vertex's corner, or `None` if it is not in the face or has no UV.
     pub fn corner_uv(&self, vertex: VertKey) -> Option<Vec2> {
-        let key = self.loops().find(|&key| self.topo.loops[key].vert == vertex)?;
+        let key = self
+            .loops()
+            .find(|&key| self.topo.loops[key].vert == vertex)?;
         self.attrs.uvs.get(key).copied()
+    }
+
+    /// The value of the named custom corner attribute at this vertex's corner, or `None` if the
+    /// vertex isn't in the face, or the attribute doesn't exist / stores a different type / or has no value here.
+    pub fn corner_attribute<T: AttributeValue>(&self, name: &str, vertex: VertKey) -> Option<T> {
+        let values = self.attrs.corner_attribute(name)?.typed::<T>()?;
+        let key = self
+            .loops()
+            .find(|&key| self.topo.loops[key].vert == vertex)?;
+        values.get(key).copied()
     }
 
     pub(crate) fn loops(&self) -> impl Iterator<Item = LoopKey> + '_ {

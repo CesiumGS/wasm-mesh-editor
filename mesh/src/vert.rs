@@ -2,7 +2,7 @@
 
 use glam::Vec3;
 
-use crate::{Attributes, EdgeKey, FaceKey, LoopKey, Topology, VertKey};
+use crate::{AttributeValue, Attributes, EdgeKey, FaceKey, LoopKey, Topology, VertKey};
 
 /// A vertex. Its position lives in attribute storage, keyed by [`VertKey`].
 pub struct Vert {
@@ -43,5 +43,12 @@ impl<'a> VertRef<'a> {
 
     pub fn position(&self) -> Vec3 {
         self.attrs.positions[self.key]
+    }
+
+    /// This vertex's value of the named custom vertex attribute, or `None` if the attribute
+    /// doesn't exist, stores a different type, or has no value here.
+    pub fn attribute<T: AttributeValue>(&self, name: &str) -> Option<T> {
+        let values = self.attrs.vertex_attribute(name)?.typed::<T>()?;
+        values.get(self.key).copied()
     }
 }
