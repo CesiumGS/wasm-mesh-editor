@@ -4,70 +4,6 @@ use event_emitter::Event;
 use glam::Vec3;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-#[test]
-fn selection_keys_store_typed_lists_and_support_dynamic_access() {
-    use slotmap::{Key, SlotMap};
-
-    let mut vertices = SlotMap::<VertKey, ()>::with_key();
-    let first_vertex = vertices.insert(());
-    let second_vertex = vertices.insert(());
-    let edge = EdgeKey::null();
-    let face = FaceKey::null();
-    let mut keys = SelectionKeys::default();
-
-    assert!(keys.is_empty());
-
-    for kind in [
-        ComponentType::Vertex,
-        ComponentType::Edge,
-        ComponentType::Face,
-    ] {
-        assert_eq!(keys.len(kind), 0);
-        assert_eq!(keys.get(kind, 0), None);
-        assert_eq!(keys.iter(kind).count(), 0);
-    }
-
-    keys.push(face.into());
-    keys.push(first_vertex.into());
-    keys.push(edge.into());
-    keys.push(second_vertex.into());
-    keys.push(first_vertex.into());
-
-    assert!(!keys.is_empty());
-    assert_eq!(keys.verts, vec![first_vertex, second_vertex, first_vertex]);
-    assert_eq!(keys.edges, vec![edge]);
-    assert_eq!(keys.faces, vec![face]);
-
-    for (kind, expected) in [
-        (
-            ComponentType::Vertex,
-            vec![
-                first_vertex.into(),
-                second_vertex.into(),
-                first_vertex.into(),
-            ],
-        ),
-        (ComponentType::Edge, vec![edge.into()]),
-        (ComponentType::Face, vec![face.into()]),
-    ] {
-        assert_eq!(keys.len(kind), expected.len());
-        assert_eq!(keys.iter(kind).collect::<Vec<_>>(), expected);
-
-        for (index, key) in expected.iter().enumerate() {
-            assert_eq!(keys.get(kind, index), Some(*key));
-        }
-
-        assert_eq!(keys.get(kind, expected.len()), None);
-    }
-
-    let snapshot = keys.clone();
-    keys.verts.clear();
-    assert_eq!(
-        snapshot.verts,
-        vec![first_vertex, second_vertex, first_vertex]
-    );
-}
-
 fn triangle() -> Mesh {
     Mesh::from_buffers(MeshBuffers {
         positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y],
@@ -198,12 +134,12 @@ fn normalization_keeps_component_kinds_independent() {
     let edge = EdgeKey::null();
     let face = FaceKey::null();
     let mut delta = SelectionChange {
-        added: SelectionKeys {
+        added: ComponentKeys {
             verts: vec![vertex, vertex],
             edges: vec![edge],
             faces: vec![face],
         },
-        removed: SelectionKeys {
+        removed: ComponentKeys {
             verts: vec![vertex],
             edges: vec![edge, edge],
             faces: vec![face],

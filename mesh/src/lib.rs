@@ -23,11 +23,10 @@ pub use face::{Face, FaceRef};
 pub use geometry::{Aabb, Plane, Ray, centroid, try_inverse_affine};
 pub use loop_::Loop;
 pub use mesh::{Mesh, MeshBuffers, MeshBuildError};
-pub use mesh_change::{
-    AttributeChange, MeshChange, SelectionChange, SelectionKeys, TopologyChange,
-};
+pub use mesh_change::{AttributeChange, MeshChange, SelectionChange, TopologyChange};
 pub use mesh_component::{
-    ComponentKey, ComponentMask, ComponentRef, ComponentType, EdgeKey, FaceKey, LoopKey, VertKey,
+    ComponentKey, ComponentKeys, ComponentMask, ComponentRef, ComponentType, EdgeKey, FaceKey,
+    LoopKey, VertKey,
 };
 pub use selection::{Selection, SelectionBoundary, SelectionKind, SelectionStep, SelectionView};
 pub use topology::Topology;

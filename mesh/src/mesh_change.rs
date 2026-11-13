@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use slotmap::{Key, KeyData};
 
-use crate::{ComponentKey, ComponentType, EdgeKey, FaceKey, LoopKey, VertKey};
+use crate::{ComponentKeys, EdgeKey, FaceKey, LoopKey, VertKey};
 
 pub enum MeshChange {
     Attributes(AttributeChange),
@@ -60,57 +60,11 @@ impl TopologyChange {
     }
 }
 
-/// Handles grouped by component kind for selection changes.
-#[derive(Clone, Default)]
-pub struct SelectionKeys {
-    pub verts: Vec<VertKey>,
-    pub edges: Vec<EdgeKey>,
-    pub faces: Vec<FaceKey>,
-}
-
-impl SelectionKeys {
-    /// Appends a handle to its component list.
-    pub fn push(&mut self, key: ComponentKey) {
-        match key {
-            ComponentKey::Vert(key) => self.verts.push(key),
-            ComponentKey::Edge(key) => self.edges.push(key),
-            ComponentKey::Face(key) => self.faces.push(key),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.verts.is_empty() && self.edges.is_empty() && self.faces.is_empty()
-    }
-
-    /// The number of handles of this kind.
-    pub fn len(&self, kind: ComponentType) -> usize {
-        match kind {
-            ComponentType::Vertex => self.verts.len(),
-            ComponentType::Edge => self.edges.len(),
-            ComponentType::Face => self.faces.len(),
-        }
-    }
-
-    /// A handle from this kind's list, or `None` if out of bounds.
-    pub fn get(&self, kind: ComponentType, index: usize) -> Option<ComponentKey> {
-        match kind {
-            ComponentType::Vertex => self.verts.get(index).copied().map(ComponentKey::Vert),
-            ComponentType::Edge => self.edges.get(index).copied().map(ComponentKey::Edge),
-            ComponentType::Face => self.faces.get(index).copied().map(ComponentKey::Face),
-        }
-    }
-
-    /// Handles of this kind in insertion order.
-    pub fn iter(&self, kind: ComponentType) -> impl ExactSizeIterator<Item = ComponentKey> + '_ {
-        (0..self.len(kind)).map(move |index| self.get(kind, index).unwrap())
-    }
-}
-
 /// Selection events contain only net membership changes from a single operation.
 #[derive(Default)]
 pub struct SelectionChange {
-    pub added: SelectionKeys,
-    pub removed: SelectionKeys,
+    pub added: ComponentKeys,
+    pub removed: ComponentKeys,
 }
 
 impl SelectionChange {

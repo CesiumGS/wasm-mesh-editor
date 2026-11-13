@@ -14,8 +14,8 @@ use event_emitter::EventEmitter;
 use glam::Vec3;
 
 use crate::{
-    Aabb, Attributes, ComponentKey, ComponentMask, ComponentRef, ComponentType, EdgeKey, FaceKey,
-    MeshChange, SelectionChange, SelectionKeys, Topology, VertKey,
+    Aabb, Attributes, ComponentKey, ComponentKeys, ComponentMask, ComponentRef, ComponentType,
+    EdgeKey, FaceKey, MeshChange, SelectionChange, Topology, VertKey,
 };
 
 /// A component kind that can be selected: the three handle types and
@@ -297,9 +297,9 @@ impl<'a> Selection<'a> {
         }
     }
 
-    fn clear_selection(&mut self) -> SelectionKeys {
+    fn clear_selection(&mut self) -> ComponentKeys {
         if self.view().is_empty() {
-            return SelectionKeys::default();
+            return ComponentKeys::default();
         }
 
         self.state.invalidate_boundary();
@@ -314,7 +314,7 @@ impl<'a> Selection<'a> {
             }
         };
 
-        SelectionKeys {
+        ComponentKeys {
             verts,
             edges: self.state.edges.drain().collect(),
             faces: self.state.faces.drain().collect(),
@@ -419,7 +419,7 @@ impl<'a> Selection<'a> {
     /// Example 2: deselecting one vertex of a fully selected triangle deselects
     /// its two incident edges and the face. However, the other two vertices and the
     /// opposite edge remain selected.
-    fn propagate_removals(&mut self, removed: &mut SelectionKeys) {
+    fn propagate_removals(&mut self, removed: &mut ComponentKeys) {
         let mut upward_sources = removed.clone();
         let mut possible_orphans = HashSet::new();
         let mut lower_components = Vec::new();
@@ -460,7 +460,7 @@ impl<'a> Selection<'a> {
     /// Importantly, selection changes that propagate downwards don't then participate in upward propagation. Only the initial selection does that...
     ///
     /// Example 2: selecting three edges of a quad propagates down to select all four vertices of the quad. However, the face itself will remain unselected.
-    fn propagate_additions(&mut self, added: &mut SelectionKeys) {
+    fn propagate_additions(&mut self, added: &mut ComponentKeys) {
         let mut upward_sources = added.clone();
         let mut lower_components = Vec::new();
 
@@ -490,8 +490,8 @@ impl<'a> Selection<'a> {
     fn propagate_upward(
         &mut self,
         action: PropagationAction,
-        selection_changes: &mut SelectionKeys,
-        upward_sources: &mut SelectionKeys,
+        selection_changes: &mut ComponentKeys,
+        upward_sources: &mut ComponentKeys,
     ) {
         let should_select = matches!(action, PropagationAction::Select);
         let mut upper_components_to_check = HashSet::new();
