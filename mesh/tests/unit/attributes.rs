@@ -10,6 +10,7 @@ fn two_triangles() -> Mesh {
         uvs: None,
         indices: vec![0, 1, 2, 2, 1, 3],
         face_vertex_counts: None,
+        ..Default::default()
     })
     .unwrap()
 }
