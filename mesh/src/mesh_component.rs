@@ -138,6 +138,12 @@ impl ComponentKey {
     }
 }
 
+/// A component key: [`VertKey`], [`EdgeKey`], [`FaceKey`], or [`ComponentKey`].
+/// A named alias over `Copy + Into<ComponentKey>`.
+pub trait IntoComponentKey: Copy + Into<ComponentKey> {}
+
+impl<T: Copy + Into<ComponentKey>> IntoComponentKey for T {}
+
 /// Component keys grouped by kind.
 #[derive(Clone, Default)]
 pub struct ComponentKeys {
@@ -186,7 +192,7 @@ impl ComponentKeys {
 
 /// A set of vertices, edges, and faces.
 #[derive(Default)]
-pub(crate) struct ComponentSet {
+pub struct ComponentSet {
     /// `Rc` so the vertex set can be shared without copying.
     pub(crate) verts: Rc<HashSet<VertKey>>,
     pub(crate) edges: HashSet<EdgeKey>,
@@ -194,8 +200,8 @@ pub(crate) struct ComponentSet {
 }
 
 impl ComponentSet {
-    pub(crate) fn contains(&self, key: ComponentKey) -> bool {
-        match key {
+    pub fn contains<K: IntoComponentKey>(&self, key: K) -> bool {
+        match key.into() {
             ComponentKey::Vert(key) => self.verts.contains(&key),
             ComponentKey::Edge(key) => self.edges.contains(&key),
             ComponentKey::Face(key) => self.faces.contains(&key),
@@ -226,16 +232,28 @@ impl ComponentSet {
         }
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub fn verts(&self) -> impl Iterator<Item = VertKey> + '_ {
+        self.verts.iter().copied()
+    }
+
+    pub fn edges(&self) -> impl Iterator<Item = EdgeKey> + '_ {
+        self.edges.iter().copied()
+    }
+
+    pub fn faces(&self) -> impl Iterator<Item = FaceKey> + '_ {
+        self.faces.iter().copied()
+    }
+
+    pub fn len(&self) -> usize {
         self.verts.len() + self.edges.len() + self.faces.len()
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Every component, in unspecified order.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = ComponentKey> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = ComponentKey> + '_ {
         self.verts
             .iter()
             .copied()

@@ -4,7 +4,7 @@
 //! mesh key. Unknown component keys are ignored.
 
 use mesh::{
-    AttributeError, AttributeKey, AttributeValue, Mesh, Selection, SelectionKind, SelectionStep,
+    AttributeError, AttributeKey, AttributeValue, IntoComponentKey, Mesh, Selection, SelectionStep,
 };
 use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
@@ -147,7 +147,7 @@ impl MeshEditor {
 struct Select;
 
 impl ByAttributeOperation for Select {
-    fn apply<K: AttributeKey + SelectionKind, T: AttributeValue>(
+    fn apply<K: AttributeKey + IntoComponentKey, T: AttributeValue>(
         &self,
         mesh: &mut Mesh,
         name: &str,

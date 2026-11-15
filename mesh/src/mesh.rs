@@ -1,4 +1,4 @@
-//! The [`Mesh`] aggregate: topology, attributes, and selection.
+//! The [`Mesh`] aggregate: topology, attributes, selection, and hidden components.
 
 mod build;
 
@@ -13,18 +13,19 @@ use crate::geometry::corner_angle;
 use crate::selection::{SelectionBoundary, SelectionState};
 use crate::{
     Aabb, AttributeChange, AttributeError, AttributeKey, AttributeValue, Attributes, ComponentKey,
-    ComponentMask, ComponentRef, EdgeKey, EdgeRef, FaceKey, FaceRef, LoopKey, MeshChange,
-    Selection, SelectionView, Topology, VertKey, VertRef,
+    ComponentMask, ComponentRef, ComponentSet, EdgeKey, EdgeRef, FaceKey, FaceRef, Hidden,
+    HideOptions, LoopKey, MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
 };
 
 pub use build::{EdgeAttributeBuffer, MeshBuffers, MeshBuildError};
 
-/// A headless, editable mesh: connectivity, geometry attributes, and selection.
+/// A headless, editable mesh: connectivity, geometry attributes, selection, and hidden components.
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct Mesh {
     pub(crate) topology: Topology,
     pub(crate) attributes: Attributes,
     pub(crate) selection: SelectionState,
+    pub(crate) hidden: ComponentSet,
     interactable_components: ComponentMask,
     changes: EventEmitter<MeshChange>,
 
@@ -39,6 +40,7 @@ impl Default for Mesh {
             topology: Topology::default(),
             attributes: Attributes::default(),
             selection: SelectionState::default(),
+            hidden: ComponentSet::default(),
             interactable_components: ComponentMask::VERTEX,
             changes: EventEmitter::default(),
             face_normals: HashMap::new(),
@@ -294,6 +296,24 @@ impl Mesh {
             interactable: self.interactable_components,
             changes: &mut self.changes,
         }
+    }
+
+    pub fn hidden(&self) -> &ComponentSet {
+        todo!()
+    }
+
+    pub fn hidden_mut(&mut self) -> Hidden<'_> {
+        todo!()
+    }
+
+    /// Hides the selected components of interactable types, then deselects them.
+    pub fn hide_selected(&mut self, options: HideOptions) {
+        todo!()
+    }
+
+    /// Shows the selected components of interactable types.
+    pub fn show_selected(&mut self, options: HideOptions) {
+        todo!()
     }
 
     /// Subscribes to future mesh changes in emission order. Use

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Aabb, AttributeBuffer, AttributeMap, Mesh, MeshBuffers};
+use crate::{Aabb, AttributeBuffer, AttributeMap, EdgeKey, FaceKey, Mesh, MeshBuffers, VertKey};
 use event_emitter::Event;
 use glam::Vec3;
 use std::rc::Rc;
@@ -164,12 +164,12 @@ fn set_emits_only_changes_to_overlapping_selections() {
     let edges: Vec<_> = mesh.topology.edges().collect();
     mesh.set_interactable_components(ComponentMask::EDGE);
     mesh.selection_mut().select(&edges[..1]);
-    let before: HashSet<_> = mesh.selection().selected().collect();
+    let before: HashSet<_> = mesh.selection().iter().collect();
     let changes = mesh.subscribe();
 
     mesh.selection_mut().set(&edges[1..2]);
 
-    let after: HashSet<_> = mesh.selection().selected().collect();
+    let after: HashSet<_> = mesh.selection().iter().collect();
     let added: Vec<_> = after.difference(&before).copied().collect();
     let removed: Vec<_> = before.difference(&after).copied().collect();
     assert_selection_event(&changes, &added, &removed);
@@ -181,14 +181,14 @@ fn rebuilds_preserving_selection_do_not_emit() {
     let face = mesh.topology.faces().next().unwrap();
     mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().select(&[face]);
-    let before: HashSet<_> = mesh.selection().selected().collect();
+    let before: HashSet<_> = mesh.selection().iter().collect();
     let changes = mesh.subscribe();
 
     mesh.selection_mut().set(&[face]);
     mesh.set_interactable_components(ComponentMask::EDGE);
     mesh.set_interactable_components(ComponentMask::VERTEX);
 
-    assert_eq!(mesh.selection().selected().collect::<HashSet<_>>(), before);
+    assert_eq!(mesh.selection().iter().collect::<HashSet<_>>(), before);
     assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
 }
 
@@ -249,17 +249,17 @@ fn grow_shrink_and_clear_emit_complete_selection_changes() {
             };
             mesh.set_interactable_components(level);
             mesh.selection_mut().select(&[seed]);
-            let before: HashSet<_> = mesh.selection().selected().collect();
+            let before: HashSet<_> = mesh.selection().iter().collect();
             let changes = mesh.subscribe();
 
             mesh.selection_mut().grow(step);
-            let grown: HashSet<_> = mesh.selection().selected().collect();
+            let grown: HashSet<_> = mesh.selection().iter().collect();
             assert!(grown.len() > before.len());
             let added: Vec<_> = grown.difference(&before).copied().collect();
             assert_selection_event(&changes, &added, &[]);
 
             mesh.selection_mut().shrink(step);
-            let shrunk: HashSet<_> = mesh.selection().selected().collect();
+            let shrunk: HashSet<_> = mesh.selection().iter().collect();
             assert!(shrunk.len() < grown.len());
             let removed: Vec<_> = grown.difference(&shrunk).copied().collect();
             assert_selection_event(&changes, &[], &removed);
@@ -1246,7 +1246,7 @@ fn accessors_expose_each_selected_kind() {
     assert_eq!(view.edges().collect::<Vec<_>>(), vec![edge]);
     assert_eq!(view.faces().collect::<Vec<_>>(), vec![face]);
     assert_eq!(
-        view.selected().collect::<Vec<_>>(),
+        view.iter().collect::<Vec<_>>(),
         vec![vert.into(), edge.into(), face.into()]
     );
 }
@@ -1482,7 +1482,7 @@ fn face_removal_preserves_shared_geometry_and_unrelated_selections() {
     assert_eq!(mesh.selection().faces().count(), 2);
     mesh.selection_mut().deselect(&faces[1..]);
     assert_eq!(
-        mesh.selection().selected().collect::<Vec<_>>(),
+        mesh.selection().iter().collect::<Vec<_>>(),
         vec![verts[5].into()]
     );
 
