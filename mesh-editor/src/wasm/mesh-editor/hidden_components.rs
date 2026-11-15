@@ -1,11 +1,18 @@
 //! JS adapters for hiding and showing components of the meshes in a [`MeshEditor`].
 
-use mesh::{ComponentKey, EdgeKey, FaceKey, HideOptions, Mesh, VertKey};
+use mesh::{
+    AttributeError, AttributeKey, AttributeValue, ComponentKey, EdgeKey, FaceKey, HideOptions,
+    IntoComponentKey, Mesh, VertKey,
+};
 use serde::{Deserialize, Deserializer};
 use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
-use crate::{MeshEditor, MeshKey, MeshNotFound};
+use super::active_mesh;
+use super::attributes::{
+    AttributeComparison, ByAttributeOperation, ByAttributeResult, apply_by_js_value,
+};
+use crate::{MeshEditor, MeshKey};
 
 /// Component keys grouped by type, like `OverlayViews.componentKeys`. Omitted types have no keys.
 /// Copy keys out of wasm memory first: views over `memory.buffer` can detach during the call.
@@ -86,15 +93,57 @@ impl MeshEditor {
         mesh.hidden_components_mut().show_all();
         Ok(true)
     }
-}
 
-/// The mesh to edit, or `None` if it's inactive. Throws for an unknown mesh key.
-fn active_mesh(editor: &mut MeshEditor, mesh_key: MeshKey) -> Result<Option<&mut Mesh>, JsError> {
-    if !editor.has_mesh(mesh_key) {
-        return Err(MeshNotFound { key: mesh_key }.into());
+    /// Hides every vertex, edge or face in an active mesh whose `name` attribute compares to
+    /// `value` as `comparison` says, like `hideComponents`. Pass a number for scalar attributes and
+    /// an array of numbers for vector ones. Only throws for an unknown mesh key.
+    #[wasm_bindgen(js_name = hideByAttribute)]
+    pub fn hide_by_attribute(
+        &mut self,
+        #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
+        name: &str,
+        comparison: AttributeComparison,
+        #[wasm_bindgen(unchecked_param_type = "number | ArrayLike<number>")] value: JsValue,
+        options: Option<Ts<HideOptionsJs>>,
+    ) -> Result<ByAttributeResult, JsError> {
+        let options = convert_options(options.as_ref())?;
+        let Some(mesh) = active_mesh(self, mesh_key)? else {
+            return Ok(ByAttributeResult::MeshInactive);
+        };
+
+        Ok(apply_by_js_value(
+            mesh,
+            name,
+            comparison,
+            &value,
+            &Hide(options),
+        ))
     }
 
-    Ok(editor.active_mesh_mut(mesh_key))
+    /// Shows every vertex, edge or face in an active mesh whose `name` attribute compares to
+    /// `value`, like `hideByAttribute`.
+    #[wasm_bindgen(js_name = showByAttribute)]
+    pub fn show_by_attribute(
+        &mut self,
+        #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
+        name: &str,
+        comparison: AttributeComparison,
+        #[wasm_bindgen(unchecked_param_type = "number | ArrayLike<number>")] value: JsValue,
+        options: Option<Ts<HideOptionsJs>>,
+    ) -> Result<ByAttributeResult, JsError> {
+        let options = convert_options(options.as_ref())?;
+        let Some(mesh) = active_mesh(self, mesh_key)? else {
+            return Ok(ByAttributeResult::MeshInactive);
+        };
+
+        Ok(apply_by_js_value(
+            mesh,
+            name,
+            comparison,
+            &value,
+            &Show(options),
+        ))
+    }
 }
 
 /// Converts the JS arguments. Keys that no slot map could have issued are dropped.
@@ -104,10 +153,6 @@ fn convert_args(
 ) -> Result<(Vec<ComponentKey>, HideOptions), JsError> {
     // `Tsify::from_js` rather than `Ts::to_rust`, whose errors name internal Rust types.
     let component_keys = ComponentKeysJs::from_js(component_keys.js_value())?;
-    let options = match options {
-        Some(options) => HideOptionsJs::from_js(options.js_value())?,
-        None => HideOptionsJs::default(),
-    };
 
     let keys = component_keys
         .verts
@@ -127,12 +172,46 @@ fn convert_args(
         )
         .collect();
 
-    Ok((
-        keys,
-        HideOptions {
-            extend_to_connected_faces: options.extend_to_connected_faces,
-        },
-    ))
+    Ok((keys, convert_options(options)?))
+}
+
+fn convert_options(options: Option<&Ts<HideOptionsJs>>) -> Result<HideOptions, JsError> {
+    let options = match options {
+        Some(options) => HideOptionsJs::from_js(options.js_value())?,
+        None => HideOptionsJs::default(),
+    };
+
+    Ok(HideOptions {
+        extend_to_connected_faces: options.extend_to_connected_faces,
+    })
+}
+
+struct Hide(HideOptions);
+
+impl ByAttributeOperation for Hide {
+    fn apply<K: AttributeKey + IntoComponentKey, T: AttributeValue>(
+        &self,
+        mesh: &mut Mesh,
+        name: &str,
+        predicate: impl Fn(T) -> bool,
+    ) -> Result<(), AttributeError> {
+        mesh.hidden_components_mut()
+            .hide_by_attribute::<K, T>(name, predicate, self.0)
+    }
+}
+
+struct Show(HideOptions);
+
+impl ByAttributeOperation for Show {
+    fn apply<K: AttributeKey + IntoComponentKey, T: AttributeValue>(
+        &self,
+        mesh: &mut Mesh,
+        name: &str,
+        predicate: impl Fn(T) -> bool,
+    ) -> Result<(), AttributeError> {
+        mesh.hidden_components_mut()
+            .show_by_attribute::<K, T>(name, predicate, self.0)
+    }
 }
 
 fn big_uint64_array<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u64>, D::Error> {

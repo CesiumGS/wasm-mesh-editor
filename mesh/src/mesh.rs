@@ -307,6 +307,7 @@ impl Mesh {
         HiddenComponents {
             hidden: &mut self.hidden_components,
             topo: &self.topology,
+            attrs: &self.attributes,
             interactable: self.interactable_components,
             changes: &mut self.changes,
         }
