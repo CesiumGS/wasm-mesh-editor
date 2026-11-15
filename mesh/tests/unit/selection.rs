@@ -2,6 +2,7 @@ use super::*;
 use crate::{Aabb, AttributeBuffer, AttributeMap, Mesh, MeshBuffers};
 use event_emitter::Event;
 use glam::Vec3;
+use std::rc::Rc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 fn triangle() -> Mesh {
@@ -54,7 +55,7 @@ fn selection_events_include_propagation_once_per_action() {
         .chain(mesh.topology.edges().map(ComponentKey::Edge))
         .chain(mesh.topology.faces().map(ComponentKey::Face))
         .collect();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     let changes = mesh.subscribe();
 
     mesh.selection_mut().select(&[face]);
@@ -100,7 +101,7 @@ fn normalization_preserves_net_changes_after_repeated_transitions() {
 
     for key in keys {
         for (added_count, removed_count) in [(0, 0), (1, 0), (0, 1), (1, 1), (2, 1), (1, 2)] {
-            let mut delta = SelectionChange::default();
+            let mut delta = ComponentSetChange::default();
 
             for _ in 0..added_count {
                 delta.added.push(key);
@@ -134,7 +135,7 @@ fn normalization_keeps_component_kinds_independent() {
     let vertex = VertKey::null();
     let edge = EdgeKey::null();
     let face = FaceKey::null();
-    let mut delta = SelectionChange {
+    let mut delta = ComponentSetChange {
         added: ComponentKeys {
             verts: vec![vertex, vertex],
             edges: vec![edge],
@@ -161,7 +162,7 @@ fn normalization_keeps_component_kinds_independent() {
 fn set_emits_only_changes_to_overlapping_selections() {
     let mut mesh = triangle();
     let edges: Vec<_> = mesh.topology.edges().collect();
-    mesh.selection_mut().set_level(ComponentMask::EDGE);
+    mesh.set_interactable_components(ComponentMask::EDGE);
     mesh.selection_mut().select(&edges[..1]);
     let before: HashSet<_> = mesh.selection().selected().collect();
     let changes = mesh.subscribe();
@@ -178,14 +179,14 @@ fn set_emits_only_changes_to_overlapping_selections() {
 fn rebuilds_preserving_selection_do_not_emit() {
     let mut mesh = triangle();
     let face = mesh.topology.faces().next().unwrap();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().select(&[face]);
     let before: HashSet<_> = mesh.selection().selected().collect();
     let changes = mesh.subscribe();
 
     mesh.selection_mut().set(&[face]);
-    mesh.selection_mut().set_level(ComponentMask::EDGE);
-    mesh.selection_mut().set_level(ComponentMask::VERTEX);
+    mesh.set_interactable_components(ComponentMask::EDGE);
+    mesh.set_interactable_components(ComponentMask::VERTEX);
 
     assert_eq!(mesh.selection().selected().collect::<HashSet<_>>(), before);
     assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
@@ -198,11 +199,11 @@ fn level_changes_only_emit_selection_deltas() {
     mesh.selection_mut().select(&[vertex]);
     let changes = mesh.subscribe();
 
-    mesh.selection_mut().set_level(ComponentMask::VERTEX);
+    mesh.set_interactable_components(ComponentMask::VERTEX);
     assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     assert_selection_event(&changes, &[], &[vertex.into()]);
-    mesh.selection_mut().set_level(ComponentMask::EDGE);
+    mesh.set_interactable_components(ComponentMask::EDGE);
     assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
 }
 
@@ -246,7 +247,7 @@ fn grow_shrink_and_clear_emit_complete_selection_changes() {
             } else {
                 ComponentKey::Vert(mesh.topology.face_verts(face).next().unwrap())
             };
-            mesh.selection_mut().set_level(level);
+            mesh.set_interactable_components(level);
             mesh.selection_mut().select(&[seed]);
             let before: HashSet<_> = mesh.selection().selected().collect();
             let changes = mesh.subscribe();
@@ -329,7 +330,7 @@ fn boundary_queries_only_initialize_their_dependencies() {
     for query in 0..10 {
         let mut mesh = quad_grid(3, 3);
         let face = mesh.topology.faces.keys().nth(4).unwrap();
-        mesh.selection_mut().set_level(ComponentMask::FACE);
+        mesh.set_interactable_components(ComponentMask::FACE);
         mesh.selection_mut().select(&[face]);
         let boundary = mesh.selection().boundary();
         match query {
@@ -365,6 +366,7 @@ fn mixed_face_loop_snapshots_are_shared_and_survive_invalidation() {
     assert!(loops.iter().any(|&key| {
         !mesh
             .selection
+            .components
             .verts
             .contains(&mesh.topology.loops[key].vert)
     }));
@@ -507,7 +509,7 @@ fn boundary_cache_invalidates_on_selection_edits() {
 
     mesh.selection_mut().select(&verts[..1]);
     populate_boundary_cache(&mesh);
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     assert_boundary_cache_initialized(&mesh, false);
     populate_boundary_cache(&mesh);
     assert_eq!(
@@ -523,7 +525,7 @@ fn boundary_cache_invalidates_on_selection_edits() {
 fn boundary_cache_invalidates_on_cascaded_vertex_changes() {
     let mut mesh = quad_grid(2, 1);
     let faces: Vec<_> = mesh.topology.faces.keys().collect();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     populate_boundary_cache(&mesh);
 
     mesh.selection_mut().select(&faces[..1]);
@@ -561,7 +563,7 @@ fn boundary_cache_survives_no_ops_and_position_edits() {
 
     mesh.selection_mut().select(&[verts[0], verts[0]]);
     mesh.selection_mut().deselect(&verts[1..]);
-    mesh.selection_mut().set_level(ComponentMask::VERTEX);
+    mesh.set_interactable_components(ComponentMask::VERTEX);
     mesh.selection_mut().toggle(&[face]);
     mesh.selection_mut().select(&[VertKey::null()]);
     assert_boundary_cache_initialized(&mesh, true);
@@ -648,7 +650,7 @@ fn grow_adds_one_edge_ring_at_a_time() {
     mesh.selection_mut().shrink(SelectionStep::Edge);
     assert_eq!(mesh.selection().verts().count(), 25);
     assert_eq!(mesh.selection().faces().count(), 16);
-    assert_eq!(mesh.selection().level(), ComponentMask::VERTEX);
+    assert_eq!(mesh.interactable_components(), ComponentMask::VERTEX);
 }
 
 #[test]
@@ -938,11 +940,11 @@ fn grow_preserves_each_selection_mode_and_propagates_components() {
         let level = ComponentMask::from_bits_retain(bits);
         let mut mesh = quad_grid(3, 3);
         let faces: Vec<_> = mesh.topology.faces.keys().collect();
-        mesh.selection_mut().set_level(ComponentMask::FACE);
+        mesh.set_interactable_components(ComponentMask::FACE);
         mesh.selection_mut().select(&[faces[4]]);
-        mesh.selection_mut().set_level(level);
+        mesh.set_interactable_components(level);
         mesh.selection_mut().grow(SelectionStep::Edge);
-        assert_eq!(mesh.selection().level(), level);
+        assert_eq!(mesh.interactable_components(), level);
         assert_eq!(mesh.selection().verts().count(), 12, "{level:?}");
         assert_eq!(mesh.selection().edges().count(), 16, "{level:?}");
         assert_eq!(
@@ -960,12 +962,12 @@ fn shrink_uses_faces_only_in_face_only_mode() {
         let mut mesh = quad_grid(4, 4);
         let verts: Vec<_> = mesh.topology.verts.keys().collect();
         let faces: Vec<_> = mesh.topology.faces.keys().collect();
-        mesh.selection_mut().set_level(ComponentMask::FACE);
+        mesh.set_interactable_components(ComponentMask::FACE);
         mesh.selection_mut()
             .select(&[faces[5], faces[6], faces[9], faces[10]]);
-        mesh.selection_mut().set_level(level);
+        mesh.set_interactable_components(level);
         mesh.selection_mut().shrink(SelectionStep::Edge);
-        assert_eq!(mesh.selection().level(), level);
+        assert_eq!(mesh.interactable_components(), level);
         assert_eq!(mesh.selection().edges().count(), 0, "{level:?}");
         assert_eq!(mesh.selection().faces().count(), 0, "{level:?}");
         if level.intersects(ComponentMask::VERTEX | ComponentMask::EDGE) {
@@ -1007,7 +1009,7 @@ fn boundary_operations_preserve_unrelated_partial_edge_selections() {
             let faces: Vec<_> = mesh.topology.faces.keys().collect();
             let first_edges: Vec<_> = mesh.face(faces[0]).unwrap().edges().collect();
             let second_edge = mesh.face(faces[1]).unwrap().edges().next().unwrap();
-            mesh.selection_mut().set_level(level);
+            mesh.set_interactable_components(level);
             mesh.selection_mut()
                 .select(&[first_edges[0], first_edges[1], second_edge]);
             assert!(!mesh.selection().contains(first_edges[2]));
@@ -1020,7 +1022,7 @@ fn boundary_operations_preserve_unrelated_partial_edge_selections() {
             }
 
             let selection = mesh.selection();
-            assert_eq!(selection.level(), level);
+            assert_eq!(mesh.interactable_components(), level);
             assert!(selection.contains(first_edges[0]));
             assert!(selection.contains(first_edges[1]));
             assert!(
@@ -1039,13 +1041,13 @@ fn boundary_operations_preserve_unrelated_partial_edge_selections() {
 fn boundary_operations_without_a_boundary_do_not_rebuild_selection() {
     let mut mesh = triangle();
     let edges: Vec<_> = mesh.topology.edges.keys().collect();
-    mesh.selection_mut().set_level(ComponentMask::EDGE);
+    mesh.set_interactable_components(ComponentMask::EDGE);
     mesh.selection_mut().select(&edges[..2]);
     for step in [SelectionStep::Edge, SelectionStep::Face] {
         mesh.selection_mut().grow(step);
         mesh.selection_mut().shrink(step);
     }
-    assert_eq!(mesh.selection().level(), ComponentMask::EDGE);
+    assert_eq!(mesh.interactable_components(), ComponentMask::EDGE);
     assert_eq!(mesh.selection().verts().count(), 3);
     assert_eq!(mesh.selection().edges().count(), 2);
     assert_eq!(mesh.selection().faces().count(), 0);
@@ -1073,7 +1075,7 @@ fn face_step_includes_diagonally_adjacent_faces() {
     for step in [SelectionStep::Edge, SelectionStep::Face] {
         let mut mesh = quad_grid(3, 3);
         let faces: Vec<_> = mesh.topology.faces.keys().collect();
-        mesh.selection_mut().set_level(ComponentMask::FACE);
+        mesh.set_interactable_components(ComponentMask::FACE);
         mesh.selection_mut().select(&[faces[4]]);
         mesh.selection_mut().grow(step);
         let expected: HashSet<_> = if step == SelectionStep::Edge {
@@ -1091,7 +1093,7 @@ fn face_step_includes_diagonally_adjacent_faces() {
             [2, 5, 6, 7, 8].map(|index| faces[index]).into()
         };
         assert_eq!(mesh.selection().faces().collect::<HashSet<_>>(), expected);
-        assert_eq!(mesh.selection().level(), ComponentMask::FACE);
+        assert_eq!(mesh.interactable_components(), ComponentMask::FACE);
     }
 }
 
@@ -1099,7 +1101,7 @@ fn face_step_includes_diagonally_adjacent_faces() {
 fn boundary_sides_swap_when_selection_is_inverted() {
     for level in [ComponentMask::VERTEX, ComponentMask::FACE] {
         let mut mesh = quad_grid(2, 2);
-        mesh.selection_mut().set_level(level);
+        mesh.set_interactable_components(level);
         let components: Vec<_> = if level == ComponentMask::VERTEX {
             mesh.topology.verts.keys().map(ComponentKey::Vert).collect()
         } else {
@@ -1157,7 +1159,7 @@ fn unselected_faces_with_fully_selected_vertices_are_not_mixed() {
         .copied()
         .filter(|&key| key != faces[4])
         .collect();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().select(&surrounding);
     assert_eq!(mesh.selection().verts().count(), 16);
     assert!(!mesh.selection().contains(faces[4]));
@@ -1224,14 +1226,14 @@ fn translation_normal_sets_include_every_corner_of_changed_faces() {
 #[test]
 fn accessors_expose_each_selected_kind() {
     let mut mesh = triangle();
-    assert_eq!(mesh.selection().level(), ComponentMask::VERTEX);
+    assert_eq!(mesh.interactable_components(), ComponentMask::VERTEX);
     assert!(mesh.selection().is_empty());
     let vert = mesh.topology.verts.keys().next().unwrap();
     let edge = mesh.topology.edges.keys().next().unwrap();
     let face = mesh.topology.faces.keys().next().unwrap();
-    std::rc::Rc::make_mut(&mut mesh.selection.verts).insert(vert);
-    mesh.selection.edges.insert(edge);
-    mesh.selection.faces.insert(face);
+    std::rc::Rc::make_mut(&mut mesh.selection.components.verts).insert(vert);
+    mesh.selection.components.edges.insert(edge);
+    mesh.selection.components.faces.insert(face);
 
     let selection = mesh.selection_mut();
     let view = selection.view();
@@ -1254,27 +1256,30 @@ fn vertex_snapshots_survive_selection_edits() {
     let mut mesh = triangle();
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
     mesh.selection_mut().select(&verts[..1]);
-    let first = std::rc::Rc::clone(&mesh.selection.verts);
+    let first = std::rc::Rc::clone(&mesh.selection.components.verts);
 
     mesh.selection_mut().select(&verts[1..2]);
-    assert!(!std::rc::Rc::ptr_eq(&first, &mesh.selection.verts));
+    assert!(!std::rc::Rc::ptr_eq(
+        &first,
+        &mesh.selection.components.verts
+    ));
     assert_eq!(*first, HashSet::from([verts[0]]));
-    let second = std::rc::Rc::clone(&mesh.selection.verts);
+    let second = std::rc::Rc::clone(&mesh.selection.components.verts);
 
     mesh.selection_mut().deselect(&verts[..1]);
     assert_eq!(*second, HashSet::from([verts[0], verts[1]]));
-    assert_eq!(*mesh.selection.verts, HashSet::from([verts[1]]));
-    let third = std::rc::Rc::clone(&mesh.selection.verts);
+    assert_eq!(*mesh.selection.components.verts, HashSet::from([verts[1]]));
+    let third = std::rc::Rc::clone(&mesh.selection.components.verts);
 
     mesh.selection_mut().clear();
     assert!(mesh.selection().is_empty());
     assert_eq!(*third, HashSet::from([verts[1]]));
 
     mesh.selection_mut().set(&verts[2..]);
-    let fourth = std::rc::Rc::clone(&mesh.selection.verts);
+    let fourth = std::rc::Rc::clone(&mesh.selection.components.verts);
     mesh.selection_mut().set(&verts[..1]);
     assert_eq!(*fourth, HashSet::from([verts[2]]));
-    assert_eq!(*mesh.selection.verts, HashSet::from([verts[0]]));
+    assert_eq!(*mesh.selection.components.verts, HashSet::from([verts[0]]));
     assert_eq!(*first, HashSet::from([verts[0]]));
 }
 
@@ -1282,17 +1287,23 @@ fn vertex_snapshots_survive_selection_edits() {
 fn vertex_selection_noops_preserve_shared_storage() {
     let mut mesh = triangle();
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
-    let empty = std::rc::Rc::clone(&mesh.selection.verts);
+    let empty = std::rc::Rc::clone(&mesh.selection.components.verts);
 
     mesh.selection_mut().clear();
-    assert!(std::rc::Rc::ptr_eq(&empty, &mesh.selection.verts));
+    assert!(std::rc::Rc::ptr_eq(
+        &empty,
+        &mesh.selection.components.verts
+    ));
 
     mesh.selection_mut().select(&verts[..1]);
-    let selected = std::rc::Rc::clone(&mesh.selection.verts);
+    let selected = std::rc::Rc::clone(&mesh.selection.components.verts);
 
     mesh.selection_mut().select(&verts[..1]);
     mesh.selection_mut().deselect(&verts[1..2]);
-    assert!(std::rc::Rc::ptr_eq(&selected, &mesh.selection.verts));
+    assert!(std::rc::Rc::ptr_eq(
+        &selected,
+        &mesh.selection.components.verts
+    ));
 }
 
 #[test]
@@ -1300,14 +1311,17 @@ fn clearing_unique_vertex_selection_reuses_storage() {
     let mut mesh = triangle();
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
     mesh.selection_mut().select(&verts);
-    let storage = std::rc::Rc::as_ptr(&mesh.selection.verts);
-    let capacity = mesh.selection.verts.capacity();
+    let storage = std::rc::Rc::as_ptr(&mesh.selection.components.verts);
+    let capacity = mesh.selection.components.verts.capacity();
 
     mesh.selection_mut().clear();
 
     assert!(mesh.selection().is_empty());
-    assert_eq!(std::rc::Rc::as_ptr(&mesh.selection.verts), storage);
-    assert_eq!(mesh.selection.verts.capacity(), capacity);
+    assert_eq!(
+        std::rc::Rc::as_ptr(&mesh.selection.components.verts),
+        storage
+    );
+    assert_eq!(mesh.selection.components.verts.capacity(), capacity);
 }
 
 #[test]
@@ -1330,7 +1344,7 @@ fn direct_vertices_bubble_through_edges_to_faces() {
 fn cascaded_vertices_do_not_promote_untouched_edges() {
     let mut mesh = triangle();
     let edges: Vec<_> = mesh.topology.edges.keys().collect();
-    mesh.selection_mut().set_level(ComponentMask::EDGE);
+    mesh.set_interactable_components(ComponentMask::EDGE);
     mesh.selection_mut().select(&edges[..2]);
     assert_eq!(mesh.selection().verts().count(), 3);
     assert_eq!(mesh.selection().edges().count(), 2);
@@ -1348,7 +1362,7 @@ fn cascaded_vertices_do_not_promote_untouched_edges() {
 fn face_selection_cascades_and_removal_clears_orphans() {
     let mut mesh = triangle();
     let face = mesh.topology.faces.keys().next().unwrap();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().select(&[face]);
     assert_eq!(mesh.selection().len(), 7);
     mesh.selection_mut().deselect(&[face]);
@@ -1361,18 +1375,17 @@ fn mixed_modes_filter_direct_input_and_rebuild_survivors() {
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
     let edge = mesh.topology.edges.keys().next().unwrap();
     let face = mesh.topology.faces.keys().next().unwrap();
-    mesh.selection_mut()
-        .set_level(ComponentMask::VERTEX | ComponentMask::EDGE);
+    mesh.set_interactable_components(ComponentMask::VERTEX | ComponentMask::EDGE);
     mesh.selection_mut()
         .select(&[ComponentKey::Face(face), edge.into()]);
     assert_eq!(mesh.selection().len(), 3);
     mesh.selection_mut().select(&verts);
     assert_eq!(mesh.selection().len(), 7);
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     assert_eq!(mesh.selection().len(), 7);
     mesh.selection_mut().deselect(&verts);
     assert_eq!(mesh.selection().len(), 7);
-    mesh.selection_mut().set_level(ComponentMask::empty());
+    mesh.set_interactable_components(ComponentMask::empty());
     assert!(mesh.selection().is_empty());
     mesh.selection_mut().select(&[face]);
     assert!(mesh.selection().is_empty());
@@ -1383,7 +1396,7 @@ fn toggle_deduplicates_and_uses_pre_cascade_membership() {
     let mut mesh = triangle();
     let edge = mesh.topology.edges.keys().next().unwrap();
     let verts = mesh.topology.edges[edge].verts;
-    mesh.selection_mut().set_level(ComponentMask::all());
+    mesh.set_interactable_components(ComponentMask::all());
     mesh.selection_mut()
         .toggle(&[ComponentKey::Vert(verts[0]), edge.into(), verts[0].into()]);
     assert_eq!(mesh.selection().len(), 3);
@@ -1410,19 +1423,19 @@ fn unchanged_modes_and_repeated_inputs_do_not_rebuild_selection() {
     let edges: Vec<_> = mesh.topology.edges.keys().collect();
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
     let mode = ComponentMask::VERTEX | ComponentMask::EDGE;
-    mesh.selection_mut().set_level(mode);
+    mesh.set_interactable_components(mode);
     mesh.selection_mut().select(&edges[..2]);
     mesh.selection_mut().select(&verts);
     mesh.selection_mut().select(&edges[..2]);
     mesh.selection_mut().deselect(&edges[2..]);
-    mesh.selection_mut().set_level(mode);
+    mesh.set_interactable_components(mode);
     assert_eq!(mesh.selection().len(), 5);
     assert!(!mesh.selection().contains(edges[2]));
 
-    mesh.selection_mut().set_level(ComponentMask::VERTEX);
+    mesh.set_interactable_components(ComponentMask::VERTEX);
     assert_eq!(mesh.selection().len(), 7);
     mesh.selection_mut().set(&verts[..1]);
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     assert!(mesh.selection().is_empty());
 }
 
@@ -1431,7 +1444,7 @@ fn mixed_toggle_processes_removals_before_additions() {
     let mut mesh = triangle();
     let edge = mesh.topology.edges.keys().next().unwrap();
     let verts = mesh.topology.edges[edge].verts;
-    mesh.selection_mut().set_level(ComponentMask::all());
+    mesh.set_interactable_components(ComponentMask::all());
     mesh.selection_mut().select(&verts[..1]);
     let changes = mesh.subscribe();
 
@@ -1459,7 +1472,7 @@ fn face_removal_preserves_shared_geometry_and_unrelated_selections() {
     .unwrap();
     let faces: Vec<_> = mesh.topology.faces.keys().collect();
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
-    mesh.selection_mut().set_level(ComponentMask::all());
+    mesh.set_interactable_components(ComponentMask::all());
     mesh.selection_mut().select(&faces);
     mesh.selection_mut().select(&verts[5..]);
     mesh.selection_mut().deselect(&faces[..1]);
@@ -1501,7 +1514,7 @@ fn polygon_wire_and_isolated_vertices_follow_the_same_rules() {
     mesh.selection_mut().deselect(&verts[4..]);
     assert!(!mesh.selection().contains(wire));
     assert_eq!(mesh.selection().len(), 9);
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().clear();
     assert!(mesh.selection().is_empty());
 }
@@ -1522,7 +1535,7 @@ fn missing_keys_and_disabled_toggle_inputs_are_ignored() {
         ComponentKey::Face(FaceKey::null()),
         ComponentKey::Vert(stale),
     ];
-    mesh.selection_mut().set_level(ComponentMask::all());
+    mesh.set_interactable_components(ComponentMask::all());
     mesh.selection_mut().select(&missing);
     mesh.selection_mut().toggle(&missing);
     mesh.selection_mut().deselect(&missing);
@@ -1598,7 +1611,7 @@ fn bounds_are_lazy_and_invalidate_only_on_vertex_selection_changes() {
     assert_bounds_match_positions(&mesh);
 
     let faces: Vec<_> = mesh.topology.faces.keys().collect();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().select(&faces[..1]);
     assert_bounds_match_positions(&mesh);
 }
@@ -1699,7 +1712,7 @@ fn select_by_attribute_keeps_the_existing_selection() {
 fn select_by_attribute_does_nothing_when_verts_arent_selectable() {
     for level in [ComponentMask::EDGE, ComponentMask::FACE] {
         let mut mesh = feature_triangles();
-        mesh.selection_mut().set_level(level);
+        mesh.set_interactable_components(level);
         let changes = mesh.subscribe();
 
         assert_eq!(

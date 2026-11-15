@@ -6,7 +6,6 @@ mod bounds;
 pub use boundary::{SelectionBoundary, SelectionStep};
 
 use std::collections::HashSet;
-use std::rc::Rc;
 
 use boundary::BoundaryCache;
 use bounds::BoundsCache;
@@ -15,8 +14,8 @@ use glam::Vec3;
 
 use crate::{
     Aabb, AttributeError, AttributeKey, AttributeValue, Attributes, ComponentKey, ComponentKeys,
-    ComponentMask, ComponentRef, ComponentType, EdgeKey, FaceKey, MeshChange, SelectionChange,
-    Topology, VertKey,
+    ComponentMask, ComponentRef, ComponentSet, ComponentSetChange, ComponentType, EdgeKey, FaceKey,
+    MeshChange, Topology, VertKey,
 };
 
 /// A component kind that can be selected: the three handle types and
@@ -25,26 +24,11 @@ pub trait SelectionKind: Copy + Into<ComponentKey> {}
 
 impl<T: Copy + Into<ComponentKey>> SelectionKind for T {}
 
+#[derive(Default)]
 pub(crate) struct SelectionState {
-    pub(crate) verts: Rc<HashSet<VertKey>>,
-    pub(crate) edges: HashSet<EdgeKey>,
-    pub(crate) faces: HashSet<FaceKey>,
-    pub(crate) level: ComponentMask,
+    pub(crate) components: ComponentSet,
     boundary: BoundaryCache,
     bounds: BoundsCache,
-}
-
-impl Default for SelectionState {
-    fn default() -> Self {
-        Self {
-            verts: Rc::default(),
-            edges: HashSet::new(),
-            faces: HashSet::new(),
-            level: ComponentMask::VERTEX,
-            boundary: BoundaryCache::default(),
-            bounds: BoundsCache::default(),
-        }
-    }
 }
 
 impl SelectionState {
@@ -68,7 +52,7 @@ impl SelectionState {
     pub(crate) fn selected_bounds(&self, attrs: &Attributes) -> Option<Aabb> {
         *self.bounds.selected.get_or_init(|| {
             let positions = attrs.positions();
-            Aabb::from_points(self.verts.iter().map(|&key| positions[key]))
+            Aabb::from_points(self.components.verts.iter().map(|&key| positions[key]))
         })
     }
 
@@ -80,7 +64,7 @@ impl SelectionState {
             Aabb::from_points(
                 topo.verts
                     .keys()
-                    .filter(|key| !self.verts.contains(key))
+                    .filter(|key| !self.components.verts.contains(key))
                     .map(|key| positions[key]),
             )
         });
@@ -92,41 +76,27 @@ impl SelectionState {
     }
 
     fn insert(&mut self, key: ComponentKey) -> bool {
-        let changed = match key {
-            ComponentKey::Vert(key) => {
-                if self.verts.contains(&key) {
-                    return false;
-                }
-
-                self.invalidate_bounds();
-                Rc::make_mut(&mut self.verts).insert(key)
-            }
-            ComponentKey::Edge(key) => self.edges.insert(key),
-            ComponentKey::Face(key) => self.faces.insert(key),
-        };
+        let changed = self.components.insert(key);
         if changed {
-            self.invalidate_boundary();
+            self.invalidate_caches(key);
         }
         changed
     }
 
     fn remove(&mut self, key: ComponentKey) -> bool {
-        let changed = match key {
-            ComponentKey::Vert(key) => {
-                if !self.verts.contains(&key) {
-                    return false;
-                }
-
-                self.invalidate_bounds();
-                Rc::make_mut(&mut self.verts).remove(&key)
-            }
-            ComponentKey::Edge(key) => self.edges.remove(&key),
-            ComponentKey::Face(key) => self.faces.remove(&key),
-        };
+        let changed = self.components.remove(key);
         if changed {
-            self.invalidate_boundary();
+            self.invalidate_caches(key);
         }
         changed
+    }
+
+    /// Invalidates caches affected by a membership change of `key`.
+    fn invalidate_caches(&mut self, key: ComponentKey) {
+        self.invalidate_boundary();
+        if matches!(key, ComponentKey::Vert(_)) {
+            self.invalidate_bounds();
+        }
     }
 }
 
@@ -158,50 +128,39 @@ pub struct Selection<'a> {
     pub(crate) state: &'a mut SelectionState,
     pub(crate) topo: &'a Topology,
     pub(crate) attrs: &'a Attributes,
+    pub(crate) interactable: ComponentMask,
     pub(crate) changes: &'a mut EventEmitter<MeshChange>,
 }
 
 impl<'a> SelectionView<'a> {
-    /// The component kinds that accept direct selection input.
-    pub fn level(&self) -> ComponentMask {
-        self.state.level
-    }
-
     pub fn verts(&self) -> impl Iterator<Item = VertKey> + '_ {
-        self.state.verts.iter().copied()
+        self.state.components.verts.iter().copied()
     }
 
     pub fn edges(&self) -> impl Iterator<Item = EdgeKey> + '_ {
-        self.state.edges.iter().copied()
+        self.state.components.edges.iter().copied()
     }
 
     pub fn faces(&self) -> impl Iterator<Item = FaceKey> + '_ {
-        self.state.faces.iter().copied()
+        self.state.components.faces.iter().copied()
     }
 
     /// Every selected component as a tagged handle, in unspecified order within each kind.
     pub fn selected(&self) -> impl Iterator<Item = ComponentKey> + '_ {
-        self.verts()
-            .map(ComponentKey::Vert)
-            .chain(self.edges().map(ComponentKey::Edge))
-            .chain(self.faces().map(ComponentKey::Face))
+        self.state.components.iter()
     }
 
     /// The total number of selected components across all kinds.
     pub fn len(&self) -> usize {
-        self.state.verts.len() + self.state.edges.len() + self.state.faces.len()
+        self.state.components.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.state.components.is_empty()
     }
 
     pub fn contains<K: SelectionKind>(&self, key: K) -> bool {
-        match key.into() {
-            ComponentKey::Vert(key) => self.state.verts.contains(&key),
-            ComponentKey::Edge(key) => self.state.edges.contains(&key),
-            ComponentKey::Face(key) => self.state.faces.contains(&key),
-        }
+        self.state.components.contains(key.into())
     }
 
     /// Lazy boundary sets shared across views, independent of the selection mode.
@@ -230,22 +189,13 @@ impl<'a> Selection<'a> {
         }
     }
 
-    /// Sets the component kinds that accept direct selection input.
-    /// Combine kinds with `|`, such as `ComponentMask::VERTEX | ComponentMask::EDGE`.
-    /// Other kinds may still be selected indirectly by downward or upward propagation.
-    /// Changing the mode rebuilds the selection from selected components in the new mode.
-    pub fn set_level(&mut self, level: ComponentMask) {
-        if self.state.level == level {
-            return;
-        }
-
+    /// Rebuilds the selection from selected components of interactable types.
+    pub(crate) fn rebuild(&mut self) {
         let survivors: Vec<_> = self
             .view()
             .selected()
-            .filter(|&key| level.contains(key.kind().into()))
+            .filter(|&key| self.interactable.contains(key.kind().into()))
             .collect();
-
-        self.state.level = level;
 
         self.set(&survivors);
     }
@@ -254,7 +204,7 @@ impl<'a> Selection<'a> {
     pub fn set<K: SelectionKind>(&mut self, keys: &[K]) {
         let removed = self.clear_selection();
 
-        let mut delta = self.apply_action(keys, Action::Select, self.state.level);
+        let mut delta = self.apply_action(keys, Action::Select, self.interactable);
         delta.removed = removed;
 
         self.emit_change(delta);
@@ -262,28 +212,28 @@ impl<'a> Selection<'a> {
 
     /// Adds the given components to the current selection.
     pub fn select<K: SelectionKind>(&mut self, keys: &[K]) {
-        let delta = self.apply_action(keys, Action::Select, self.state.level);
+        let delta = self.apply_action(keys, Action::Select, self.interactable);
 
         self.emit_change(delta);
     }
 
     /// Removes the given components from the current selection.
     pub fn deselect<K: SelectionKind>(&mut self, keys: &[K]) {
-        let delta = self.apply_action(keys, Action::Deselect, self.state.level);
+        let delta = self.apply_action(keys, Action::Deselect, self.interactable);
 
         self.emit_change(delta);
     }
 
     /// Toggles the given components in the current selection.
     pub fn toggle<K: SelectionKind>(&mut self, keys: &[K]) {
-        let delta = self.apply_action(keys, Action::Toggle, self.state.level);
+        let delta = self.apply_action(keys, Action::Toggle, self.interactable);
 
         self.emit_change(delta);
     }
 
     /// Selects every component whose `name` attribute satisfies `predicate`, such as
     /// `|id: u32| id == 7`. Works just like [`Self::select`], so it does nothing unless `K`'s
-    /// components are selectable.
+    /// components are interactable.
     ///
     /// # Errors
     /// Like [`Attributes::values`].
@@ -300,15 +250,15 @@ impl<'a> Selection<'a> {
 
     /// Clears all selected components, regardless of the current mode.
     pub fn clear(&mut self) {
-        let delta = SelectionChange {
+        let delta = ComponentSetChange {
             removed: self.clear_selection(),
-            ..SelectionChange::default()
+            ..ComponentSetChange::default()
         };
 
         self.emit_change(delta);
     }
 
-    fn emit_change(&mut self, mut delta: SelectionChange) {
+    fn emit_change(&mut self, mut delta: ComponentSetChange) {
         delta.normalize();
 
         if !delta.is_empty() {
@@ -324,33 +274,19 @@ impl<'a> Selection<'a> {
         self.state.invalidate_boundary();
         self.state.invalidate_bounds();
 
-        let verts = match Rc::get_mut(&mut self.state.verts) {
-            Some(verts) => verts.drain().collect(),
-            None => {
-                let verts = std::mem::take(&mut self.state.verts);
-
-                verts.iter().copied().collect()
-            }
-        };
-
-        ComponentKeys {
-            verts,
-            edges: self.state.edges.drain().collect(),
-            faces: self.state.faces.drain().collect(),
-        }
+        self.state.components.take()
     }
 
     /// Grow the selection by one outer layer of the current selection mode.
     /// Face-only mode edits faces; any vertex or edge mode edits vertices.
     /// A fully selected connected component has no boundary and is unchanged.
     pub fn grow(&mut self, step: SelectionStep) {
-        let delta = if self.state.level == ComponentMask::FACE {
+        let delta = if self.interactable == ComponentMask::FACE {
             let faces: Vec<_> = self.view().boundary().outer_faces(step).collect();
 
             self.apply_action(&faces, Action::Select, ComponentMask::FACE)
         } else if self
-            .state
-            .level
+            .interactable
             .intersects(ComponentMask::VERTEX | ComponentMask::EDGE)
         {
             let verts: Vec<_> = self.view().boundary().outer_vertices(step).collect();
@@ -365,13 +301,12 @@ impl<'a> Selection<'a> {
 
     /// Shrink the selection by one inner layer, using the same mode rules as [`Self::grow`].
     pub fn shrink(&mut self, step: SelectionStep) {
-        let delta = if self.state.level == ComponentMask::FACE {
+        let delta = if self.interactable == ComponentMask::FACE {
             let faces: Vec<_> = self.view().boundary().inner_faces(step).collect();
 
             self.apply_action(&faces, Action::Deselect, ComponentMask::FACE)
         } else if self
-            .state
-            .level
+            .interactable
             .intersects(ComponentMask::VERTEX | ComponentMask::EDGE)
         {
             let verts: Vec<_> = self.view().boundary().inner_vertices(step).collect();
@@ -391,8 +326,8 @@ impl<'a> Selection<'a> {
         keys: &[K],
         action: Action,
         allowed_kinds: ComponentMask,
-    ) -> SelectionChange {
-        let mut delta = SelectionChange::default();
+    ) -> ComponentSetChange {
+        let mut delta = ComponentSetChange::default();
         let mut seen_keys = HashSet::new();
 
         for &key in keys {

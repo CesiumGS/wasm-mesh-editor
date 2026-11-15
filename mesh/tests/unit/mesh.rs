@@ -5,8 +5,8 @@ use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec4};
 use slotmap::{Key, SecondaryMap};
 
 use crate::{
-    AttributeBuffer, AttributeMap, AttributeValue, ComponentMask, EdgeAttributeBuffer,
-    SelectionChange, TopologyChange,
+    AttributeBuffer, AttributeMap, AttributeValue, ComponentMask, ComponentSetChange,
+    EdgeAttributeBuffer, TopologyChange,
 };
 
 use super::*;
@@ -244,10 +244,10 @@ fn new_and_default_create_empty_meshes_at_vertex_level() {
         assert!(mesh.attributes.positions().is_empty());
         assert!(mesh.attributes.normals().is_empty());
         assert!(mesh.attributes.uvs().is_none());
-        assert!(mesh.selection.verts.is_empty());
-        assert!(mesh.selection.edges.is_empty());
-        assert!(mesh.selection.faces.is_empty());
-        assert_eq!(mesh.selection.level, ComponentMask::VERTEX);
+        assert!(mesh.selection.components.verts.is_empty());
+        assert!(mesh.selection.components.edges.is_empty());
+        assert!(mesh.selection.components.faces.is_empty());
+        assert_eq!(mesh.interactable_components, ComponentMask::VERTEX);
         assert_connectivity(&mesh);
     }
 }
@@ -265,7 +265,7 @@ fn change_subscriptions_use_mesh_owned_emitter() {
         assert!(matches!(second.try_recv(), Err(TryRecvError::Empty)));
 
         mesh.changes
-            .emit(MeshChange::Selection(SelectionChange::default()));
+            .emit(MeshChange::Selection(ComponentSetChange::default()));
 
         let first_event = first.try_recv().unwrap();
         let second_event = second.try_recv().unwrap();
@@ -275,7 +275,7 @@ fn change_subscriptions_use_mesh_owned_emitter() {
         drop(first);
 
         mesh.changes
-            .emit(MeshChange::Selection(SelectionChange::default()));
+            .emit(MeshChange::Selection(ComponentSetChange::default()));
         drop(mesh);
 
         let remaining = second.try_recv().unwrap();
@@ -289,7 +289,7 @@ fn translation_events_share_vertex_snapshots_until_the_last_handle_is_dropped() 
     let mut mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
     let verts: Vec<_> = mesh.topology.verts().collect();
     mesh.selection_mut().select(&verts);
-    let original = Rc::downgrade(&mesh.selection.verts);
+    let original = Rc::downgrade(&mesh.selection.components.verts);
     let first = mesh.subscribe();
     let second = mesh.subscribe();
 
@@ -297,7 +297,7 @@ fn translation_events_share_vertex_snapshots_until_the_last_handle_is_dropped() 
     mesh.translate_selected(Vec3::Y);
     mesh.selection_mut().set(&verts[..1]);
     mesh.translate_selected(Vec3::Z);
-    let current = Rc::downgrade(&mesh.selection.verts);
+    let current = Rc::downgrade(&mesh.selection.components.verts);
 
     let position_events = |changes: &Receiver<Event<MeshChange>>| {
         changes
@@ -325,10 +325,10 @@ fn translation_events_share_vertex_snapshots_until_the_last_handle_is_dropped() 
 
         if index < 2 {
             assert!(Rc::ptr_eq(keys, &original.upgrade().unwrap()));
-            assert!(!Rc::ptr_eq(keys, &mesh.selection.verts));
+            assert!(!Rc::ptr_eq(keys, &mesh.selection.components.verts));
             assert_eq!(**keys, verts.iter().copied().collect());
         } else {
-            assert!(Rc::ptr_eq(keys, &mesh.selection.verts));
+            assert!(Rc::ptr_eq(keys, &mesh.selection.components.verts));
             assert_eq!(**keys, HashSet::from([verts[0]]));
         }
     }
@@ -349,7 +349,7 @@ fn dropping_subscribers_releases_queued_vertex_snapshots() {
     let mut mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
     let verts: Vec<_> = mesh.topology.verts().collect();
     mesh.selection_mut().select(&verts);
-    let snapshot = Rc::downgrade(&mesh.selection.verts);
+    let snapshot = Rc::downgrade(&mesh.selection.components.verts);
     let first = mesh.subscribe();
     let second = mesh.subscribe();
 
@@ -432,7 +432,7 @@ fn attribute_and_selection_changes_check_each_key_list_for_emptiness() {
         assert!(!event.is_empty());
     }
 
-    assert!(MeshChange::Selection(SelectionChange::default()).is_empty());
+    assert!(MeshChange::Selection(ComponentSetChange::default()).is_empty());
 
     for key in [
         ComponentKey::Vert(vertex),
@@ -440,7 +440,7 @@ fn attribute_and_selection_changes_check_each_key_list_for_emptiness() {
         ComponentKey::Face(face),
     ] {
         for added in [true, false] {
-            let mut change = SelectionChange::default();
+            let mut change = ComponentSetChange::default();
 
             assert!(change.is_empty());
 
@@ -511,8 +511,8 @@ fn accessors_borrow_mesh_stores() {
     assert!(std::ptr::eq(selection.topo, topology));
     assert!(std::ptr::eq(selection.attrs, attributes));
     assert!(std::ptr::eq(&*selection.state, state));
-    std::rc::Rc::make_mut(&mut selection.state.verts).insert(vert_key);
-    assert!(mesh.selection().state.verts.contains(&vert_key));
+    std::rc::Rc::make_mut(&mut selection.state.components.verts).insert(vert_key);
+    assert!(mesh.selection().state.components.verts.contains(&vert_key));
 }
 
 #[test]
@@ -629,10 +629,10 @@ fn builds_triangle_cycles_positions_and_flat_normals() {
         current = loop_.next;
     }
     assert!(mesh.attributes.uvs().is_none());
-    assert!(mesh.selection.verts.is_empty());
-    assert!(mesh.selection.edges.is_empty());
-    assert!(mesh.selection.faces.is_empty());
-    assert_eq!(mesh.selection.level, ComponentMask::VERTEX);
+    assert!(mesh.selection.components.verts.is_empty());
+    assert!(mesh.selection.components.edges.is_empty());
+    assert!(mesh.selection.components.faces.is_empty());
+    assert_eq!(mesh.interactable_components, ComponentMask::VERTEX);
     assert_connectivity(&mesh);
 }
 
@@ -937,7 +937,7 @@ fn translate_selected_updates_only_moved_positions_and_mixed_face_normals() {
     let mut mesh = Mesh::from_buffers(options).unwrap();
     let faces: Vec<_> = mesh.topology.faces.keys().collect();
     let vertices: Vec<_> = mesh.topology.verts.keys().collect();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().select(&[faces[0]]);
     let selected: HashSet<_> = mesh.selection().selected().collect();
     let positions = mesh.attributes.positions().clone();
@@ -981,7 +981,7 @@ fn translate_selected_updates_only_moved_positions_and_mixed_face_normals() {
             mesh.selection().selected().collect::<HashSet<_>>(),
             selected
         );
-        assert_eq!(mesh.selection().level(), ComponentMask::FACE);
+        assert_eq!(mesh.interactable_components(), ComponentMask::FACE);
         assert!(
             mesh.attributes
                 .uvs()
@@ -1003,7 +1003,7 @@ fn translate_selected_updates_mixed_faces_without_selected_faces() {
         let mut mesh = Mesh::from_buffers(triangle_buffers()).unwrap();
         let vertices: Vec<_> = mesh.topology.verts.keys().collect();
         let face = mesh.topology.faces.keys().next().unwrap();
-        mesh.selection_mut().set_level(level);
+        mesh.set_interactable_components(level);
         if level == ComponentMask::VERTEX {
             mesh.selection_mut().select(&[vertices[0]]);
         } else {
@@ -1206,7 +1206,7 @@ fn recompute_smooth_normals_weights_all_incident_faces_by_corner_angle() {
     let mut mesh = Mesh::from_buffers(options).unwrap();
     let vertex = mesh.topology.verts.keys().next().unwrap();
     let face = mesh.topology.faces.keys().next().unwrap();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().select(&[face]);
     let positions: Vec<_> = mesh
         .attributes
@@ -1294,7 +1294,7 @@ fn recompute_selected_normals_only_update_selected_components() {
             .all(|&normal| normal == Vec3::X)
     );
 
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().select(&[face, FaceKey::null()]);
     let changes = mesh.subscribe();
     mesh.shade_flat();
@@ -1312,7 +1312,7 @@ fn recompute_selected_normals_only_update_selected_components() {
         assert_eq!(mesh.attributes.normals()[key], expected);
     }
 
-    mesh.selection_mut().set_level(ComponentMask::VERTEX);
+    mesh.set_interactable_components(ComponentMask::VERTEX);
     mesh.selection_mut().set(&[vertex, VertKey::null()]);
     let previous_normals = mesh.attributes.normals().clone();
     let changes = mesh.subscribe();

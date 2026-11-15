@@ -390,8 +390,8 @@ impl MeshEditor {
         Ok(true)
     }
 
-    /// Makes `components` selectable.
-    /// Applies the selection level to active meshes and deactivates incompatible tools.
+    /// Makes `components` interactable.
+    /// Applies the interactable components to active meshes and deactivates incompatible tools.
     /// Throws for bits outside `ComponentMask`.
     #[wasm_bindgen(js_name = setMode)]
     pub fn set_mode_from_components(
@@ -409,10 +409,10 @@ impl MeshEditor {
         self.mode().renderable_components.bits()
     }
 
-    /// The components that can be selected directly in the current mode.
-    #[wasm_bindgen(getter = selectableComponents, unchecked_return_type = "ComponentMask")]
-    pub fn selectable_components(&self) -> u8 {
-        self.mode().selection_level.bits()
+    /// The types of components that can currently be modified (i.e. selected, hidden, etc).
+    #[wasm_bindgen(getter = interactableComponents, unchecked_return_type = "ComponentMask")]
+    pub fn interactable_components(&self) -> u8 {
+        self.mode().interactable_components.bits()
     }
 
     /// The active tool's ID, or `undefined` if no tool is active.
@@ -421,7 +421,7 @@ impl MeshEditor {
         self.active_tool().map(ToolId::raw)
     }
 
-    /// Whether a registered tool, active or inactive, can be active with `components` selectable.
+    /// Whether a registered tool, active or inactive, can be active with `components` interactable.
     /// Does not change the active tool. Throws for an unknown tool or bits outside `ComponentMask`.
     #[wasm_bindgen(js_name = toolSupportsMode)]
     pub fn tool_supports_mode(

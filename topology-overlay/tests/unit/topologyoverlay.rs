@@ -196,7 +196,7 @@ fn face_keys_follow_triangle_face_indices_not_triangle_indices() {
 fn new_seeds_selection_and_subscribes_to_future_changes() {
     let mut mesh = mixed_face_mesh();
     let face = mesh.topology().faces().nth(1).unwrap();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().select(&[face]);
 
     let overlay = TopologyOverlay::new(&mut mesh);
@@ -395,7 +395,7 @@ fn update_returns_partial_uploads_and_clears_previous_ranges() {
 fn update_replays_queued_selection_changes_in_order() {
     let mut mesh = mixed_face_mesh();
     let faces: Vec<_> = mesh.topology().faces().collect();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     let mut overlay = TopologyOverlay::new(&mut mesh);
     overlay.update(&mesh).unwrap();
 
@@ -470,10 +470,10 @@ fn update_reports_nonempty_selection_deltas_even_when_keys_are_unmapped() {
 
     let mut changes = EventEmitter::new();
     overlay.mesh_changes = changes.subscribe();
-    changes.emit(MeshChange::Selection(SelectionChange::default()));
+    changes.emit(MeshChange::Selection(ComponentSetChange::default()));
     assert!(overlay.update(&mesh).is_none());
 
-    let mut change = SelectionChange::default();
+    let mut change = ComponentSetChange::default();
     change.added.verts.push(VertKey::null());
     change.removed.edges.push(EdgeKey::null());
     change.added.faces.push(FaceKey::null());
@@ -498,7 +498,7 @@ fn update_reports_nonempty_selection_deltas_even_when_keys_are_unmapped() {
 fn update_ignores_shading_changes() {
     let mut mesh = mixed_face_mesh();
     let face = mesh.topology().faces().next().unwrap();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().select(&[face]);
     let mut overlay = TopologyOverlay::new(&mut mesh);
     overlay.update(&mesh).unwrap();
@@ -534,7 +534,7 @@ fn update_rebuilds_buffers_keys_and_maps_on_topology_events() {
             removed_faces,
         }));
 
-        let mut selection_change = SelectionChange::default();
+        let mut selection_change = ComponentSetChange::default();
         selection_change.added.verts = mesh.topology().verts().collect();
         changes.emit(MeshChange::Selection(selection_change));
 

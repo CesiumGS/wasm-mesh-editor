@@ -15,7 +15,7 @@ fn single_component_modes_draw_expected_components() {
         (EditMode::FACE, EDGE_AND_FACE, ComponentMask::FACE),
     ] {
         assert_eq!(mode.renderable_components, renderable);
-        assert_eq!(mode.selection_level, selectable);
+        assert_eq!(mode.interactable_components, selectable);
     }
 }
 
@@ -36,6 +36,6 @@ fn combined_modes_draw_the_union_of_their_components() {
         let mode = EditMode::from_components(components);
 
         assert_eq!(mode.renderable_components, renderable);
-        assert_eq!(mode.selection_level, components);
+        assert_eq!(mode.interactable_components, components);
     }
 }

@@ -3,8 +3,8 @@ use std::sync::mpsc::Receiver;
 
 use event_emitter::Event;
 use mesh::{
-    AttributeChange, ComponentKeys, ComponentType, EdgeKey, FaceKey, Mesh, MeshChange,
-    SelectionChange, VertKey,
+    AttributeChange, ComponentKeys, ComponentSetChange, ComponentType, EdgeKey, FaceKey, Mesh,
+    MeshChange, VertKey,
 };
 use slotmap::{Key, SecondaryMap};
 
@@ -315,7 +315,7 @@ impl TopologyOverlay {
         }
     }
 
-    fn update_selection(&mut self, change: &SelectionChange) {
+    fn update_selection(&mut self, change: &ComponentSetChange) {
         for (keys, value) in [(&change.added, 255), (&change.removed, 0)] {
             Self::set_selection(
                 &mut self.buffers.selection[ComponentType::Vertex],
