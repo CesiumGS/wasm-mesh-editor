@@ -294,6 +294,7 @@ impl Mesh {
             topo: &self.topology,
             attrs: &self.attributes,
             interactable: self.interactable_components,
+            hidden: &self.hidden_components,
             changes: &mut self.changes,
         }
     }
