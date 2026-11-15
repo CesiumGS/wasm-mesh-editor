@@ -1555,3 +1555,70 @@ test("hideByAttribute reports lookups that hide nothing", () => {
   assert.throws(() => editor.hideByAttribute(key, "_ID", Equal, 0), /is not registered/);
   editor.free();
 });
+
+/** Overlay indices of the selected components of each type. */
+function selectedByType(editor, key) {
+  const selected = (view) => {
+    const flags = new Uint8Array(memory.buffer, view.address, view.elementCount);
+    return [...flags.keys()].filter((index) => flags[index] & 1);
+  };
+  const { flags } = editor.overlayViews(key);
+
+  return { verts: selected(flags.verts), edges: selected(flags.edges), faces: selected(flags.faces) };
+}
+
+/**
+ * Activates the two-triangle mesh in edge mode and selects the edge from vertex 0 to 1, which is
+ * only in face 0. Returns that edge's overlay index.
+ */
+function selectOuterEdge(editor, key) {
+  const edge = readElements(editor.overlayViews(key).edges).findIndex(([a, b]) => a + b === 1);
+  const [componentKey] = keysAt(editor.overlayViews(key).componentKeys.edges, [edge]);
+
+  editor.setMode(1 << ComponentType.Edge);
+  editor.setMeshActive(key);
+  editor.setActiveTool(SelectTool.addTo(editor));
+  editor.pointerClick({ pick: { mesh: key, componentType: ComponentType.Edge, componentKey } });
+  update(editor);
+
+  return edge;
+}
+
+test("hideSelected deselects and hides the selected components of interactable types", () => {
+  const { editor, key } = twoTriangleEditor();
+  const edge = selectOuterEdge(editor, key);
+  assert.deepEqual(selectedByType(editor, key), { verts: [0, 1], edges: [edge], faces: [] });
+
+  assert.equal(editor.hideSelected(key), true);
+  update(editor);
+
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [edge], faces: [] });
+  assert.deepEqual(selectedByType(editor, key), { verts: [], edges: [], faces: [] });
+  editor.free();
+});
+
+test("hideSelected extends to connected faces", () => {
+  const { editor, key } = twoTriangleEditor();
+  const edge = selectOuterEdge(editor, key);
+
+  editor.hideSelected(key, { extendToConnectedFaces: true });
+  update(editor);
+
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [edge], faces: [0] });
+  editor.free();
+});
+
+test("hideSelected needs an active mesh and throws for unknown meshes", () => {
+  const { editor, key } = twoTriangleEditor();
+  const edge = selectOuterEdge(editor, key);
+  editor.setMeshInactive(key);
+
+  assert.equal(editor.hideSelected(key), false);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [] });
+  assert.deepEqual(selectedByType(editor, key), { verts: [0, 1], edges: [edge], faces: [] });
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.hideSelected(key), /is not registered/);
+  editor.free();
+});
