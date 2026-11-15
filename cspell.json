@@ -13,6 +13,7 @@
         "gons",
         "highp",
         "inout",
+        "interactable",
         "ivec",
         "nontrapping",
         "pickable",
