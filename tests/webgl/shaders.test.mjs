@@ -7,10 +7,14 @@ import { after, before, test } from "node:test";
 import { chromium } from "playwright";
 
 import init, {
+  AttributeComparison,
+  AttributeDomain,
   ComponentType,
+  CustomAttribute,
   Mesh,
   MeshEditor,
   SelectAction,
+  SelectByAttributeResult,
   SelectTool,
   SelectionStep,
   TranslateTool,
@@ -882,5 +886,106 @@ test("the default modifiers policy toggles with Shift, Ctrl, or Cmd", () => {
     editor.pointerClick({ pick: [first(0)], modifiers });
     assert.deepEqual(selected()[0], [], JSON.stringify(modifiers));
   }
+  editor.free();
+});
+
+/**
+ * An editor with one active, vertex-mode mesh of two triangles. `_ID` is -1, 0, 1, 2 by vertex, and
+ * `_COLOR` is red at vertices 1 and 2.
+ */
+function attributeEditor() {
+  const editor = new MeshEditor();
+  const key = editor.addMesh(
+    Mesh.fromBuffers(
+      new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0, 0.5, 0, 0.5, 0.5, 0]),
+      new Uint32Array([0, 1, 2, 1, 3, 2]),
+      undefined,
+      undefined,
+      undefined,
+      [
+        CustomAttribute.int32("_ID", AttributeDomain.Vertex, new Int32Array([-1, 0, 1, 2])),
+        CustomAttribute.float32(
+          "_COLOR",
+          AttributeDomain.Vertex,
+          3,
+          new Float32Array([0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0]),
+        ),
+      ],
+    ),
+  );
+  editor.setMode(1 << ComponentType.Vertex);
+  editor.setMeshActive(key);
+
+  return { editor, key };
+}
+
+/** Overlay indices of the selected vertices. */
+function selectedVerts(editor, key) {
+  const result = new UpdateResult();
+  editor.update(0, result);
+  result.free();
+
+  const { address, elementCount } = editor.overlayViews(key).selection.verts;
+  const values = new Uint8Array(memory.buffer, address, elementCount);
+  return [...values.keys()].filter((index) => values[index] & 1);
+}
+
+test("selectVertsByAttribute compares scalar attributes", () => {
+  for (const [comparison, value, expected] of [
+    [AttributeComparison.Equal, 0, [1]],
+    [AttributeComparison.NotEqual, 0, [0, 2, 3]],
+    [AttributeComparison.Less, 1, [0, 1]],
+    [AttributeComparison.LessOrEqual, 1, [0, 1, 2]],
+    [AttributeComparison.Greater, 0, [2, 3]],
+    [AttributeComparison.GreaterOrEqual, 1, [2, 3]],
+  ]) {
+    const { editor, key } = attributeEditor();
+
+    assert.equal(
+      editor.selectVertsByAttribute(key, "_ID", comparison, value),
+      SelectByAttributeResult.Selected,
+    );
+    assert.deepEqual(selectedVerts(editor, key), expected, AttributeComparison[comparison]);
+    editor.free();
+  }
+});
+
+test("selectVertsByAttribute compares vector attributes for equality only", () => {
+  for (const [comparison, result, expected] of [
+    [AttributeComparison.Equal, SelectByAttributeResult.Selected, [1, 2]],
+    [AttributeComparison.NotEqual, SelectByAttributeResult.Selected, [0, 3]],
+    [AttributeComparison.Less, SelectByAttributeResult.UnsupportedComparison, []],
+    [AttributeComparison.GreaterOrEqual, SelectByAttributeResult.UnsupportedComparison, []],
+  ]) {
+    const { editor, key } = attributeEditor();
+
+    assert.equal(editor.selectVertsByAttribute(key, "_COLOR", comparison, [1, 0, 0]), result);
+    assert.deepEqual(selectedVerts(editor, key), expected, AttributeComparison[comparison]);
+    editor.free();
+  }
+});
+
+test("selectVertsByAttribute reports lookups that select nothing", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal } = AttributeComparison;
+
+  for (const [name, value, result] of [
+    ["_MISSING", 0, SelectByAttributeResult.AttributeNotFound],
+    ["_ID", 1.5, SelectByAttributeResult.WrongType],
+    ["_COLOR", 1, SelectByAttributeResult.WrongType],
+    ["_COLOR", [1, 0], SelectByAttributeResult.WrongType],
+  ]) {
+    assert.equal(editor.selectVertsByAttribute(key, name, Equal, value), result, name);
+  }
+  assert.deepEqual(selectedVerts(editor, key), []);
+
+  editor.setMeshInactive(key);
+  assert.equal(
+    editor.selectVertsByAttribute(key, "_ID", Equal, 0),
+    SelectByAttributeResult.MeshInactive,
+  );
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.selectVertsByAttribute(key, "_ID", Equal, 0), /is not registered/);
   editor.free();
 });
