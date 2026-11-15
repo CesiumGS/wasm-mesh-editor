@@ -93,7 +93,7 @@ fn zip_map<K: Key, T: AttributeValue>(
 /// A type that custom attribute values can have: `f32`, `Vec2`, `Vec3`, `Vec4`, `u32` or `i32`.
 /// Used to request typed values, as in [`AttributeMap::typed`]. Sealed; it can't be implemented
 /// outside this crate.
-pub trait AttributeValue: Copy + sealed::Sealed {}
+pub trait AttributeValue: Copy + 'static + sealed::Sealed {}
 
 mod sealed {
     use slotmap::{Key, SecondaryMap};
@@ -180,6 +180,28 @@ impl Attributes {
     /// The named custom corner attribute, or `None` if there isn't one.
     pub fn corner_attribute(&self, name: &str) -> Option<&AttributeMap<LoopKey>> {
         find_custom(&self.corner_custom, name)
+    }
+
+    /// Vertices whose `name` custom attribute equals `value`.
+    /// TODO: support other predicates, such as not equal, less than, and greater than.
+    ///
+    /// # Errors
+    /// If there's no vertex attribute called `name`, or it holds a different type than `T`.
+    pub fn verts_where<T: AttributeValue + PartialEq>(
+        &self,
+        name: &str,
+        value: T,
+    ) -> Result<impl Iterator<Item = VertKey> + use<'_, T>, AttributeLookupError> {
+        let values = self
+            .vertex_attribute(name)
+            .ok_or_else(|| AttributeLookupError::NotFound { name: name.into() })?
+            .typed::<T>()
+            .ok_or_else(|| AttributeLookupError::WrongType { name: name.into() })?;
+
+        Ok(values
+            .iter()
+            .filter(move |&(_, vert_value)| *vert_value == value)
+            .map(|(vert, _)| vert))
     }
 
     /// Adds a custom vertex attribute. The name must not be used by any custom attribute.
