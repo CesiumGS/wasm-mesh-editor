@@ -10,6 +10,7 @@ use crate::{FaceKey, LoopKey, Topology, VertKey};
 /// How grow, shrink, and boundary queries determine what a neighbor is
 /// (i.e. whether neighbors are connected by an edge or share a face)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub enum SelectionStep {
     /// Vertices or faces sharing an edge.
     Edge,
