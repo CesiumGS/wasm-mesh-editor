@@ -94,6 +94,25 @@ impl MeshEditor {
         Ok(true)
     }
 
+    /// Deselects and hides the selected components of interactable types in an active mesh.
+    /// Returns `false` and does nothing if the mesh is inactive. Throws for an unknown mesh key.
+    #[wasm_bindgen(js_name = hideSelected)]
+    pub fn hide_selected(
+        &mut self,
+        #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
+        options: Option<Ts<HideOptionsJs>>,
+    ) -> Result<bool, JsError> {
+        let options = convert_options(options.as_ref())?;
+        let Some(mesh) = active_mesh(self, mesh_key)? else {
+            return Ok(false);
+        };
+
+        let keys: Vec<_> = mesh.selection().iter().collect();
+        mesh.selection_mut().deselect(&keys);
+        mesh.hidden_components_mut().hide(&keys, options);
+        Ok(true)
+    }
+
     /// Hides every vertex, edge or face in an active mesh whose `name` attribute compares to
     /// `value` as `comparison` says, like `hideComponents`. Pass a number for scalar attributes and
     /// an array of numbers for vector ones. Only throws for an unknown mesh key.
