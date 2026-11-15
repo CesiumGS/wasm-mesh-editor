@@ -1665,10 +1665,22 @@ fn select_by_attribute_also_selects_faces_whose_verts_all_match() {
 
     assert_eq!(
         mesh.selection_mut()
-            .select_verts_by_attribute("_FEATURE_ID", 7u32),
+            .select_verts_by_attribute("_FEATURE_ID", |id: u32| id == 7),
         Ok(())
     );
     assert_selection_event(&changes, &expected, &[]);
+}
+
+#[test]
+fn select_by_attribute_accepts_any_predicate() {
+    let mut mesh = feature_triangles();
+    let verts: Vec<_> = mesh.topology.verts().collect();
+
+    mesh.selection_mut()
+        .select_verts_by_attribute("_FEATURE_ID", |id: u32| id > 7)
+        .unwrap();
+
+    assert_eq!(mesh.selection().verts().collect::<Vec<_>>(), [verts[3]]);
 }
 
 #[test]
@@ -1678,7 +1690,7 @@ fn select_by_attribute_keeps_the_existing_selection() {
     mesh.selection_mut().select(&verts[3..]);
 
     mesh.selection_mut()
-        .select_verts_by_attribute("_FEATURE_ID", 7u32)
+        .select_verts_by_attribute("_FEATURE_ID", |id: u32| id == 7)
         .unwrap();
     assert!(verts.iter().all(|&vert| mesh.selection().contains(vert)));
 }
@@ -1692,7 +1704,7 @@ fn select_by_attribute_does_nothing_when_verts_arent_selectable() {
 
         assert_eq!(
             mesh.selection_mut()
-                .select_verts_by_attribute("_FEATURE_ID", 7u32),
+                .select_verts_by_attribute("_FEATURE_ID", |id: u32| id == 7),
             Ok(())
         );
         assert!(mesh.selection().is_empty());
@@ -1710,7 +1722,7 @@ fn select_by_attribute_skips_verts_without_a_value() {
         .add_vertex_attribute("_PARTIAL".into(), AttributeMap::F32(partial));
 
     mesh.selection_mut()
-        .select_verts_by_attribute("_PARTIAL", 1.5f32)
+        .select_verts_by_attribute("_PARTIAL", |value: f32| value == 1.5)
         .unwrap();
     assert_eq!(mesh.selection().verts().collect::<Vec<_>>(), [verts[0]]);
 }
@@ -1724,13 +1736,14 @@ fn select_by_attribute_with_unknown_name_or_type_selects_nothing() {
     // Corner attributes aren't vertex attributes, even with a matching name.
     for name in ["_MISSING", "_CORNER"] {
         assert_eq!(
-            mesh.selection_mut().select_verts_by_attribute(name, 7u32),
+            mesh.selection_mut()
+                .select_verts_by_attribute(name, |id: u32| id == 7),
             Err(not_found(name))
         );
     }
     assert_eq!(
         mesh.selection_mut()
-            .select_verts_by_attribute("_FEATURE_ID", 7i32),
+            .select_verts_by_attribute("_FEATURE_ID", |id: i32| id == 7),
         Err(AttributeLookupError::WrongType {
             name: "_FEATURE_ID".into()
         })

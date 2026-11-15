@@ -197,3 +197,46 @@ fn corner_values_can_differ_at_a_shared_vertex() {
         None
     );
 }
+
+#[test]
+fn verts_where_returns_verts_whose_value_satisfies_the_predicate() {
+    let mut mesh = two_triangles();
+    let (verts, _) = keys(&mesh);
+    let ids: SecondaryMap<_, _> = verts
+        .iter()
+        .take(3)
+        .enumerate()
+        .map(|(index, &vert)| (vert, index as i32 - 1))
+        .collect();
+    mesh.attributes
+        .add_vertex_attribute("_ID".into(), AttributeMap::I32(ids));
+    mesh.attributes
+        .add_corner_attribute("_CORNER".into(), AttributeMap::I32(SecondaryMap::new()));
+
+    let matching = |predicate: fn(i32) -> bool| {
+        let mut matching: Vec<_> = mesh
+            .attributes
+            .verts_where("_ID", predicate)
+            .unwrap()
+            .collect();
+        matching.sort();
+        matching
+    };
+
+    // Vertex 3 has no value, so no predicate matches it.
+    assert_eq!(matching(|id| id >= 0), [verts[1], verts[2]]);
+    assert_eq!(matching(|id| id != 0), [verts[0], verts[2]]);
+    assert_eq!(matching(|_| true), [verts[0], verts[1], verts[2]]);
+    assert!(matching(|id| id > 1).is_empty());
+
+    assert_eq!(
+        mesh.attributes.verts_where("_ID", |_: u32| true).err(),
+        Some(AttributeLookupError::WrongType { name: "_ID".into() })
+    );
+    for name in ["_MISSING", "_CORNER"] {
+        assert_eq!(
+            mesh.attributes.verts_where(name, |_: i32| true).err(),
+            Some(AttributeLookupError::NotFound { name: name.into() })
+        );
+    }
+}

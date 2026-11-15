@@ -139,37 +139,55 @@ pub enum SelectByAttributeResult {
     WrongType = 2,
     /// The mesh isn't active, so it can't be edited.
     MeshInactive = 3,
+    /// The comparison doesn't apply to the attribute's type: vector attributes only support
+    /// `Equal` and `NotEqual`.
+    UnsupportedComparison = 4,
+}
+
+/// How `selectVertsByAttribute` compares each vertex's attribute value to the given value.
+/// Float comparisons follow IEEE 754, so a NaN only matches `NotEqual`.
+#[wasm_bindgen]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttributeComparison {
+    Equal = 0,
+    NotEqual = 1,
+    Less = 2,
+    LessOrEqual = 3,
+    Greater = 4,
+    GreaterOrEqual = 5,
 }
 
 #[wasm_bindgen]
 impl MeshEditor {
-    /// Selects every vertex in an active mesh whose `name` attribute equals `value`, like
-    /// selecting them directly. Pass a number for scalar attributes and an array of numbers
-    /// for vector ones. Only throws for an unknown mesh key.
+    /// Selects every vertex in an active mesh whose `name` attribute compares to `value` as
+    /// `comparison` says, like selecting them directly. Pass a number for scalar attributes and an
+    /// array of numbers for vector ones. Only throws for an unknown mesh key.
     #[wasm_bindgen(js_name = selectVertsByAttribute)]
     pub fn select_verts_by_attribute(
         &mut self,
-        key: MeshKey,
+        #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
         name: &str,
+        comparison: AttributeComparison,
         #[wasm_bindgen(unchecked_param_type = "number | ArrayLike<number>")] value: JsValue,
     ) -> Result<SelectByAttributeResult, JsError> {
-        if !self.has_mesh(key) {
-            return Err(MeshNotFound { key }.into());
+        if !self.has_mesh(mesh_key) {
+            return Err(MeshNotFound { key: mesh_key }.into());
         }
 
-        let Some(mesh) = self.active_mesh_mut(key) else {
+        let Some(mesh) = self.active_mesh_mut(mesh_key) else {
             return Ok(SelectByAttributeResult::MeshInactive);
         };
 
-        Ok(select_verts_by_js_value(mesh, name, &value))
+        Ok(select_verts_by_js_value(mesh, name, comparison, &value))
     }
 }
 
-/// Selects the vertices whose `name` attribute equals `value`, converted to the attribute's
-/// stored type.
+/// Selects the vertices whose `name` attribute compares to `value`, converted to the attribute's
+/// stored type, as `comparison` says.
 fn select_verts_by_js_value(
     mesh: &mut Mesh,
     name: &str,
+    comparison: AttributeComparison,
     value: &JsValue,
 ) -> SelectByAttributeResult {
     let Some(attribute) = mesh.attributes().vertex_attribute(name) else {
@@ -177,36 +195,91 @@ fn select_verts_by_js_value(
     };
 
     match attribute {
-        AttributeMap::F32(_) => select_verts(mesh, name, from_js::<f32>(value)),
-        AttributeMap::Vec2(_) => {
-            select_verts(mesh, name, floats_from_js(value).map(Vec2::from_array))
-        }
-        AttributeMap::Vec3(_) => {
-            select_verts(mesh, name, floats_from_js(value).map(Vec3::from_array))
-        }
-        AttributeMap::Vec4(_) => {
-            select_verts(mesh, name, floats_from_js(value).map(Vec4::from_array))
-        }
-        AttributeMap::U32(_) => select_verts(mesh, name, from_js::<u32>(value)),
-        AttributeMap::I32(_) => select_verts(mesh, name, from_js::<i32>(value)),
+        AttributeMap::F32(_) => select_verts(
+            mesh,
+            name,
+            scalar_predicate(comparison, from_js::<f32>(value)),
+        ),
+        AttributeMap::Vec2(_) => select_verts(
+            mesh,
+            name,
+            vector_predicate(comparison, floats_from_js(value).map(Vec2::from_array)),
+        ),
+        AttributeMap::Vec3(_) => select_verts(
+            mesh,
+            name,
+            vector_predicate(comparison, floats_from_js(value).map(Vec3::from_array)),
+        ),
+        AttributeMap::Vec4(_) => select_verts(
+            mesh,
+            name,
+            vector_predicate(comparison, floats_from_js(value).map(Vec4::from_array)),
+        ),
+        AttributeMap::U32(_) => select_verts(
+            mesh,
+            name,
+            scalar_predicate(comparison, from_js::<u32>(value)),
+        ),
+        AttributeMap::I32(_) => select_verts(
+            mesh,
+            name,
+            scalar_predicate(comparison, from_js::<i32>(value)),
+        ),
     }
 }
 
-/// `WrongType` if `value` is `None`, meaning the JS value didn't convert.
-fn select_verts<T: AttributeValue + PartialEq>(
+fn select_verts<T: AttributeValue>(
     mesh: &mut Mesh,
     name: &str,
-    value: Option<T>,
+    predicate: Result<impl Fn(T) -> bool, SelectByAttributeResult>,
 ) -> SelectByAttributeResult {
-    let Some(value) = value else {
-        return SelectByAttributeResult::WrongType;
+    let predicate = match predicate {
+        Ok(predicate) => predicate,
+        Err(result) => return result,
     };
 
-    match mesh.selection_mut().select_verts_by_attribute(name, value) {
+    match mesh
+        .selection_mut()
+        .select_verts_by_attribute(name, predicate)
+    {
         Ok(()) => SelectByAttributeResult::Selected,
         Err(AttributeLookupError::NotFound { .. }) => SelectByAttributeResult::AttributeNotFound,
         Err(AttributeLookupError::WrongType { .. }) => SelectByAttributeResult::WrongType,
     }
+}
+
+/// A predicate comparing values to `value`. `WrongType` if `value` is `None`, meaning the JS
+/// value didn't convert.
+fn scalar_predicate<T: PartialOrd + Copy>(
+    comparison: AttributeComparison,
+    value: Option<T>,
+) -> Result<impl Fn(T) -> bool, SelectByAttributeResult> {
+    let value = value.ok_or(SelectByAttributeResult::WrongType)?;
+
+    Ok(move |vert_value: T| match comparison {
+        AttributeComparison::Equal => vert_value == value,
+        AttributeComparison::NotEqual => vert_value != value,
+        AttributeComparison::Less => vert_value < value,
+        AttributeComparison::LessOrEqual => vert_value <= value,
+        AttributeComparison::Greater => vert_value > value,
+        AttributeComparison::GreaterOrEqual => vert_value >= value,
+    })
+}
+
+/// Like [`scalar_predicate`], for vector types: `UnsupportedComparison` for anything but `Equal`
+/// and `NotEqual`.
+fn vector_predicate<T: PartialEq + Copy>(
+    comparison: AttributeComparison,
+    value: Option<T>,
+) -> Result<impl Fn(T) -> bool, SelectByAttributeResult> {
+    let matches_equal = match comparison {
+        AttributeComparison::Equal => true,
+        AttributeComparison::NotEqual => false,
+        _ => return Err(SelectByAttributeResult::UnsupportedComparison),
+    };
+    let value = value.ok_or(SelectByAttributeResult::WrongType)?;
+
+    Ok(move |vert_value: T| (vert_value == value) == matches_equal)
 }
 
 /// `value` as `T`, or `None` if it doesn't fit, like a fractional number for an integer.
