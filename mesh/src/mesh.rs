@@ -13,8 +13,8 @@ use crate::geometry::corner_angle;
 use crate::selection::{SelectionBoundary, SelectionState};
 use crate::{
     Aabb, AttributeChange, AttributeError, AttributeKey, AttributeValue, Attributes, ComponentKey,
-    ComponentMask, ComponentRef, ComponentSet, EdgeKey, EdgeRef, FaceKey, FaceRef, Hidden,
-    HideOptions, LoopKey, MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
+    ComponentMask, ComponentRef, ComponentSet, EdgeKey, EdgeRef, FaceKey, FaceRef,
+    HiddenComponents, LoopKey, MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
 };
 
 pub use build::{EdgeAttributeBuffer, MeshBuffers, MeshBuildError};
@@ -25,7 +25,7 @@ pub struct Mesh {
     pub(crate) topology: Topology,
     pub(crate) attributes: Attributes,
     pub(crate) selection: SelectionState,
-    pub(crate) hidden: ComponentSet,
+    pub(crate) hidden_components: ComponentSet,
     interactable_components: ComponentMask,
     changes: EventEmitter<MeshChange>,
 
@@ -40,7 +40,7 @@ impl Default for Mesh {
             topology: Topology::default(),
             attributes: Attributes::default(),
             selection: SelectionState::default(),
-            hidden: ComponentSet::default(),
+            hidden_components: ComponentSet::default(),
             interactable_components: ComponentMask::VERTEX,
             changes: EventEmitter::default(),
             face_normals: HashMap::new(),
@@ -298,22 +298,17 @@ impl Mesh {
         }
     }
 
-    pub fn hidden(&self) -> &ComponentSet {
-        todo!()
+    pub fn hidden_components(&self) -> &ComponentSet {
+        &self.hidden_components
     }
 
-    pub fn hidden_mut(&mut self) -> Hidden<'_> {
-        todo!()
-    }
-
-    /// Hides the selected components of interactable types, then deselects them.
-    pub fn hide_selected(&mut self, options: HideOptions) {
-        todo!()
-    }
-
-    /// Shows the selected components of interactable types.
-    pub fn show_selected(&mut self, options: HideOptions) {
-        todo!()
+    pub fn hidden_components_mut(&mut self) -> HiddenComponents<'_> {
+        HiddenComponents {
+            hidden: &mut self.hidden_components,
+            topo: &self.topology,
+            interactable: self.interactable_components,
+            changes: &mut self.changes,
+        }
     }
 
     /// Subscribes to future mesh changes in emission order. Use
