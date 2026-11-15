@@ -124,6 +124,7 @@ pub struct Selection<'a> {
     pub(crate) topo: &'a Topology,
     pub(crate) attrs: &'a Attributes,
     pub(crate) interactable: ComponentMask,
+    pub(crate) hidden: &'a ComponentSet,
     pub(crate) changes: &'a mut EventEmitter<MeshChange>,
 }
 
@@ -206,8 +207,8 @@ impl<'a> Selection<'a> {
     }
 
     /// Selects every component whose `name` attribute satisfies `predicate`, such as
-    /// `|id: u32| id == 7`. Works just like [`Self::select`], so it does nothing unless `K`'s
-    /// components are interactable.
+    /// `|id: u32| id == 7`, skipping hidden components. Works just like [`Self::select`], so it
+    /// does nothing unless `K`'s components are interactable.
     ///
     /// # Errors
     /// Like [`Attributes::values`].
@@ -216,7 +217,11 @@ impl<'a> Selection<'a> {
         name: &str,
         predicate: impl Fn(T) -> bool,
     ) -> Result<(), AttributeError> {
-        let keys: Vec<K> = self.attrs.keys_where(name, predicate)?.collect();
+        let keys: Vec<K> = self
+            .attrs
+            .keys_where(name, predicate)?
+            .filter(|&key| !self.hidden.contains(key))
+            .collect();
 
         self.select(&keys);
         Ok(())
@@ -251,19 +256,29 @@ impl<'a> Selection<'a> {
         self.state.components.take()
     }
 
-    /// Grow the selection by one outer layer of the current selection mode.
+    /// Grow the selection by one outer layer of the current selection mode. Skips hidden components.
     /// Face-only mode edits faces; any vertex or edge mode edits vertices.
     /// A fully selected connected component has no boundary and is unchanged.
     pub fn grow(&mut self, step: SelectionStep) {
         let delta = if self.interactable == ComponentMask::FACE {
-            let faces: Vec<_> = self.view().boundary().outer_faces(step).collect();
+            let faces: Vec<_> = self
+                .view()
+                .boundary()
+                .outer_faces(step)
+                .filter(|&key| !self.hidden.contains(key))
+                .collect();
 
             self.apply_action(&faces, Action::Select, ComponentMask::FACE)
         } else if self
             .interactable
             .intersects(ComponentMask::VERTEX | ComponentMask::EDGE)
         {
-            let verts: Vec<_> = self.view().boundary().outer_vertices(step).collect();
+            let verts: Vec<_> = self
+                .view()
+                .boundary()
+                .outer_vertices(step)
+                .filter(|&key| !self.hidden.contains(key))
+                .collect();
 
             self.apply_action(&verts, Action::Select, ComponentMask::VERTEX)
         } else {

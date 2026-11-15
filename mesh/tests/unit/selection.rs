@@ -1,5 +1,7 @@
 use super::*;
-use crate::{Aabb, AttributeBuffer, AttributeMap, EdgeKey, FaceKey, Mesh, MeshBuffers, VertKey};
+use crate::{
+    Aabb, AttributeBuffer, AttributeMap, EdgeKey, FaceKey, HideOptions, Mesh, MeshBuffers, VertKey,
+};
 use event_emitter::Event;
 use glam::Vec3;
 use std::rc::Rc;
@@ -1774,4 +1776,96 @@ fn attribute_errors_describe_the_attribute() {
         wrong_type.to_string(),
         "attribute \"_A\" stores a different value type"
     );
+}
+
+#[test]
+fn grow_skips_hidden_vertices() {
+    let mut mesh = quad_grid(4, 4);
+    let verts: Vec<_> = mesh.topology.verts().collect();
+    mesh.hidden_components_mut()
+        .hide(&[verts[13]], HideOptions::default());
+    mesh.selection_mut().select(&[verts[12]]);
+
+    mesh.selection_mut().grow(SelectionStep::Edge);
+    assert_eq!(
+        mesh.selection().verts().collect::<HashSet<_>>(),
+        [7, 11, 12, 17].map(|index| verts[index]).into()
+    );
+
+    for _ in 0..4 {
+        mesh.selection_mut().grow(SelectionStep::Edge);
+    }
+    assert_eq!(mesh.selection().verts().count(), verts.len() - 1);
+    assert!(!mesh.selection().contains(verts[13]));
+    assert_eq!(mesh.selection().faces().count(), 12);
+}
+
+#[test]
+fn grow_skips_hidden_faces() {
+    let mut mesh = quad_grid(3, 3);
+    let faces: Vec<_> = mesh.topology.faces().collect();
+    mesh.set_interactable_components(ComponentMask::FACE);
+    mesh.hidden_components_mut()
+        .hide(&[faces[5]], HideOptions::default());
+    mesh.selection_mut().select(&[faces[4]]);
+
+    mesh.selection_mut().grow(SelectionStep::Edge);
+
+    assert_eq!(
+        mesh.selection().faces().collect::<HashSet<_>>(),
+        [1, 3, 4, 7].map(|index| faces[index]).into()
+    );
+}
+
+#[test]
+fn grow_in_face_mode_propagates_down_to_hidden_vertices() {
+    let mut mesh = quad_grid(2, 1);
+    let verts: Vec<_> = mesh.topology.verts().collect();
+    let faces: Vec<_> = mesh.topology.faces().collect();
+    mesh.hidden_components_mut()
+        .hide(&[verts[2]], HideOptions::default());
+    mesh.set_interactable_components(ComponentMask::FACE);
+    mesh.selection_mut().select(&[faces[0]]);
+
+    mesh.selection_mut().grow(SelectionStep::Edge);
+
+    assert!(mesh.selection().contains(faces[1]));
+    assert!(mesh.selection().contains(verts[2]));
+}
+
+#[test]
+fn grow_in_vertex_mode_propagates_up_to_hidden_faces() {
+    let mut mesh = quad_grid(2, 1);
+    let verts: Vec<_> = mesh.topology.verts().collect();
+    let faces: Vec<_> = mesh.topology.faces().collect();
+    mesh.set_interactable_components(ComponentMask::FACE);
+    mesh.hidden_components_mut()
+        .hide(&[faces[1]], HideOptions::default());
+    mesh.set_interactable_components(ComponentMask::VERTEX);
+    mesh.selection_mut()
+        .select(&[verts[0], verts[1], verts[3], verts[4]]);
+
+    mesh.selection_mut().grow(SelectionStep::Edge);
+
+    assert_eq!(mesh.selection().verts().count(), verts.len());
+    assert!(mesh.selection().contains(faces[1]));
+}
+
+#[test]
+fn select_by_attribute_skips_hidden_vertices() {
+    let mut mesh = feature_triangles();
+    let verts: Vec<_> = mesh.topology.verts().collect();
+    let first_face = mesh.topology.faces().next().unwrap();
+    mesh.hidden_components_mut()
+        .hide(&[verts[0]], HideOptions::default());
+
+    mesh.selection_mut()
+        .select_by_attribute::<VertKey, _>("_FEATURE_ID", |id: u32| id == 7)
+        .unwrap();
+
+    assert_eq!(
+        mesh.selection().verts().collect::<HashSet<_>>(),
+        [verts[1], verts[2]].into()
+    );
+    assert!(!mesh.selection().contains(first_face));
 }
