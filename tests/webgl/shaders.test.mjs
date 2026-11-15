@@ -1102,7 +1102,7 @@ function selectedVerts(editor, key) {
   editor.update(0, result);
   result.free();
 
-  const { address, elementCount } = editor.overlayViews(key).selection.verts;
+  const { address, elementCount } = editor.overlayViews(key).flags.verts;
   const values = new Uint8Array(memory.buffer, address, elementCount);
   return [...values.keys()].filter((index) => values[index] & 1);
 }
