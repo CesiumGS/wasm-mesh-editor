@@ -290,18 +290,7 @@ impl<'a> Selection<'a> {
         name: &str,
         value: T,
     ) -> Result<(), AttributeLookupError> {
-        let values = self
-            .attrs
-            .vertex_attribute(name)
-            .ok_or_else(|| AttributeLookupError::NotFound { name: name.into() })?
-            .typed::<T>()
-            .ok_or_else(|| AttributeLookupError::WrongType { name: name.into() })?;
-
-        let verts: Vec<_> = values
-            .iter()
-            .filter(|&(_, &vert_value)| vert_value == value)
-            .map(|(vert, _)| vert)
-            .collect();
+        let verts: Vec<_> = self.attrs.verts_where(name, value)?.collect();
 
         self.select(&verts);
         Ok(())
