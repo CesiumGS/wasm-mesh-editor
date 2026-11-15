@@ -11,6 +11,7 @@ pub enum MeshChange {
     Attributes(AttributeChange),
     Topology(TopologyChange),
     Selection(ComponentSetChange),
+    Hidden(ComponentSetChange),
 }
 
 impl MeshChange {
@@ -19,6 +20,7 @@ impl MeshChange {
             Self::Attributes(change) => change.is_empty(),
             Self::Topology(change) => change.is_empty(),
             Self::Selection(change) => change.is_empty(),
+            Self::Hidden(change) => change.is_empty(),
         }
     }
 }

@@ -6,6 +6,7 @@ mod bounds;
 pub use boundary::{SelectionBoundary, SelectionStep};
 
 use std::collections::HashSet;
+use std::ops::Deref;
 
 use boundary::BoundaryCache;
 use bounds::BoundsCache;
@@ -14,15 +15,9 @@ use glam::Vec3;
 
 use crate::{
     Aabb, AttributeError, AttributeKey, AttributeValue, Attributes, ComponentKey, ComponentKeys,
-    ComponentMask, ComponentRef, ComponentSet, ComponentSetChange, ComponentType, EdgeKey, FaceKey,
-    MeshChange, Topology, VertKey,
+    ComponentMask, ComponentRef, ComponentSet, ComponentSetChange, ComponentType, IntoComponentKey,
+    MeshChange, Topology,
 };
-
-/// A component kind that can be selected: the three handle types and
-/// [`ComponentKey`]. A named alias over `Copy + Into<ComponentKey>`.
-pub trait SelectionKind: Copy + Into<ComponentKey> {}
-
-impl<T: Copy + Into<ComponentKey>> SelectionKind for T {}
 
 #[derive(Default)]
 pub(crate) struct SelectionState {
@@ -132,37 +127,16 @@ pub struct Selection<'a> {
     pub(crate) changes: &'a mut EventEmitter<MeshChange>,
 }
 
+/// Exposes the selected components.
+impl Deref for SelectionView<'_> {
+    type Target = ComponentSet;
+
+    fn deref(&self) -> &ComponentSet {
+        &self.state.components
+    }
+}
+
 impl<'a> SelectionView<'a> {
-    pub fn verts(&self) -> impl Iterator<Item = VertKey> + '_ {
-        self.state.components.verts.iter().copied()
-    }
-
-    pub fn edges(&self) -> impl Iterator<Item = EdgeKey> + '_ {
-        self.state.components.edges.iter().copied()
-    }
-
-    pub fn faces(&self) -> impl Iterator<Item = FaceKey> + '_ {
-        self.state.components.faces.iter().copied()
-    }
-
-    /// Every selected component as a tagged handle, in unspecified order within each kind.
-    pub fn selected(&self) -> impl Iterator<Item = ComponentKey> + '_ {
-        self.state.components.iter()
-    }
-
-    /// The total number of selected components across all kinds.
-    pub fn len(&self) -> usize {
-        self.state.components.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.state.components.is_empty()
-    }
-
-    pub fn contains<K: SelectionKind>(&self, key: K) -> bool {
-        self.state.components.contains(key.into())
-    }
-
     /// Lazy boundary sets shared across views, independent of the selection mode.
     pub fn boundary(&self) -> SelectionBoundary<'a> {
         SelectionBoundary::new(self.state, self.topo)
@@ -193,7 +167,7 @@ impl<'a> Selection<'a> {
     pub(crate) fn rebuild(&mut self) {
         let survivors: Vec<_> = self
             .view()
-            .selected()
+            .iter()
             .filter(|&key| self.interactable.contains(key.kind().into()))
             .collect();
 
@@ -201,7 +175,7 @@ impl<'a> Selection<'a> {
     }
 
     /// Sets the current selection to the given components, replacing any existing selection.
-    pub fn set<K: SelectionKind>(&mut self, keys: &[K]) {
+    pub fn set<K: IntoComponentKey>(&mut self, keys: &[K]) {
         let removed = self.clear_selection();
 
         let mut delta = self.apply_action(keys, Action::Select, self.interactable);
@@ -211,21 +185,21 @@ impl<'a> Selection<'a> {
     }
 
     /// Adds the given components to the current selection.
-    pub fn select<K: SelectionKind>(&mut self, keys: &[K]) {
+    pub fn select<K: IntoComponentKey>(&mut self, keys: &[K]) {
         let delta = self.apply_action(keys, Action::Select, self.interactable);
 
         self.emit_change(delta);
     }
 
     /// Removes the given components from the current selection.
-    pub fn deselect<K: SelectionKind>(&mut self, keys: &[K]) {
+    pub fn deselect<K: IntoComponentKey>(&mut self, keys: &[K]) {
         let delta = self.apply_action(keys, Action::Deselect, self.interactable);
 
         self.emit_change(delta);
     }
 
     /// Toggles the given components in the current selection.
-    pub fn toggle<K: SelectionKind>(&mut self, keys: &[K]) {
+    pub fn toggle<K: IntoComponentKey>(&mut self, keys: &[K]) {
         let delta = self.apply_action(keys, Action::Toggle, self.interactable);
 
         self.emit_change(delta);
@@ -237,7 +211,7 @@ impl<'a> Selection<'a> {
     ///
     /// # Errors
     /// Like [`Attributes::values`].
-    pub fn select_by_attribute<K: AttributeKey + SelectionKind, T: AttributeValue>(
+    pub fn select_by_attribute<K: AttributeKey + IntoComponentKey, T: AttributeValue>(
         &mut self,
         name: &str,
         predicate: impl Fn(T) -> bool,
@@ -321,7 +295,7 @@ impl<'a> Selection<'a> {
 
     /// Takes a set of components by key and applies a selection action to them (select, remove, toggle).
     /// Selection actions apply not only to directly-selected components, but also propagate to sub- or super-components.
-    fn apply_action<K: SelectionKind>(
+    fn apply_action<K: IntoComponentKey>(
         &mut self,
         keys: &[K],
         action: Action,

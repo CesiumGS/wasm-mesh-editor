@@ -8,7 +8,7 @@ use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
 use js_sys::{Float32Array, Int32Array, Uint8Array, Uint32Array};
 use mesh::{
     AttributeComponentType, AttributeDescriptor, AttributeDomain, AttributeError, AttributeKey,
-    AttributeType, AttributeValue, EdgeKey, FaceKey, LoopKey, Mesh, SelectionKind, VertKey,
+    AttributeType, AttributeValue, EdgeKey, FaceKey, IntoComponentKey, LoopKey, Mesh, VertKey,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -313,7 +313,7 @@ impl MeshEditor {
 /// An operation on the components whose `name` attribute satisfies a predicate, like
 /// [`mesh::Selection::select_by_attribute`].
 pub(super) trait ByAttributeOperation {
-    fn apply<K: AttributeKey + SelectionKind, T: AttributeValue>(
+    fn apply<K: AttributeKey + IntoComponentKey, T: AttributeValue>(
         &self,
         mesh: &mut Mesh,
         name: &str,

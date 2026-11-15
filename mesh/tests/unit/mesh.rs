@@ -939,7 +939,7 @@ fn translate_selected_updates_only_moved_positions_and_mixed_face_normals() {
     let vertices: Vec<_> = mesh.topology.verts.keys().collect();
     mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().select(&[faces[0]]);
-    let selected: HashSet<_> = mesh.selection().selected().collect();
+    let selected: HashSet<_> = mesh.selection().iter().collect();
     let positions = mesh.attributes.positions().clone();
     assert_eq!(
         mesh.selection().boundary().mixed_faces(),
@@ -977,10 +977,7 @@ fn translate_selected_updates_only_moved_positions_and_mixed_face_normals() {
             cached_faces,
             mesh.selection().boundary().mixed_faces()
         ));
-        assert_eq!(
-            mesh.selection().selected().collect::<HashSet<_>>(),
-            selected
-        );
+        assert_eq!(mesh.selection().iter().collect::<HashSet<_>>(), selected);
         assert_eq!(mesh.interactable_components(), ComponentMask::FACE);
         assert!(
             mesh.attributes
@@ -1214,7 +1211,7 @@ fn recompute_smooth_normals_weights_all_incident_faces_by_corner_angle() {
         .iter()
         .map(|(key, &value)| (key, value))
         .collect();
-    let selected: HashSet<_> = mesh.selection().selected().collect();
+    let selected: HashSet<_> = mesh.selection().iter().collect();
 
     Mesh::recompute_smooth_normals(
         &mesh.topology,
@@ -1242,10 +1239,7 @@ fn recompute_smooth_normals_weights_all_incident_faces_by_corner_angle() {
         };
         assert!(mesh.attributes.normals()[key].abs_diff_eq(expected, 1.0e-6));
     }
-    assert_eq!(
-        mesh.selection().selected().collect::<HashSet<_>>(),
-        selected
-    );
+    assert_eq!(mesh.selection().iter().collect::<HashSet<_>>(), selected);
     assert!(
         mesh.attributes
             .uvs()
