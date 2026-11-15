@@ -33,15 +33,15 @@ use crate::{
 pub enum ScalarType {
     Float32,
     Uint32,
-    /// An unsigned byte that shaders read as an unsigned integer.
-    Uint8,
+    /// An unsigned byte that shaders read as a normalized value: 255 is 1.0.
+    Unorm8,
 }
 
 impl ScalarType {
     const fn size(self) -> usize {
         match self {
             Self::Float32 | Self::Uint32 => 4,
-            Self::Uint8 => 1,
+            Self::Unorm8 => 1,
         }
     }
 }
@@ -78,7 +78,7 @@ impl OverlayElement for [u32; 4] {
 }
 
 impl OverlayElement for u8 {
-    const SCALAR_TYPE: ScalarType = ScalarType::Uint8;
+    const SCALAR_TYPE: ScalarType = ScalarType::Unorm8;
     const COMPONENTS: usize = 1;
 }
 

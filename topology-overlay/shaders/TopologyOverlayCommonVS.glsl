@@ -28,8 +28,8 @@ void topologyOverlay_setVertexOutputs(vec4 positionEC, uint componentIndex);
 
 // `[x, y, z, 0]` per vertex.
 uniform highp sampler2D u_positionTexture;
-// Flags of the drawn component type: a bitwise OR of the flags below.
-uniform highp usampler2D u_flagTexture;
+// Flags of the drawn component type: a bitwise OR of the flags below, as a normalized byte.
+uniform highp sampler2D u_flagTexture;
 // Pulls the overlay toward the camera, as a fraction of eye-space depth.
 uniform float u_depthBias;
 
@@ -54,7 +54,8 @@ const vec4 TOPOLOGY_OVERLAY_CULLED = vec4(2.0, 2.0, 2.0, 1.0);
 uint topologyOverlay_fetchFlags(uint componentIndex)
 {
     ivec2 coord = topologyOverlay_texelCoord(componentIndex, textureSize(u_flagTexture, 0));
-    return texelFetch(u_flagTexture, coord, 0).r;
+    // Normalized bytes convert exactly, so rounding recovers the byte.
+    return uint(texelFetch(u_flagTexture, coord, 0).r * 255.0 + 0.5);
 }
 
 bool topologyOverlay_isSelected(uint flags)

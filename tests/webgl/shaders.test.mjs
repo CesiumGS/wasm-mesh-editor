@@ -231,10 +231,10 @@ function textureFormat({ scalarType, components }) {
         type: "UNSIGNED_INT",
         arrayType: "Uint32Array",
       };
-    case "uint8":
+    case "unorm8":
       return {
-        internalFormat: ["R8UI", "RG8UI", "RGB8UI", "RGBA8UI"][components - 1],
-        format: `${channels}_INTEGER`,
+        internalFormat: ["R8", "RG8", "RGB8", "RGBA8"][components - 1],
+        format: channels,
         type: "UNSIGNED_BYTE",
         arrayType: "Uint8Array",
       };
