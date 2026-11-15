@@ -637,28 +637,66 @@ test("setVertexOutputs receives each drawn component's overlay index", async () 
 /** `ComponentFlags.HIDDEN`, as documented on `OverlayFlagViews`. */
 const HIDDEN = 2;
 
-/** A copy of a flag texture with the hidden bit set at `indices`. */
-function hideInTexture(texture, indices) {
-  const data = [...texture.data];
+const ALL_COMPONENTS =
+  (1 << ComponentType.Vertex) | (1 << ComponentType.Edge) | (1 << ComponentType.Face);
 
-  for (const index of indices) {
-    data[index] |= HIDDEN;
-  }
-
-  return { ...texture, data };
+/** Activates the mesh with every component type interactable. */
+function activate(editor, key) {
+  editor.setMode(ALL_COMPONENTS);
+  editor.setMeshActive(key);
 }
 
-test("hidden components aren't drawn or picked", async () => {
+/** Runs an update, so overlay buffers reflect the latest mesh changes. */
+function update(editor) {
+  const result = new UpdateResult();
+  editor.update(0, result);
+  result.free();
+}
+
+/** Indices of the hidden components in one flag buffer. */
+function hiddenIndices(view) {
+  const flags = new Uint8Array(memory.buffer, view.address, view.elementCount);
+  return [...flags.keys()].filter((index) => flags[index] & HIDDEN);
+}
+
+/** Overlay indices of the hidden components of each type. */
+function hiddenByType(editor, key) {
+  const { flags } = editor.overlayViews(key);
+  return {
+    verts: hiddenIndices(flags.verts),
+    edges: hiddenIndices(flags.edges),
+    faces: hiddenIndices(flags.faces),
+  };
+}
+
+/** Copies of the keys at `indices` in one of `componentKeys`' views. */
+function keysAt(view, indices) {
+  const keys = readKeys(view);
+  return BigUint64Array.from(indices, (index) => keys[index]);
+}
+
+test("hideComponents hides components so they aren't drawn or picked", async () => {
   const { editor, key } = twoTriangleEditor();
+  activate(editor, key);
+  const { componentKeys } = editor.overlayViews(key);
+  const edges = readElements(editor.overlayViews(key).edges);
+  const sharedEdge = edges.findIndex(([a, b]) => a + b === 3);
+
+  assert.equal(
+    editor.hideComponents(key, {
+      verts: keysAt(componentKeys.verts, [1]),
+      edges: keysAt(componentKeys.edges, [sharedEdge]),
+      faces: keysAt(componentKeys.faces, [1]),
+    }),
+    true,
+  );
+  update(editor);
+
   const views = editor.overlayViews(key);
   const positions = overlayTexture(views.positions);
-  const edges = readElements(views.edges);
-  const sharedEdge = edges.findIndex(([a, b]) => a + b === 3);
-  const faceDraw = facePickDraw(views);
-  faceDraw.textures[1] = hideInTexture(faceDraw.textures[1], [1]);
   const draws = {
     point: {
-      textures: [positions, hideInTexture(overlayTexture(views.flags.verts), [1])],
+      textures: [positions, overlayTexture(views.flags.verts)],
       uniforms: {
         [uniforms.point.size]: { type: "float", value: 6 },
         [uniforms.point.color]: { type: "vec4", value: [1, 1, 1, 1] },
@@ -668,11 +706,7 @@ test("hidden components aren't drawn or picked", async () => {
       instanceCount: views.positions.elementCount,
     },
     edge: {
-      textures: [
-        positions,
-        hideInTexture(overlayTexture(views.flags.edges), [sharedEdge]),
-        overlayTexture(views.edges),
-      ],
+      textures: [positions, overlayTexture(views.flags.edges), overlayTexture(views.edges)],
       uniforms: {
         [uniforms.edge.width]: { type: "float", value: 4 },
         [uniforms.edge.color]: { type: "vec4", value: [1, 1, 1, 1] },
@@ -681,7 +715,7 @@ test("hidden components aren't drawn or picked", async () => {
       vertexCount: 4,
       instanceCount: views.edges.elementCount,
     },
-    face: faceDraw,
+    face: facePickDraw(views),
   };
   editor.free();
 
@@ -698,6 +732,82 @@ test("hidden components aren't drawn or picked", async () => {
 
   const face = await render("face");
   assert.deepEqual([face(32, 24), face(44, 36)], [0, -1]);
+});
+
+test("hideComponents extends to connected faces, and showComponents reverses it", () => {
+  const { editor, key } = twoTriangleEditor();
+  activate(editor, key);
+  const { componentKeys } = editor.overlayViews(key);
+  const verts = keysAt(componentKeys.verts, [0]);
+
+  editor.hideComponents(key, { verts }, { extendToConnectedFaces: true });
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [0], edges: [], faces: [0] });
+
+  editor.showComponents(key, { verts });
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [0] });
+
+  editor.hideComponents(key, { verts });
+  editor.showComponents(key, { verts }, { extendToConnectedFaces: true });
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [] });
+  editor.free();
+});
+
+test("hideComponents ignores non-interactable types and invalid keys", () => {
+  const { editor, key } = twoTriangleEditor();
+  editor.setMode(1 << ComponentType.Vertex);
+  editor.setMeshActive(key);
+  const { componentKeys } = editor.overlayViews(key);
+
+  editor.hideComponents(key, {
+    verts: BigUint64Array.of(0n, ...keysAt(componentKeys.verts, [2])),
+    faces: keysAt(componentKeys.faces, [0]),
+  });
+  update(editor);
+
+  assert.deepEqual(hiddenByType(editor, key), { verts: [2], edges: [], faces: [] });
+  editor.free();
+});
+
+test("showAllComponents shows every hidden component", () => {
+  const { editor, key } = twoTriangleEditor();
+  activate(editor, key);
+  const { componentKeys } = editor.overlayViews(key);
+  editor.hideComponents(key, {
+    verts: keysAt(componentKeys.verts, [0, 3]),
+    edges: keysAt(componentKeys.edges, [1]),
+    faces: keysAt(componentKeys.faces, [0, 1]),
+  });
+  editor.setMode(0);
+
+  assert.equal(editor.showAllComponents(key), true);
+  update(editor);
+
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [] });
+  editor.free();
+});
+
+test("hiding needs an active mesh and throws for unknown meshes", () => {
+  const { editor, key } = twoTriangleEditor();
+  const verts = keysAt(editor.overlayViews(key).componentKeys.verts, [0]);
+
+  assert.equal(editor.hideComponents(key, { verts }), false);
+  assert.equal(editor.showComponents(key, { verts }), false);
+  assert.equal(editor.showAllComponents(key), false);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [] });
+
+  editor.removeMesh(key).free();
+  for (const call of [
+    () => editor.hideComponents(key, { verts }),
+    () => editor.showComponents(key, { verts }),
+    () => editor.showAllComponents(key),
+  ]) {
+    assert.throws(call, /is not registered/);
+  }
+  editor.free();
 });
 
 test("a picked overlay index selects its component through componentKeys", async () => {
