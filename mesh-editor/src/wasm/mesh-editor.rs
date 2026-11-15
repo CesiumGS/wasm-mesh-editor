@@ -2,6 +2,8 @@
 
 #[path = "mesh-editor/attributes.rs"]
 mod attributes;
+#[path = "mesh-editor/hidden_components.rs"]
+mod hidden_components;
 #[path = "mesh-editor/selection.rs"]
 mod selection;
 
