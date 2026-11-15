@@ -19,8 +19,8 @@ vec2 topologyOverlay_viewportSize();
 // Distance from the eye to the near plane, positive. The depth bias stops short of it, so a
 // tight near plane doesn't clip biased points and edges. 0 disables the cap.
 float topologyOverlay_nearDistance();
-// Called once per vertex, after `gl_Position` is final, with the vertex's eye position (before
-// any screen-space offset) and the drawn component's overlay index. The place for per-vertex
+// Called once per vertex of each visible component, after `gl_Position` is final, with the
+// vertex's eye position (before any screen-space offset) and the drawn component's overlay index. The place for per-vertex
 // outputs such as custom depth and pick colors. May adjust `gl_Position`'s depth.
 void topologyOverlay_setVertexOutputs(vec4 positionEC, uint componentIndex);
 
@@ -28,8 +28,8 @@ void topologyOverlay_setVertexOutputs(vec4 positionEC, uint componentIndex);
 
 // `[x, y, z, 0]` per vertex.
 uniform highp sampler2D u_positionTexture;
-// Selection of the drawn component kind: 0 unselected, 1 selected.
-uniform highp sampler2D u_selectionTexture;
+// Flags of the drawn component type: a bitwise OR of the flags below.
+uniform highp usampler2D u_flagTexture;
 // Pulls the overlay toward the camera, as a fraction of eye-space depth.
 uniform float u_depthBias;
 
@@ -45,10 +45,26 @@ vec3 topologyOverlay_fetchPosition(uint vertexIndex)
     return texelFetch(u_positionTexture, coord, 0).xyz;
 }
 
-float topologyOverlay_fetchSelected(uint componentIndex)
+const uint TOPOLOGY_OVERLAY_SELECTED = 1u;
+const uint TOPOLOGY_OVERLAY_HIDDEN = 2u;
+
+// Outside the clip volume, so the GPU discards any primitive with all its vertices here.
+const vec4 TOPOLOGY_OVERLAY_CULLED = vec4(2.0, 2.0, 2.0, 1.0);
+
+uint topologyOverlay_fetchFlags(uint componentIndex)
 {
-    ivec2 coord = topologyOverlay_texelCoord(componentIndex, textureSize(u_selectionTexture, 0));
-    return texelFetch(u_selectionTexture, coord, 0).r > 0.5 ? 1.0 : 0.0;
+    ivec2 coord = topologyOverlay_texelCoord(componentIndex, textureSize(u_flagTexture, 0));
+    return texelFetch(u_flagTexture, coord, 0).r;
+}
+
+bool topologyOverlay_isSelected(uint flags)
+{
+    return (flags & TOPOLOGY_OVERLAY_SELECTED) != 0u;
+}
+
+bool topologyOverlay_isHidden(uint flags)
+{
+    return (flags & TOPOLOGY_OVERLAY_HIDDEN) != 0u;
 }
 
 vec4 topologyOverlay_applyDepthBias(vec4 positionEC)

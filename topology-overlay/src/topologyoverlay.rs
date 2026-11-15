@@ -64,15 +64,24 @@ impl DirtyRangeBuilder {
     }
 }
 
-/// Selection buffers by component kind: 0 unselected, 255 selected.
+bitflags::bitflags! {
+    /// Per-component state packed into one byte of a flag buffer.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub struct ComponentFlags: u8 {
+        const SELECTED = 0b01;
+        const HIDDEN = 0b10;
+    }
+}
+
+/// [`ComponentFlags`] buffers by component type, one byte per component.
 #[derive(Default)]
-pub struct SelectionBuffers {
+pub struct ComponentFlagBuffers {
     pub verts: OverlayBuffer<u8>,
     pub edges: OverlayBuffer<u8>,
     pub faces: OverlayBuffer<u8>,
 }
 
-impl Index<ComponentType> for SelectionBuffers {
+impl Index<ComponentType> for ComponentFlagBuffers {
     type Output = OverlayBuffer<u8>;
 
     fn index(&self, kind: ComponentType) -> &Self::Output {
@@ -84,7 +93,7 @@ impl Index<ComponentType> for SelectionBuffers {
     }
 }
 
-impl IndexMut<ComponentType> for SelectionBuffers {
+impl IndexMut<ComponentType> for ComponentFlagBuffers {
     fn index_mut(&mut self, kind: ComponentType) -> &mut Self::Output {
         match kind {
             ComponentType::Vertex => &mut self.verts,
@@ -103,8 +112,8 @@ pub struct OverlayBuffers {
     pub edges: OverlayBuffer<[u32; 2]>,
     /// Three position indices and a face index per triangle.
     pub triangles: OverlayBuffer<[u32; 4]>,
-    /// Selection by vertex, edge, or face index: 0 unselected, 255 selected.
-    pub selection: SelectionBuffers,
+    /// [`ComponentFlags`] by vertex, edge, or face index.
+    pub flags: ComponentFlagBuffers,
     /// Mesh component keys in the same order as each buffer, mapping buffer elements to mesh components. For faces,
     /// an entry here corresponds to a face (the 4th element) in the `triangles` buffer entry.
     /// Changes only on a full refresh.
@@ -157,31 +166,35 @@ impl OverlayBuffers {
             }
         }
 
-        let selected = mesh.selection();
-        let mut selection = SelectionBuffers {
+        let mut flags = ComponentFlagBuffers {
             verts: OverlayBuffer::new(vec![0; vertices.len()]),
             edges: OverlayBuffer::new(vec![0; edges.len()]),
             faces: OverlayBuffer::new(vec![0; faces.len()]),
         };
 
-        // Generally speaking, these loops do nothing (since TopologyOverlay is usually created over a new mesh, with nothing selected yet)
-        for key in selected.verts() {
-            selection[ComponentType::Vertex].data[vertex_indices[key] as usize] = 255;
-        }
+        // Usually does nothing, since overlays are typically created over new meshes.
+        for (set, flag) in [
+            (&*mesh.selection(), ComponentFlags::SELECTED),
+            (mesh.hidden_components(), ComponentFlags::HIDDEN),
+        ] {
+            for key in set.verts() {
+                flags.verts.data[vertex_indices[key] as usize] |= flag.bits();
+            }
 
-        for key in selected.edges() {
-            selection[ComponentType::Edge].data[edge_indices[key] as usize] = 255;
-        }
+            for key in set.edges() {
+                flags.edges.data[edge_indices[key] as usize] |= flag.bits();
+            }
 
-        for key in selected.faces() {
-            selection[ComponentType::Face].data[face_indices[key] as usize] = 255;
+            for key in set.faces() {
+                flags.faces.data[face_indices[key] as usize] |= flag.bits();
+            }
         }
 
         Self {
             positions: OverlayBuffer::new(positions),
             edges: OverlayBuffer::new(edge_endpoints),
             triangles: OverlayBuffer::new(triangles),
-            selection,
+            flags,
             component_keys,
             full_refresh: true,
         }
@@ -198,7 +211,7 @@ impl OverlayBuffers {
             ComponentType::Edge,
             ComponentType::Face,
         ] {
-            self.selection[kind].dirty_range = None;
+            self.flags[kind].dirty_range = None;
         }
     }
 }
@@ -286,7 +299,10 @@ impl TopologyOverlay {
                 MeshChange::Attributes(AttributeChange::Position(keys)) => {
                     self.update_positions(mesh, keys.iter().copied());
                 }
-                MeshChange::Selection(change) => self.update_selection(change),
+                MeshChange::Selection(change) => {
+                    self.update_flags(change, ComponentFlags::SELECTED);
+                }
+                MeshChange::Hidden(change) => self.update_flags(change, ComponentFlags::HIDDEN),
                 _ => {}
             }
         }
@@ -315,25 +331,28 @@ impl TopologyOverlay {
         }
     }
 
-    fn update_selection(&mut self, change: &ComponentSetChange) {
-        for (keys, value) in [(&change.added, 255), (&change.removed, 0)] {
-            Self::set_selection(
-                &mut self.buffers.selection[ComponentType::Vertex],
+    fn update_flags(&mut self, change: &ComponentSetChange, flag: ComponentFlags) {
+        for (keys, on) in [(&change.added, true), (&change.removed, false)] {
+            Self::set_flag(
+                &mut self.buffers.flags.verts,
                 &keys.verts,
                 &self.vertex_key_to_buffer_index,
-                value,
+                flag,
+                on,
             );
-            Self::set_selection(
-                &mut self.buffers.selection[ComponentType::Edge],
+            Self::set_flag(
+                &mut self.buffers.flags.edges,
                 &keys.edges,
                 &self.edge_key_to_buffer_index,
-                value,
+                flag,
+                on,
             );
-            Self::set_selection(
-                &mut self.buffers.selection[ComponentType::Face],
+            Self::set_flag(
+                &mut self.buffers.flags.faces,
                 &keys.faces,
                 &self.face_key_to_buffer_index,
-                value,
+                flag,
+                on,
             );
         }
 
@@ -342,11 +361,12 @@ impl TopologyOverlay {
         }
     }
 
-    fn set_selection<K: Key>(
+    fn set_flag<K: Key>(
         buffer: &mut OverlayBuffer<u8>,
         keys: &[K],
         indices: &SecondaryMap<K, u32>,
-        value: u8,
+        flag: ComponentFlags,
+        on: bool,
     ) {
         let mut dirty = DirtyRangeBuilder::new();
 
@@ -356,7 +376,9 @@ impl TopologyOverlay {
             };
 
             let index = index as usize;
-            buffer.data[index] = value;
+            let mut flags = ComponentFlags::from_bits_retain(buffer.data[index]);
+            flags.set(flag, on);
+            buffer.data[index] = flags.bits();
             dirty.include(index);
         }
 

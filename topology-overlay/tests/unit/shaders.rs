@@ -101,7 +101,7 @@ fn declared_uniforms(sources: ShaderSources) -> BTreeSet<&'static str> {
 fn shaders_declare_exactly_their_exported_uniforms() {
     use uniforms::*;
 
-    let shared = [POSITION_TEXTURE, SELECTION_TEXTURE, DEPTH_BIAS];
+    let shared = [POSITION_TEXTURE, FLAG_TEXTURE, DEPTH_BIAS];
 
     for (name, shader, specific) in [
         (
@@ -133,4 +133,20 @@ fn shaders_declare_exactly_their_exported_uniforms() {
         declared_uniforms(DEFAULT_HOOKS),
         BTreeSet::from([MODEL_VIEW, PROJECTION, VIEWPORT_SIZE])
     );
+}
+
+#[test]
+fn shader_flag_constants_match_component_flags() {
+    for (name, shader) in SHADERS {
+        for (constant, flag) in [
+            ("TOPOLOGY_OVERLAY_SELECTED", crate::ComponentFlags::SELECTED),
+            ("TOPOLOGY_OVERLAY_HIDDEN", crate::ComponentFlags::HIDDEN),
+        ] {
+            let declaration = format!("const uint {constant} = {}u;", flag.bits());
+            assert!(
+                shader.vertex.contains(&declaration),
+                "{name} doesn't declare `{declaration}`"
+            );
+        }
+    }
 }
