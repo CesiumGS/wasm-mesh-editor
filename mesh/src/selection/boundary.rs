@@ -87,7 +87,7 @@ impl<'a> SelectionBoundary<'a> {
             let mut mixed = HashSet::new();
             let mut visited_faces = HashSet::new();
 
-            for &vert_key in self.selection.verts.iter() {
+            for &vert_key in self.selection.components.verts.iter() {
                 for face_key in self.topo.vert_faces(vert_key) {
                     if !visited_faces.insert(face_key) {
                         continue;
@@ -96,7 +96,7 @@ impl<'a> SelectionBoundary<'a> {
                     if self
                         .topo
                         .face_verts(face_key)
-                        .all(|key| self.selection.verts.contains(&key))
+                        .all(|key| self.selection.components.verts.contains(&key))
                     {
                         continue;
                     }
@@ -130,7 +130,7 @@ impl<'a> SelectionBoundary<'a> {
         cache.side(selected).get_or_init(|| {
             let mut boundary = HashSet::new();
 
-            for &key in self.selection.verts.iter() {
+            for &key in self.selection.components.verts.iter() {
                 for edge_key in self.topo.vert_edges(key) {
                     let edge = &self.topo.edges[edge_key];
                     // When stepping by face, skip edges that are part of a face (i.e., not wire edges)
@@ -140,7 +140,7 @@ impl<'a> SelectionBoundary<'a> {
 
                     // If neighbor is selected, this vertex is not on the boundary
                     let neighbor = edge.verts[usize::from(edge.verts[0] == key)];
-                    if self.selection.verts.contains(&neighbor) {
+                    if self.selection.components.verts.contains(&neighbor) {
                         continue;
                     }
 
@@ -156,7 +156,7 @@ impl<'a> SelectionBoundary<'a> {
                 boundary.extend(
                     self.topo
                         .face_verts(face_key)
-                        .filter(|key| self.selection.verts.contains(key) == selected),
+                        .filter(|key| self.selection.components.verts.contains(key) == selected),
                 );
             }
 
@@ -172,9 +172,9 @@ impl<'a> SelectionBoundary<'a> {
 
         cache.side(selected).get_or_init(|| {
             let mut boundary = HashSet::new();
-            for &key in &self.selection.faces {
+            for &key in &self.selection.components.faces {
                 let mut visit = |neighbor| {
-                    if self.selection.faces.contains(&neighbor) {
+                    if self.selection.components.faces.contains(&neighbor) {
                         return;
                     }
 

@@ -75,7 +75,7 @@ impl Tool for TranslateTool {
     }
 
     fn supports_edit_mode(&self, mode: EditMode) -> bool {
-        !mode.selection_level.is_empty()
+        !mode.interactable_components.is_empty()
     }
 
     fn activate(&mut self, _context: &mut ToolContext<'_>) {}

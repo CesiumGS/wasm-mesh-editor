@@ -22,7 +22,7 @@ impl ActiveMeshes {
         self.keys.contains(&key)
     }
 
-    /// Applies `mode`'s selection level to the mesh and appends it to the active set.
+    /// Applies `mode`'s interactable components to the mesh and appends it to the active set.
     /// Does nothing if the mesh is already active. Returns [`MeshNotFound`] for an unknown key.
     pub(crate) fn activate(
         &mut self,
@@ -36,7 +36,7 @@ impl ActiveMeshes {
             return Ok(());
         }
 
-        mesh.selection_mut().set_level(mode.selection_level);
+        mesh.set_interactable_components(mode.interactable_components);
         self.keys.push(key);
         Self::record(&mut self.activated, &mut self.deactivated, key);
 

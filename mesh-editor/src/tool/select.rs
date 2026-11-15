@@ -159,7 +159,7 @@ impl Tool for SelectTool {
         };
         let action = self.modifiers_policy.action(input.modifiers);
 
-        if context.mode().selection_level.is_empty() {
+        if context.mode().interactable_components.is_empty() {
             Self::select_meshes(context, action, mesh_hits);
         } else {
             Self::select_components(context, action, mesh_hits);

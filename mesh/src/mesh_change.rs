@@ -10,7 +10,7 @@ use crate::{ComponentKeys, EdgeKey, FaceKey, LoopKey, VertKey};
 pub enum MeshChange {
     Attributes(AttributeChange),
     Topology(TopologyChange),
-    Selection(SelectionChange),
+    Selection(ComponentSetChange),
 }
 
 impl MeshChange {
@@ -23,7 +23,7 @@ impl MeshChange {
     }
 }
 
-/// Unlike TopologyChange and SelectionChange, AttributeChange shares affected keys through `Rc`, avoiding per-frame key copies during
+/// Unlike TopologyChange and ComponentSetChange, AttributeChange shares affected keys through `Rc`, avoiding per-frame key copies during
 /// interactive edits such as translation (a hot path). Selection changes copy-on-write to these keys to preserve existing, unprocessed change events.
 pub enum AttributeChange {
     Position(Rc<HashSet<VertKey>>),
@@ -60,14 +60,14 @@ impl TopologyChange {
     }
 }
 
-/// Selection events contain only net membership changes from a single operation.
+/// Net membership changes to a set of components from a single operation.
 #[derive(Default)]
-pub struct SelectionChange {
+pub struct ComponentSetChange {
     pub added: ComponentKeys,
     pub removed: ComponentKeys,
 }
 
-impl SelectionChange {
+impl ComponentSetChange {
     /// Cancels opposing changes, including components changed more than once.
     pub fn normalize(&mut self) {
         let mut counts = HashMap::new();
