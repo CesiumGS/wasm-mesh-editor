@@ -182,16 +182,15 @@ impl Attributes {
         find_custom(&self.corner_custom, name)
     }
 
-    /// Vertices whose `name` custom attribute equals `value`.
-    /// TODO: support other predicates, such as not equal, less than, and greater than.
+    /// Vertices whose custom attribute (`name`) satisfies `predicate`.
     ///
     /// # Errors
     /// If there's no vertex attribute called `name`, or it holds a different type than `T`.
-    pub fn verts_where<T: AttributeValue + PartialEq>(
+    pub fn verts_where<T: AttributeValue, P: Fn(T) -> bool>(
         &self,
         name: &str,
-        value: T,
-    ) -> Result<impl Iterator<Item = VertKey> + use<'_, T>, AttributeLookupError> {
+        predicate: P,
+    ) -> Result<impl Iterator<Item = VertKey> + use<'_, T, P>, AttributeLookupError> {
         let values = self
             .vertex_attribute(name)
             .ok_or_else(|| AttributeLookupError::NotFound { name: name.into() })?
@@ -200,7 +199,7 @@ impl Attributes {
 
         Ok(values
             .iter()
-            .filter(move |&(_, vert_value)| *vert_value == value)
+            .filter(move |&(_, &vert_value)| predicate(vert_value))
             .map(|(vert, _)| vert))
     }
 
