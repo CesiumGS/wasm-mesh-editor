@@ -1,5 +1,7 @@
 use super::*;
-use crate::{ComponentKeys, ComponentType, EdgeKey, FaceKey, Mesh, MeshBuffers, VertKey};
+use crate::{
+    AttributeBuffer, ComponentKeys, ComponentType, EdgeKey, FaceKey, Mesh, MeshBuffers, VertKey,
+};
 use event_emitter::Event;
 use glam::Vec3;
 use slotmap::Key;
@@ -7,6 +9,7 @@ use std::collections::HashSet;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 /// Two triangles sharing the edge between vertices 0 and 2: faces `[0, 1, 2]` and `[0, 2, 3]`.
+/// Each vertex's `_ID` attribute is its index.
 struct TwoTriangles {
     mesh: Mesh,
     verts: Vec<VertKey>,
@@ -18,6 +21,7 @@ impl TwoTriangles {
         let mesh = Mesh::from_buffers(MeshBuffers {
             positions: vec![Vec3::ZERO, Vec3::X, Vec3::ONE, Vec3::Y],
             indices: vec![0, 1, 2, 0, 2, 3],
+            vertex_attributes: vec![("_ID".into(), AttributeBuffer::U32(vec![0, 1, 2, 3]))],
             ..Default::default()
         })
         .unwrap();
@@ -257,4 +261,69 @@ fn hide_and_show_do_not_change_selection() {
         MeshChange::Hidden(_)
     ));
     assert_no_event(&changes);
+}
+
+#[test]
+fn hide_and_show_verts_by_attribute() {
+    let TwoTriangles {
+        mut mesh,
+        verts,
+        faces,
+    } = TwoTriangles::new();
+    let changes = mesh.subscribe();
+
+    mesh.hidden_components_mut()
+        .hide_by_attribute::<VertKey, _>("_ID", |id: u32| id >= 2, HideOptions::default())
+        .unwrap();
+    assert_eq!(hidden(&mesh), keys(&[verts[2].into(), verts[3].into()]));
+    assert_hidden_event(&changes, &[verts[2].into(), verts[3].into()], &[]);
+
+    mesh.hidden_components_mut()
+        .hide_by_attribute::<VertKey, _>("_ID", |id: u32| id == 1, EXTEND)
+        .unwrap();
+    assert_eq!(
+        hidden(&mesh),
+        keys(&[
+            verts[1].into(),
+            verts[2].into(),
+            verts[3].into(),
+            faces[0].into()
+        ])
+    );
+
+    mesh.hidden_components_mut()
+        .show_by_attribute::<VertKey, _>("_ID", |id: u32| id != 3, EXTEND)
+        .unwrap();
+    assert_eq!(hidden(&mesh), keys(&[verts[3].into()]));
+}
+
+#[test]
+fn hiding_by_attribute_only_hides_interactable_vertices() {
+    let mut mesh = TwoTriangles::new().mesh;
+    mesh.set_interactable_components(ComponentMask::FACE);
+    let changes = mesh.subscribe();
+
+    mesh.hidden_components_mut()
+        .hide_by_attribute::<VertKey, _>("_ID", |_: u32| true, EXTEND)
+        .unwrap();
+
+    assert!(mesh.hidden_components().is_empty());
+    assert_no_event(&changes);
+}
+
+#[test]
+fn hiding_by_attribute_reports_lookup_errors() {
+    let mut mesh = TwoTriangles::new().mesh;
+    let mut hidden = mesh.hidden_components_mut();
+
+    assert_eq!(
+        hidden.hide_by_attribute::<VertKey, _>("_MISSING", |_: u32| true, HideOptions::default()),
+        Err(AttributeError::NotFound {
+            name: "_MISSING".into()
+        })
+    );
+    assert_eq!(
+        hidden.show_by_attribute::<VertKey, _>("_ID", |_: f32| true, HideOptions::default()),
+        Err(AttributeError::WrongType { name: "_ID".into() })
+    );
 }

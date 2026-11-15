@@ -18,13 +18,13 @@ use wasm_bindgen::prelude::*;
 use super::{ComponentKeysJs, active_mesh, ffi, key_from_ffi};
 use crate::{MeshEditor, MeshKey, MeshNotFound};
 
-/// The result of an attribute function, like `selectByAttribute` or `addAttribute`. Only `Ok`
-/// indicates success.
+/// The result of an attribute function, like `selectByAttribute`, `hideByAttribute` or
+/// `addAttribute`. Only `Ok` indicates success.
 #[wasm_bindgen]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttributeResult {
     /// The call succeeded. By-attribute functions apply to any matching components, which may be
-    /// none if nothing matched or the components aren't selectable in the current mode.
+    /// none if nothing matched or the components aren't interactable in the current mode.
     Ok = 0,
     /// The mesh has no attribute with that name.
     AttributeNotFound = 1,
@@ -172,7 +172,8 @@ impl MeshEditor {
     }
 
     /// The vertices, edges or faces whose `name` attribute compares to `value` as `comparison`
-    /// says, like `selectByAttribute`. Works on inactive meshes. Throws for an unknown mesh key.
+    /// says, like `selectByAttribute`. Includes hidden components and works on inactive meshes.
+    /// Throws for an unknown mesh key.
     #[wasm_bindgen(js_name = queryByAttribute)]
     pub fn query_by_attribute(
         &self,

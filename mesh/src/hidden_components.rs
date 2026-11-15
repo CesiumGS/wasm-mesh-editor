@@ -3,8 +3,8 @@
 use event_emitter::EventEmitter;
 
 use crate::{
-    ComponentKey, ComponentMask, ComponentSet, ComponentSetChange, FaceKey, IntoComponentKey,
-    MeshChange, Topology,
+    AttributeError, AttributeKey, AttributeValue, Attributes, ComponentKey, ComponentMask,
+    ComponentSet, ComponentSetChange, FaceKey, IntoComponentKey, MeshChange, Topology,
 };
 
 /// Options for [`HiddenComponents::hide`] and [`HiddenComponents::show`].
@@ -27,6 +27,7 @@ pub struct HideOptions {
 pub struct HiddenComponents<'a> {
     pub(crate) hidden: &'a mut ComponentSet,
     pub(crate) topo: &'a Topology,
+    pub(crate) attrs: &'a Attributes,
     pub(crate) interactable: ComponentMask,
     pub(crate) changes: &'a mut EventEmitter<MeshChange>,
 }
@@ -44,6 +45,40 @@ impl HiddenComponents<'_> {
     /// Shows the given components of interactable types.
     pub fn show<K: IntoComponentKey>(&mut self, keys: &[K], options: HideOptions) {
         self.apply(keys, options, false);
+    }
+
+    /// Hides every component whose `name` attribute satisfies `predicate`. Works just like
+    /// [`Self::hide`], so it does nothing unless `K`'s components are interactable.
+    ///
+    /// # Errors
+    /// Like [`Attributes::values`].
+    pub fn hide_by_attribute<K: AttributeKey + IntoComponentKey, T: AttributeValue>(
+        &mut self,
+        name: &str,
+        predicate: impl Fn(T) -> bool,
+        options: HideOptions,
+    ) -> Result<(), AttributeError> {
+        let keys: Vec<K> = self.attrs.keys_where(name, predicate)?.collect();
+
+        self.hide(&keys, options);
+        Ok(())
+    }
+
+    /// Shows every component whose `name` attribute satisfies `predicate`, like
+    /// [`Self::hide_by_attribute`].
+    ///
+    /// # Errors
+    /// Like [`Attributes::values`].
+    pub fn show_by_attribute<K: AttributeKey + IntoComponentKey, T: AttributeValue>(
+        &mut self,
+        name: &str,
+        predicate: impl Fn(T) -> bool,
+        options: HideOptions,
+    ) -> Result<(), AttributeError> {
+        let keys: Vec<K> = self.attrs.keys_where(name, predicate)?.collect();
+
+        self.show(&keys, options);
+        Ok(())
     }
 
     /// Shows every hidden component, regardless of type.

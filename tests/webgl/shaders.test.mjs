@@ -1625,3 +1625,67 @@ test("CustomAttribute constructors throw for a componentCount that doesn't fit t
     assert.throws(create, /_A length \d is not a multiple of \d/);
   }
 });
+
+test("hideByAttribute and showByAttribute hide and show matching vertices", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal, Less, GreaterOrEqual } = AttributeComparison;
+  const { Ok } = AttributeResult;
+  const extend = { extendToConnectedFaces: true };
+
+  assert.equal(editor.hideByAttribute(key, "_ID", Less, 0), Ok);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [0], edges: [], faces: [] });
+
+  // Vertex 3 is only in face 1.
+  assert.equal(editor.hideByAttribute(key, "_ID", Equal, 2, extend), Ok);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [0, 3], edges: [], faces: [1] });
+
+  assert.equal(editor.showByAttribute(key, "_ID", GreaterOrEqual, 0), Ok);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [0], edges: [], faces: [1] });
+
+  // Vertex 0 is only in face 0, so face 1 stays hidden.
+  assert.equal(editor.showByAttribute(key, "_ID", Less, 0, extend), Ok);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [1] });
+
+  assert.equal(editor.showByAttribute(key, "_ID", Equal, 2, extend), Ok);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [] });
+  editor.free();
+});
+
+test("hideByAttribute reports lookups that hide nothing", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal, Less } = AttributeComparison;
+
+  for (const [name, comparison, value, result] of [
+    ["_MISSING", Equal, 0, AttributeResult.AttributeNotFound],
+    ["_ID", Equal, 1.5, AttributeResult.WrongType],
+    ["_COLOR", Less, [1, 0, 0], AttributeResult.UnsupportedComparison],
+  ]) {
+    assert.equal(editor.hideByAttribute(key, name, comparison, value), result, name);
+  }
+
+  editor.setMode(1 << ComponentType.Face);
+  assert.equal(
+    editor.hideByAttribute(key, "_ID", Equal, 0),
+    AttributeResult.Ok,
+    "vertices aren't interactable",
+  );
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [] });
+
+  editor.setMeshInactive(key);
+  for (const call of [
+    () => editor.hideByAttribute(key, "_ID", Equal, 0),
+    () => editor.showByAttribute(key, "_ID", Equal, 0),
+  ]) {
+    assert.equal(call(), AttributeResult.MeshInactive);
+  }
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.hideByAttribute(key, "_ID", Equal, 0), /is not registered/);
+  editor.free();
+});
