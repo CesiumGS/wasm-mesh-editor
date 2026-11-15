@@ -38,7 +38,7 @@ const sharedUniforms = [
   "u_modelView",
   "u_projection",
   "u_positionTexture",
-  "u_selectionTexture",
+  "u_flagTexture",
   "u_depthBias",
 ];
 
@@ -231,10 +231,10 @@ function textureFormat({ scalarType, components }) {
         type: "UNSIGNED_INT",
         arrayType: "Uint32Array",
       };
-    case "unorm8":
+    case "uint8":
       return {
-        internalFormat: ["R8", "RG8", "RGB8", "RGBA8"][components - 1],
-        format: channels,
+        internalFormat: ["R8UI", "RG8UI", "RGB8UI", "RGBA8UI"][components - 1],
+        format: `${channels}_INTEGER`,
         type: "UNSIGNED_BYTE",
         arrayType: "Uint8Array",
       };
@@ -350,7 +350,7 @@ test("point shader draws a disc per vertex, colored by selection", async () => {
     componentType: ComponentType.Vertex,
     index: 1,
   });
-  const textures = [overlayTexture(views.positions), overlayTexture(views.selection.verts)];
+  const textures = [overlayTexture(views.positions), overlayTexture(views.flags.verts)];
   editor.free();
 
   const { error, pixels } = await page.evaluate((args) => window.renderShader(args), {
@@ -413,7 +413,7 @@ test("edge shader draws a fixed-width quad per edge, colored by selection", asyn
   ]);
   const textures = [
     overlayTexture(views.positions),
-    overlayTexture(views.selection.edges),
+    overlayTexture(views.flags.edges),
     overlayTexture(views.edges),
   ];
   editor.free();
@@ -465,7 +465,7 @@ for (const [label, bZ] of [
     const { editor, views } = triangleOverlay([0, -0.2, -2, 0, -0.2, bZ, 0, -1, -2]);
     const textures = [
       overlayTexture(views.positions),
-      overlayTexture(views.selection.edges),
+      overlayTexture(views.flags.edges),
       overlayTexture(views.edges),
     ];
     editor.free();
@@ -562,7 +562,7 @@ function facePickDraw(views) {
   return {
     textures: [
       overlayTexture(views.positions),
-      overlayTexture(views.selection.faces),
+      overlayTexture(views.flags.faces),
       overlayTexture(views.triangles),
     ],
     uniforms: { [uniforms.face.isPickPass]: { type: "bool", value: true } },
@@ -590,7 +590,7 @@ test("setVertexOutputs receives each drawn component's overlay index", async () 
   const edges = readElements(views.edges);
   const draws = {
     point: {
-      textures: [positions, overlayTexture(views.selection.verts)],
+      textures: [positions, overlayTexture(views.flags.verts)],
       uniforms: {
         [uniforms.point.size]: { type: "float", value: 6 },
         [uniforms.point.color]: { type: "vec4", value: [1, 1, 1, 1] },
@@ -600,7 +600,7 @@ test("setVertexOutputs receives each drawn component's overlay index", async () 
       instanceCount: views.positions.elementCount,
     },
     edge: {
-      textures: [positions, overlayTexture(views.selection.edges), overlayTexture(views.edges)],
+      textures: [positions, overlayTexture(views.flags.edges), overlayTexture(views.edges)],
       uniforms: {
         [uniforms.edge.width]: { type: "float", value: 4 },
         [uniforms.edge.color]: { type: "vec4", value: [1, 1, 1, 1] },
@@ -634,6 +634,72 @@ test("setVertexOutputs receives each drawn component's overlay index", async () 
   assert.deepEqual([face(32, 24), face(44, 36), face(8, 56)], [0, 1, -1]);
 });
 
+/** `ComponentFlags.HIDDEN`, as documented on `OverlayFlagViews`. */
+const HIDDEN = 2;
+
+/** A copy of a flag texture with the hidden bit set at `indices`. */
+function hideInTexture(texture, indices) {
+  const data = [...texture.data];
+
+  for (const index of indices) {
+    data[index] |= HIDDEN;
+  }
+
+  return { ...texture, data };
+}
+
+test("hidden components aren't drawn or picked", async () => {
+  const { editor, key } = twoTriangleEditor();
+  const views = editor.overlayViews(key);
+  const positions = overlayTexture(views.positions);
+  const edges = readElements(views.edges);
+  const sharedEdge = edges.findIndex(([a, b]) => a + b === 3);
+  const faceDraw = facePickDraw(views);
+  faceDraw.textures[1] = hideInTexture(faceDraw.textures[1], [1]);
+  const draws = {
+    point: {
+      textures: [positions, hideInTexture(overlayTexture(views.flags.verts), [1])],
+      uniforms: {
+        [uniforms.point.size]: { type: "float", value: 6 },
+        [uniforms.point.color]: { type: "vec4", value: [1, 1, 1, 1] },
+      },
+      mode: "TRIANGLE_STRIP",
+      vertexCount: 4,
+      instanceCount: views.positions.elementCount,
+    },
+    edge: {
+      textures: [
+        positions,
+        hideInTexture(overlayTexture(views.flags.edges), [sharedEdge]),
+        overlayTexture(views.edges),
+      ],
+      uniforms: {
+        [uniforms.edge.width]: { type: "float", value: 4 },
+        [uniforms.edge.color]: { type: "vec4", value: [1, 1, 1, 1] },
+      },
+      mode: "TRIANGLE_STRIP",
+      vertexCount: 4,
+      instanceCount: views.edges.elementCount,
+    },
+    face: faceDraw,
+  };
+  editor.free();
+
+  const render = (name) => renderPick(name, draws[name]);
+
+  // Vertex 1 is at pixel (48, 16).
+  const point = await render("point");
+  assert.deepEqual([point(16, 16), point(48, 16), point(32, 48), point(48, 48)], [0, -1, 2, 3]);
+
+  // The shared edge, from vertex 1 to 2, has its midpoint at pixel (40, 32).
+  const edge = await render("edge");
+  assert.equal(edge(40, 32), -1);
+  assert.equal(edge(32, 16), edges.findIndex(([a, b]) => a + b === 1));
+
+  const face = await render("face");
+  assert.deepEqual([face(32, 24), face(44, 36)], [0, -1]);
+});
+
 test("a picked overlay index selects its component through componentKeys", async () => {
   const { editor, key } = twoTriangleEditor();
   const views = editor.overlayViews(key);
@@ -652,8 +718,8 @@ test("a picked overlay index selects its component through componentKeys", async
   editor.update(0, result);
   result.free();
 
-  const { address, elementCount } = editor.overlayViews(key).selection.faces;
-  assert.deepEqual(Array.from(new Uint8Array(memory.buffer, address, elementCount)), [0, 255]);
+  const { address, elementCount } = editor.overlayViews(key).flags.faces;
+  assert.deepEqual(Array.from(new Uint8Array(memory.buffer, address, elementCount)), [0, 1]);
   editor.free();
 });
 

@@ -99,8 +99,9 @@ pub struct TopologyOverlayUniforms {
 ///   `vec4 topologyOverlay_eyeToClip(vec4 positionEC)`, `vec2 topologyOverlay_viewportSize()`,
 ///   and `void topologyOverlay_setVertexOutputs(vec4 positionEC, uint componentIndex)`.
 ///   `eyeToClip` must be linear, like a projection matrix, and free of side effects: it may be
-///   called more than once per vertex. `setVertexOutputs` is called once per vertex after
-///   `gl_Position` is final, for outputs such as custom depth and pick colors.
+///   called more than once per vertex. `setVertexOutputs` is called once per vertex of each
+///   visible component, after `gl_Position` is final, for outputs such as custom depth and pick
+///   colors.
 /// - fragment: `void topologyOverlay_writeColor(vec4 color)`
 #[derive(Serialize, Tsify)]
 #[serde(rename_all = "camelCase")]

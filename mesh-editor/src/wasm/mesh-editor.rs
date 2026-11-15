@@ -32,15 +32,15 @@ use crate::{
 pub enum ScalarType {
     Float32,
     Uint32,
-    /// An unsigned byte that shaders read as a normalized value: 255 is 1.0.
-    Unorm8,
+    /// An unsigned byte that shaders read as an unsigned integer.
+    Uint8,
 }
 
 impl ScalarType {
     const fn size(self) -> usize {
         match self {
             Self::Float32 | Self::Uint32 => 4,
-            Self::Unorm8 => 1,
+            Self::Uint8 => 1,
         }
     }
 }
@@ -77,7 +77,7 @@ impl OverlayElement for [u32; 4] {
 }
 
 impl OverlayElement for u8 {
-    const SCALAR_TYPE: ScalarType = ScalarType::Unorm8;
+    const SCALAR_TYPE: ScalarType = ScalarType::Uint8;
     const COMPONENTS: usize = 1;
 }
 
@@ -198,10 +198,11 @@ impl ComponentKeysJs {
     }
 }
 
-/// Selection buffers by component kind. One value per component: 0 unselected, 255 selected.
-/// Each binds to the same uniform, in the draw for its component kind.
+/// Flag buffers by component type, one byte per component: bit 0 (value 1) is set for selected
+/// components, and bit 1 (value 2) for hidden ones. Each binds to the same uniform, in the draw
+/// for its component type.
 #[derive(Serialize, Tsify)]
-pub struct OverlaySelectionViews {
+pub struct OverlayFlagViews {
     verts: OverlayBufferView,
     edges: OverlayBufferView,
     faces: OverlayBufferView,
@@ -223,7 +224,7 @@ pub struct OverlayViews {
     edges: OverlayBufferView,
     /// Three vertex indices and a face index per triangle.
     triangles: OverlayBufferView,
-    selection: OverlaySelectionViews,
+    flags: OverlayFlagViews,
     /// Changes only when `fullRefresh` is set.
     component_keys: OverlayKeyViews,
 }
@@ -235,19 +236,10 @@ impl OverlayViews {
             positions: OverlayBufferView::new(&buffers.positions, uniforms::POSITION_TEXTURE),
             edges: OverlayBufferView::new(&buffers.edges, uniforms::EDGE_TEXTURE),
             triangles: OverlayBufferView::new(&buffers.triangles, uniforms::TRIANGLE_TEXTURE),
-            selection: OverlaySelectionViews {
-                verts: OverlayBufferView::new(
-                    &buffers.selection.verts,
-                    uniforms::SELECTION_TEXTURE,
-                ),
-                edges: OverlayBufferView::new(
-                    &buffers.selection.edges,
-                    uniforms::SELECTION_TEXTURE,
-                ),
-                faces: OverlayBufferView::new(
-                    &buffers.selection.faces,
-                    uniforms::SELECTION_TEXTURE,
-                ),
+            flags: OverlayFlagViews {
+                verts: OverlayBufferView::new(&buffers.flags.verts, uniforms::FLAG_TEXTURE),
+                edges: OverlayBufferView::new(&buffers.flags.edges, uniforms::FLAG_TEXTURE),
+                faces: OverlayBufferView::new(&buffers.flags.faces, uniforms::FLAG_TEXTURE),
             },
             component_keys: OverlayKeyViews {
                 verts: OverlayKeyView::new(&buffers.component_keys.verts),

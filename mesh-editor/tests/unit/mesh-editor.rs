@@ -307,9 +307,9 @@ fn assert_no_overlay_changes(editor: &MeshEditor, key: MeshKey) {
     assert!(buffers.triangles.dirty_range.is_none());
 
     for selection in [
-        &buffers.selection.verts,
-        &buffers.selection.edges,
-        &buffers.selection.faces,
+        &buffers.flags.verts,
+        &buffers.flags.edges,
+        &buffers.flags.faces,
     ] {
         assert!(selection.dirty_range.is_none());
     }
@@ -582,7 +582,7 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
             .positions
             .data
             .as_ptr();
-        let selection = editor.overlay_buffers(target).unwrap().selection[kind]
+        let selection = editor.overlay_buffers(target).unwrap().flags[kind]
             .data
             .as_ptr();
         let hits = [PickHit {
@@ -598,7 +598,7 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
             selected_vertices
         );
         assert_eq!(
-            editor.overlay_buffers(target).unwrap().selection[kind].data[0],
+            editor.overlay_buffers(target).unwrap().flags[kind].data[0],
             0
         );
 
@@ -610,16 +610,16 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
         assert!(!editor.overlay(target).unwrap().full_refresh());
         assert_eq!(buffers.positions.data.as_ptr(), positions);
         assert!(buffers.positions.dirty_range.is_none());
-        assert_eq!(buffers.selection[kind].data.as_ptr(), selection);
-        assert_eq!(buffers.selection[kind].data[0], 255);
-        assert_eq!(buffers.selection[kind].dirty_range, Some(0..1));
+        assert_eq!(buffers.flags[kind].data.as_ptr(), selection);
+        assert_eq!(buffers.flags[kind].data[0], 1);
+        assert_eq!(buffers.flags[kind].dirty_range, Some(0..1));
         assert_eq!(
             buffers
-                .selection
+                .flags
                 .verts
                 .data
                 .iter()
-                .filter(|&&value| value == 255)
+                .filter(|&&value| value == 1)
                 .count(),
             selected_vertices
         );
@@ -630,8 +630,8 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
         assert!(editor.active_tool_mut().unwrap().pointer_click(&input));
         assert!(editor.mesh(target).unwrap().selection().is_empty());
         assert_eq!(
-            editor.overlay_buffers(target).unwrap().selection[kind].data[0],
-            255
+            editor.overlay_buffers(target).unwrap().flags[kind].data[0],
+            1
         );
 
         editor.update(0.016, &mut result);
@@ -639,9 +639,9 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
         assert_eq!(result.changed_overlays, vec![target]);
         let buffers = editor.overlay_buffers(target).unwrap();
         for selection in [
-            &buffers.selection.verts,
-            &buffers.selection.edges,
-            &buffers.selection.faces,
+            &buffers.flags.verts,
+            &buffers.flags.edges,
+            &buffers.flags.faces,
         ] {
             assert!(selection.data.iter().all(|&value| value == 0));
         }
@@ -948,8 +948,8 @@ fn update_applies_active_tool_configuration_and_edits_in_the_same_frame() {
     assert_eq!(buffers.positions.data.as_ptr(), positions);
     assert_eq!(buffers.positions.data[0], [2.0, 0.0, 0.0, 0.0]);
     assert_eq!(buffers.positions.dirty_range, Some(0..1));
-    assert_eq!(buffers.selection.verts.data, vec![255, 0, 0]);
-    assert_eq!(buffers.selection.verts.dirty_range, Some(0..1));
+    assert_eq!(buffers.flags.verts.data, vec![1, 0, 0]);
+    assert_eq!(buffers.flags.verts.dirty_range, Some(0..1));
     assert_no_overlay_changes(&editor, inactive);
 
     let mesh = editor.mesh(active).unwrap();
@@ -971,8 +971,8 @@ fn update_applies_active_tool_configuration_and_edits_in_the_same_frame() {
         [2.0, 0.0, 0.0, 0.0]
     );
     assert_eq!(
-        editor.overlay_buffers(active).unwrap().selection.verts.data,
-        vec![255, 0, 0]
+        editor.overlay_buffers(active).unwrap().flags.verts.data,
+        vec![1, 0, 0]
     );
     assert_eq!(
         editor.tool_config_mut(&tool).unwrap().update_deltas,
@@ -1019,18 +1019,12 @@ fn update_processes_cancellation_changes_after_mesh_deactivation() {
     editor.update(0.016, &mut result);
 
     assert_eq!(result.changed_overlays, vec![key]);
-    assert_eq!(
-        editor.overlay_buffers(key).unwrap().selection.verts.data[0],
-        255
-    );
+    assert_eq!(editor.overlay_buffers(key).unwrap().flags.verts.data[0], 1);
 
     editor.set_mesh_inactive(key).unwrap();
     editor.set_active_tool(None).unwrap();
 
-    assert_eq!(
-        editor.overlay_buffers(key).unwrap().selection.verts.data[0],
-        255
-    );
+    assert_eq!(editor.overlay_buffers(key).unwrap().flags.verts.data[0], 1);
     editor.update(0.016, &mut result);
 
     assert_eq!(result.changed_overlays, vec![key]);
@@ -1038,8 +1032,8 @@ fn update_processes_cancellation_changes_after_mesh_deactivation() {
     let buffers = editor.overlay_buffers(key).unwrap();
 
     assert!(!editor.overlay(key).unwrap().full_refresh());
-    assert_eq!(buffers.selection.verts.data, vec![0, 0, 0]);
-    assert_eq!(buffers.selection.verts.dirty_range, Some(0..1));
+    assert_eq!(buffers.flags.verts.data, vec![0, 0, 0]);
+    assert_eq!(buffers.flags.verts.dirty_range, Some(0..1));
     assert!(editor.active_meshes().is_empty());
 
     editor.update(0.016, &mut result);
@@ -1047,7 +1041,7 @@ fn update_processes_cancellation_changes_after_mesh_deactivation() {
     assert!(result.changed_overlays.is_empty());
     assert_no_overlay_changes(&editor, key);
     assert_eq!(
-        editor.overlay_buffers(key).unwrap().selection.verts.data,
+        editor.overlay_buffers(key).unwrap().flags.verts.data,
         vec![0, 0, 0]
     );
 }
@@ -1187,7 +1181,7 @@ fn add_mesh_registers_inactive_mesh_and_builds_overlay() {
     );
     assert_eq!(buffers.edges.data.len(), 3);
     assert_eq!(buffers.triangles.data.len(), 1);
-    assert_eq!(buffers.selection.verts.data, vec![255, 0, 0]);
+    assert_eq!(buffers.flags.verts.data, vec![1, 0, 0]);
 }
 
 #[test]
