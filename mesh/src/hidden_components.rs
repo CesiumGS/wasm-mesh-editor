@@ -10,15 +10,20 @@ use crate::{
 /// Options for [`HiddenComponents::hide`] and [`HiddenComponents::show`].
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HideOptions {
-    /// Also applies to faces using any of the given components, even if faces aren't
-    /// interactable.
+    /// Also applies to faces using any of the given components, even if faces aren't in the interactable component mask.
     pub extend_to_connected_faces: bool,
 }
 
-/// Editing accessor over a mesh's hidden components.
+/// The hidden components of a mesh, and the functions for hiding and showing them.
 ///
-/// Components are hidden individually. Hiding or showing a component never affects other
-/// components, unless requested with [`HideOptions`].
+/// A hidden component is one the user isn't meant to interact with. Whether a hidden mesh component is actually drawn is
+/// a renderer concern. Regardless, hidden components still have meaning in the context of mesh operations.
+/// Selection operations that do not directly specify hidden components, skip them (e.g. [`Selection::grow`]).
+/// The intent is to prevent unexpected interactions with hidden components -- e.g. translation of hidden components that
+/// might have otherwise been included by a grow operation.
+///
+/// Hiding one component doesn't hide related components, unless
+/// [`HideOptions::extend_to_connected_faces`] is set.
 pub struct HiddenComponents<'a> {
     pub(crate) hidden: &'a mut ComponentSet,
     pub(crate) topo: &'a Topology,
