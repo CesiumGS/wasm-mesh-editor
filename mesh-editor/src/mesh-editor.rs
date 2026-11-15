@@ -182,6 +182,18 @@ impl MeshEditor {
         self.meshes.get(key)
     }
 
+    /// An active mesh for editing outside a tool, such as from a JS adapter.
+    /// `None` if the mesh is inactive or missing.
+    /// Only available via wasm; regular Rust consumers should use `tool` or `tool_mut` for editing.
+    #[cfg(feature = "wasm")]
+    pub(crate) fn active_mesh_mut(&mut self, key: MeshKey) -> Option<&mut Mesh> {
+        if !self.is_mesh_active(key) {
+            return None;
+        }
+
+        self.meshes.get_mut(key)
+    }
+
     pub fn mesh_keys(&self) -> &[MeshKey] {
         &self.mesh_keys
     }

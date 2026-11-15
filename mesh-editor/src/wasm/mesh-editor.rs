@@ -1,8 +1,12 @@
 //! JS adapters for [`MeshEditor`] and the types in its module.
 
+#[path = "mesh-editor/selection.rs"]
+mod selection;
+
 use std::ops::Range;
 
-use serde::Serialize;
+use mesh::{ComponentKey, EdgeKey, FaceKey, VertKey};
+use serde::{Deserialize, Deserializer, Serialize};
 use slotmap::{Key, KeyData};
 use topology_overlay::shaders::uniforms;
 use topology_overlay::{OverlayBuffer, OverlayBuffers};
@@ -145,6 +149,47 @@ pub struct OverlayKeyViews {
     verts: OverlayKeyView,
     edges: OverlayKeyView,
     faces: OverlayKeyView,
+}
+
+/// Component keys grouped by type, like `OverlayViews.componentKeys`.
+/// If a component type is not specified, it's treated as having no keys.
+#[derive(Deserialize, Tsify, Default)]
+#[serde(default)]
+#[tsify(rename = "ComponentKeys")]
+pub struct ComponentKeysJs {
+    #[serde(deserialize_with = "big_uint64_array")]
+    #[tsify(optional, type = "BigUint64Array")]
+    verts: Vec<u64>,
+    #[serde(deserialize_with = "big_uint64_array")]
+    #[tsify(optional, type = "BigUint64Array")]
+    edges: Vec<u64>,
+    #[serde(deserialize_with = "big_uint64_array")]
+    #[tsify(optional, type = "BigUint64Array")]
+    faces: Vec<u64>,
+}
+
+impl ComponentKeysJs {
+    /// Converts JS keys, dropping any that no slot map could have issued.
+    fn to_component_keys(component_keys: &Ts<Self>) -> Result<Vec<ComponentKey>, JsError> {
+        // `Tsify::from_js` rather than `Ts::to_rust`, whose errors name internal Rust types.
+        let Self {
+            verts,
+            edges,
+            faces,
+        } = Self::from_js(component_keys.js_value())?;
+
+        let verts = verts
+            .into_iter()
+            .filter_map(|key| VertKey::try_from_ffi(key).map(ComponentKey::from));
+        let edges = edges
+            .into_iter()
+            .filter_map(|key| EdgeKey::try_from_ffi(key).map(ComponentKey::from));
+        let faces = faces
+            .into_iter()
+            .filter_map(|key| FaceKey::try_from_ffi(key).map(ComponentKey::from));
+
+        Ok(verts.chain(edges).chain(faces).collect())
+    }
 }
 
 /// Selection buffers by component kind. One value per component: 0 unselected, 255 selected.
@@ -419,4 +464,22 @@ impl MeshEditor {
             tool.cancel();
         }
     }
+}
+
+/// The mesh to edit, or `None` if it's inactive. Throws for an unknown mesh key.
+fn active_mesh(
+    editor: &mut MeshEditor,
+    mesh_key: MeshKey,
+) -> Result<Option<&mut mesh::Mesh>, JsError> {
+    if !editor.has_mesh(mesh_key) {
+        return Err(MeshNotFound { key: mesh_key }.into());
+    }
+
+    Ok(editor.active_mesh_mut(mesh_key))
+}
+
+fn big_uint64_array<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u64>, D::Error> {
+    let array: js_sys::BigUint64Array = serde_wasm_bindgen::preserve::deserialize(deserializer)?;
+
+    Ok(array.to_vec())
 }
