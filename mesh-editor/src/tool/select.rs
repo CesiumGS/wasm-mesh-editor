@@ -6,6 +6,7 @@ use crate::{EditMode, MeshKey, Modifiers, PickHit, PickResult, PointerInput, Too
 
 /// How a select tool changes the selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub enum SelectAction {
     Replace,
     Add,
@@ -47,6 +48,7 @@ impl SelectModifiersPolicy {
 #[derive(Debug, Default)]
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct SelectTool {
+    #[cfg_attr(feature = "wasm", wasm_bindgen(skip))]
     pub modifiers_policy: SelectModifiersPolicy,
 }
 
