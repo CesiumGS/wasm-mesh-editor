@@ -14,11 +14,11 @@ import init, {
   Mesh,
   MeshEditor,
   SelectAction,
-  SelectByAttributeResult,
   SelectTool,
   SelectionStep,
   TranslateTool,
   UpdateResult,
+  VertsByAttributeResult,
   topologyOverlayShaders,
 } from "../../mesh-editor/pkg/mesh-editor.js";
 
@@ -943,7 +943,7 @@ test("selectVertsByAttribute compares scalar attributes", () => {
 
     assert.equal(
       editor.selectVertsByAttribute(key, "_ID", comparison, value),
-      SelectByAttributeResult.Selected,
+      VertsByAttributeResult.Ok,
     );
     assert.deepEqual(selectedVerts(editor, key), expected, AttributeComparison[comparison]);
     editor.free();
@@ -952,10 +952,10 @@ test("selectVertsByAttribute compares scalar attributes", () => {
 
 test("selectVertsByAttribute compares vector attributes for equality only", () => {
   for (const [comparison, result, expected] of [
-    [AttributeComparison.Equal, SelectByAttributeResult.Selected, [1, 2]],
-    [AttributeComparison.NotEqual, SelectByAttributeResult.Selected, [0, 3]],
-    [AttributeComparison.Less, SelectByAttributeResult.UnsupportedComparison, []],
-    [AttributeComparison.GreaterOrEqual, SelectByAttributeResult.UnsupportedComparison, []],
+    [AttributeComparison.Equal, VertsByAttributeResult.Ok, [1, 2]],
+    [AttributeComparison.NotEqual, VertsByAttributeResult.Ok, [0, 3]],
+    [AttributeComparison.Less, VertsByAttributeResult.UnsupportedComparison, []],
+    [AttributeComparison.GreaterOrEqual, VertsByAttributeResult.UnsupportedComparison, []],
   ]) {
     const { editor, key } = attributeEditor();
 
@@ -970,10 +970,10 @@ test("selectVertsByAttribute reports lookups that select nothing", () => {
   const { Equal } = AttributeComparison;
 
   for (const [name, value, result] of [
-    ["_MISSING", 0, SelectByAttributeResult.AttributeNotFound],
-    ["_ID", 1.5, SelectByAttributeResult.WrongType],
-    ["_COLOR", 1, SelectByAttributeResult.WrongType],
-    ["_COLOR", [1, 0], SelectByAttributeResult.WrongType],
+    ["_MISSING", 0, VertsByAttributeResult.AttributeNotFound],
+    ["_ID", 1.5, VertsByAttributeResult.WrongType],
+    ["_COLOR", 1, VertsByAttributeResult.WrongType],
+    ["_COLOR", [1, 0], VertsByAttributeResult.WrongType],
   ]) {
     assert.equal(editor.selectVertsByAttribute(key, name, Equal, value), result, name);
   }
@@ -982,7 +982,7 @@ test("selectVertsByAttribute reports lookups that select nothing", () => {
   editor.setMeshInactive(key);
   assert.equal(
     editor.selectVertsByAttribute(key, "_ID", Equal, 0),
-    SelectByAttributeResult.MeshInactive,
+    VertsByAttributeResult.MeshInactive,
   );
 
   editor.removeMesh(key).free();
