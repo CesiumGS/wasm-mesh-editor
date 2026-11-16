@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::mpsc::TryRecvError;
 
-use glam::{Vec2, Vec4};
+use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec4};
 use slotmap::Key;
 
 use crate::{AttributeBuffer, AttributeValue, ComponentMask, SelectionChange, TopologyChange};
@@ -1975,7 +1975,13 @@ fn builds_vertex_attributes_of_every_type() {
     let vec3s = floats.map(Vec3::splat);
     let vec4s = floats.map(Vec4::splat);
     let uints = [10, 11, 12, 13];
+    let uvec2s = uints.map(UVec2::splat);
+    let uvec3s = uints.map(UVec3::splat);
+    let uvec4s = uints.map(UVec4::splat);
     let ints = [-1, -2, -3, -4];
+    let ivec2s = ints.map(IVec2::splat);
+    let ivec3s = ints.map(IVec3::splat);
+    let ivec4s = ints.map(IVec4::splat);
 
     let mut options = two_triangle_buffers();
     options.vertex_attributes = vec![
@@ -1984,7 +1990,13 @@ fn builds_vertex_attributes_of_every_type() {
         ("_VEC3".into(), AttributeBuffer::Vec3(vec3s.into())),
         ("_VEC4".into(), AttributeBuffer::Vec4(vec4s.into())),
         ("_U32".into(), AttributeBuffer::U32(uints.into())),
+        ("_UVEC2".into(), AttributeBuffer::UVec2(uvec2s.into())),
+        ("_UVEC3".into(), AttributeBuffer::UVec3(uvec3s.into())),
+        ("_UVEC4".into(), AttributeBuffer::UVec4(uvec4s.into())),
         ("_I32".into(), AttributeBuffer::I32(ints.into())),
+        ("_IVEC2".into(), AttributeBuffer::IVec2(ivec2s.into())),
+        ("_IVEC3".into(), AttributeBuffer::IVec3(ivec3s.into())),
+        ("_IVEC4".into(), AttributeBuffer::IVec4(ivec4s.into())),
     ];
     let mesh = Mesh::from_buffers(options).unwrap();
 
@@ -1993,7 +2005,13 @@ fn builds_vertex_attributes_of_every_type() {
     assert_eq!(vertex_values(&mesh, "_VEC3"), all_some(&vec3s));
     assert_eq!(vertex_values(&mesh, "_VEC4"), all_some(&vec4s));
     assert_eq!(vertex_values(&mesh, "_U32"), all_some(&uints));
+    assert_eq!(vertex_values(&mesh, "_UVEC2"), all_some(&uvec2s));
+    assert_eq!(vertex_values(&mesh, "_UVEC3"), all_some(&uvec3s));
+    assert_eq!(vertex_values(&mesh, "_UVEC4"), all_some(&uvec4s));
     assert_eq!(vertex_values(&mesh, "_I32"), all_some(&ints));
+    assert_eq!(vertex_values(&mesh, "_IVEC2"), all_some(&ivec2s));
+    assert_eq!(vertex_values(&mesh, "_IVEC3"), all_some(&ivec3s));
+    assert_eq!(vertex_values(&mesh, "_IVEC4"), all_some(&ivec4s));
 }
 
 #[test]
