@@ -2,7 +2,7 @@ use glam::{DMat4, DVec3};
 use mesh::{Mesh, VertKey};
 use slotmap::Key;
 
-use crate::{MeshEditor, MeshTransform, Modifiers, PickResult, PointerInput, WorldRay};
+use crate::{MeshEditor, MeshTransform, Modifiers, PickHit, PickResult, PointerInput, WorldRay};
 
 use super::SceneInput;
 
@@ -12,19 +12,20 @@ fn default_input_does_not_imply_a_pick_miss_or_spatial_data() {
 
     assert_eq!(input.modifiers, Modifiers::default());
     assert_eq!(input.pick, PickResult::NotPerformed);
-    assert_ne!(input.pick, PickResult::Miss);
+    assert_ne!(input.pick, PickResult::Hits(&[]));
     assert_eq!(input.ray, None);
     assert_eq!(input.scene, None);
 }
 
 #[test]
-fn selection_input_carries_a_hit_without_spatial_data() {
+fn selection_input_carries_hits_without_spatial_data() {
     let mut editor = MeshEditor::new();
     let mesh = editor.add_mesh(Mesh::new());
-    let pick = PickResult::Hit {
+    let hits = [PickHit {
         mesh,
-        component: VertKey::null().into(),
-    };
+        components: &[VertKey::null().into()],
+    }];
+    let pick = PickResult::Hits(&hits);
     let input = PointerInput {
         modifiers: Modifiers {
             shift: true,
