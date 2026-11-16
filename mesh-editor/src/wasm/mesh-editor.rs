@@ -1,5 +1,7 @@
 //! JS adapters for [`MeshEditor`] and the types in its module.
 
+#[path = "mesh-editor/attributes.rs"]
+mod attributes;
 #[path = "mesh-editor/selection.rs"]
 mod selection;
 
