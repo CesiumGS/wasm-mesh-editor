@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use glam::{Vec2, Vec3, Vec4};
+use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
 use slotmap::{Key, SecondaryMap};
 
 use crate::{LoopKey, VertKey};
@@ -27,7 +27,13 @@ pub enum AttributeMap<K: Key> {
     Vec3(SecondaryMap<K, Vec3>),
     Vec4(SecondaryMap<K, Vec4>),
     U32(SecondaryMap<K, u32>),
+    UVec2(SecondaryMap<K, UVec2>),
+    UVec3(SecondaryMap<K, UVec3>),
+    UVec4(SecondaryMap<K, UVec4>),
     I32(SecondaryMap<K, i32>),
+    IVec2(SecondaryMap<K, IVec2>),
+    IVec3(SecondaryMap<K, IVec3>),
+    IVec4(SecondaryMap<K, IVec4>),
 }
 
 impl<K: Key> AttributeMap<K> {
@@ -45,7 +51,13 @@ pub enum AttributeBuffer {
     Vec3(Vec<Vec3>),
     Vec4(Vec<Vec4>),
     U32(Vec<u32>),
+    UVec2(Vec<UVec2>),
+    UVec3(Vec<UVec3>),
+    UVec4(Vec<UVec4>),
     I32(Vec<i32>),
+    IVec2(Vec<IVec2>),
+    IVec3(Vec<IVec3>),
+    IVec4(Vec<IVec4>),
 }
 
 /// Matches every variant of [`AttributeMap`] or [`AttributeBuffer`].
@@ -57,7 +69,13 @@ macro_rules! match_variants {
             $enum::Vec3($values) => $body,
             $enum::Vec4($values) => $body,
             $enum::U32($values) => $body,
+            $enum::UVec2($values) => $body,
+            $enum::UVec3($values) => $body,
+            $enum::UVec4($values) => $body,
             $enum::I32($values) => $body,
+            $enum::IVec2($values) => $body,
+            $enum::IVec3($values) => $body,
+            $enum::IVec4($values) => $body,
         }
     };
 }
@@ -90,7 +108,8 @@ fn zip_map<K: Key, T: AttributeValue>(
     T::wrap_map(map)
 }
 
-/// A type that custom attribute values can have: `f32`, `Vec2`, `Vec3`, `Vec4`, `u32` or `i32`.
+/// A type that custom attribute values can have: `f32`, `u32` or `i32`, or a 2 to 4 component vector
+/// of one (`Vec2`..`Vec4`, `UVec2`..`UVec4`, `IVec2`..`IVec4`).
 /// Used to request typed values, as in [`AttributeMap::typed`]. Sealed; it can't be implemented
 /// outside this crate.
 pub trait AttributeValue: Copy + 'static + sealed::Sealed {}
@@ -134,7 +153,13 @@ impl_attribute_value!(
     Vec3 => Vec3,
     Vec4 => Vec4,
     u32 => U32,
+    UVec2 => UVec2,
+    UVec3 => UVec3,
+    UVec4 => UVec4,
     i32 => I32,
+    IVec2 => IVec2,
+    IVec3 => IVec3,
+    IVec4 => IVec4,
 );
 
 impl Attributes {
