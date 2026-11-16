@@ -172,23 +172,25 @@ impl ComponentKeysJs {
     /// Converts JS keys, dropping any that no slot map could have issued.
     fn to_component_keys(component_keys: &Ts<Self>) -> Result<Vec<ComponentKey>, JsError> {
         // `Tsify::from_js` rather than `Ts::to_rust`, whose errors name internal Rust types.
-        let Self {
-            verts,
-            edges,
-            faces,
-        } = Self::from_js(component_keys.js_value())?;
+        Ok(Self::from_js(component_keys.js_value())?.into_component_keys())
+    }
 
-        let verts = verts
+    /// Like `to_component_keys`, for keys already converted from JS.
+    pub(in crate::wasm) fn into_component_keys(self) -> Vec<ComponentKey> {
+        let verts = self
+            .verts
             .into_iter()
             .filter_map(|key| VertKey::try_from_ffi(key).map(ComponentKey::from));
-        let edges = edges
+        let edges = self
+            .edges
             .into_iter()
             .filter_map(|key| EdgeKey::try_from_ffi(key).map(ComponentKey::from));
-        let faces = faces
+        let faces = self
+            .faces
             .into_iter()
             .filter_map(|key| FaceKey::try_from_ffi(key).map(ComponentKey::from));
 
-        Ok(verts.chain(edges).chain(faces).collect())
+        verts.chain(edges).chain(faces).collect()
     }
 }
 
