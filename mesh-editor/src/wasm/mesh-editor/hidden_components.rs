@@ -1,35 +1,17 @@
 //! JS adapters for hiding and showing components of the meshes in a [`MeshEditor`].
 
 use mesh::{
-    AttributeError, AttributeKey, AttributeValue, ComponentKey, EdgeKey, FaceKey, HideOptions,
-    IntoComponentKey, Mesh, VertKey,
+    AttributeError, AttributeKey, AttributeValue, ComponentKey, HideOptions, IntoComponentKey, Mesh,
 };
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
-use super::active_mesh;
 use super::attributes::{
     AttributeComparison, AttributeResult, ByAttributeOperation, apply_by_js_value,
 };
+use super::{ComponentKeysJs, active_mesh};
 use crate::{MeshEditor, MeshKey};
-
-/// Component keys grouped by type, like `OverlayViews.componentKeys`. Omitted types have no keys.
-/// Copy keys out of wasm memory first: views over `memory.buffer` can detach during the call.
-#[derive(Deserialize, Tsify, Default)]
-#[serde(default)]
-#[tsify(rename = "ComponentKeys")]
-pub struct ComponentKeysJs {
-    #[serde(deserialize_with = "big_uint64_array")]
-    #[tsify(optional, type = "BigUint64Array")]
-    verts: Vec<u64>,
-    #[serde(deserialize_with = "big_uint64_array")]
-    #[tsify(optional, type = "BigUint64Array")]
-    edges: Vec<u64>,
-    #[serde(deserialize_with = "big_uint64_array")]
-    #[tsify(optional, type = "BigUint64Array")]
-    faces: Vec<u64>,
-}
 
 /// Options for `hideComponents` and `showComponents`. Omitted options are `false`.
 #[derive(Deserialize, Tsify, Default)]
@@ -170,26 +152,7 @@ fn convert_args(
     component_keys: &Ts<ComponentKeysJs>,
     options: Option<&Ts<HideOptionsJs>>,
 ) -> Result<(Vec<ComponentKey>, HideOptions), JsError> {
-    // `Tsify::from_js` rather than `Ts::to_rust`, whose errors name internal Rust types.
-    let component_keys = ComponentKeysJs::from_js(component_keys.js_value())?;
-
-    let keys = component_keys
-        .verts
-        .into_iter()
-        .filter_map(|key| VertKey::try_from_ffi(key).map(ComponentKey::from))
-        .chain(
-            component_keys
-                .edges
-                .into_iter()
-                .filter_map(|key| EdgeKey::try_from_ffi(key).map(ComponentKey::from)),
-        )
-        .chain(
-            component_keys
-                .faces
-                .into_iter()
-                .filter_map(|key| FaceKey::try_from_ffi(key).map(ComponentKey::from)),
-        )
-        .collect();
+    let keys = ComponentKeysJs::to_component_keys(component_keys)?;
 
     Ok((keys, convert_options(options)?))
 }
@@ -231,10 +194,4 @@ impl ByAttributeOperation for Show {
         mesh.hidden_components_mut()
             .show_by_attribute::<K, T>(name, predicate, self.0)
     }
-}
-
-fn big_uint64_array<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u64>, D::Error> {
-    let array: js_sys::BigUint64Array = serde_wasm_bindgen::preserve::deserialize(deserializer)?;
-
-    Ok(array.to_vec())
 }
