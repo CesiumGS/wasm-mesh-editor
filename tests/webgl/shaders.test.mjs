@@ -10,8 +10,10 @@ import init, {
   ComponentType,
   Mesh,
   MeshEditor,
+  SelectAction,
   SelectTool,
   SelectionStep,
+  TranslateTool,
   UpdateResult,
   topologyOverlayShaders,
 } from "../../mesh-editor/pkg/mesh-editor.js";
@@ -297,7 +299,11 @@ function triangleOverlay(positions, selection) {
     editor.setMode(1 << componentType);
     editor.setMeshActive(key);
     editor.setActiveTool(SelectTool.addTo(editor));
-    editor.pointerClick({ pick: { mesh: key, componentType, componentKey: keys[index] } });
+    editor.pointerClick({
+      pick: [
+        { mesh: key, componentKeys: { [KEY_VIEWS[componentType]]: BigUint64Array.of(keys[index]) } },
+      ],
+    });
   }
 
   const result = new UpdateResult();
@@ -635,7 +641,7 @@ test("a picked overlay index selects its component through componentKeys", async
   editor.setMeshActive(key);
   editor.setActiveTool(SelectTool.addTo(editor));
   editor.pointerClick({
-    pick: { mesh: key, componentType: ComponentType.Face, componentKey: faceKeys[index] },
+    pick: [{ mesh: key, componentKeys: { faces: BigUint64Array.of(faceKeys[index]) } }],
   });
   const result = new UpdateResult();
   editor.update(0, result);
@@ -643,20 +649,6 @@ test("a picked overlay index selects its component through componentKeys", async
 
   const { address, elementCount } = editor.overlayViews(key).selection.faces;
   assert.deepEqual(Array.from(new Uint8Array(memory.buffer, address, elementCount)), [0, 255]);
-  editor.free();
-});
-
-test("pointerClick rejects a pick with an unknown componentType", () => {
-  const editor = new MeshEditor();
-  const key = editor.addMesh(
-    Mesh.fromBuffers(new Float32Array(TRIANGLE), new Uint32Array([0, 1, 2])),
-  );
-  const [componentKey] = readKeys(editor.overlayViews(key).componentKeys.verts);
-
-  assert.throws(
-    () => editor.pointerClick({ pick: { mesh: key, componentType: 3, componentKey } }),
-    /pick\.componentType must be a ComponentType/,
-  );
   editor.free();
 });
 
@@ -780,6 +772,115 @@ test("selection edits need an active mesh and throw for unknown meshes", () => {
   editor.removeMesh(key).free();
   for (const call of calls) {
     assert.throws(call, /is not registered/);
+  }
+  editor.free();
+});
+
+/**
+ * The two-triangle editor plus a second, one-triangle mesh, both active in vertex mode with an
+ * active select tool. Returns the tool, and getters for each mesh's selected vertex indices.
+ */
+function twoMeshSelectEditor(modifiersPolicy) {
+  const { editor, key } = twoTriangleEditor();
+  const other = editor.addMesh(
+    Mesh.fromBuffers(new Float32Array(TRIANGLE), new Uint32Array([0, 1, 2])),
+  );
+  update(editor);
+  editor.setMode(1 << ComponentType.Vertex);
+  editor.setMeshActive(key);
+  editor.setMeshActive(other);
+  const tool = SelectTool.addTo(editor, modifiersPolicy);
+  editor.setActiveTool(tool);
+
+  const vertsOf = (mesh) => (...indices) => ({
+    mesh,
+    componentKeys: { verts: keysAt(editor.overlayViews(mesh).componentKeys.verts, indices) },
+  });
+  const selected = () => {
+    update(editor);
+    return [selectedByType(editor, key).verts, selectedByType(editor, other).verts];
+  };
+
+  return { editor, tool, first: vertsOf(key), second: vertsOf(other), selected };
+}
+
+test("a pick across meshes replaces each mesh's selection", () => {
+  const { editor, first, second, selected } = twoMeshSelectEditor();
+
+  assert.equal(editor.pointerClick({ pick: [first(0, 1), second(2)] }), true);
+  assert.deepEqual(selected(), [[0, 1], [2]]);
+
+  editor.pointerClick({ pick: [first(3)] });
+  assert.deepEqual(selected(), [[3], []]);
+  editor.free();
+});
+
+test("pointerClick distinguishes an omitted pick from one that found nothing", () => {
+  const { editor, first, second, selected } = twoMeshSelectEditor();
+  editor.pointerClick({ pick: [first(0), second(0)] });
+
+  assert.equal(editor.pointerClick({}), false);
+  assert.deepEqual(selected(), [[0], [0]]);
+
+  assert.equal(editor.pointerClick({ pick: [] }), true);
+  assert.deepEqual(selected(), [[], []]);
+  editor.free();
+});
+
+test("SelectTool.addTo applies a modifiers policy", () => {
+  const { editor, first, second, selected } = twoMeshSelectEditor({
+    shift: SelectAction.Add,
+    control: SelectAction.Remove,
+  });
+  editor.pointerClick({ pick: [first(0)] });
+
+  editor.pointerClick({ pick: [first(1), second(0)], modifiers: { shift: true } });
+  assert.deepEqual(selected(), [[0, 1], [0]]);
+
+  editor.pointerClick({ pick: [first(0)], modifiers: { control: true } });
+  assert.deepEqual(selected(), [[1], [0]]);
+  editor.free();
+
+  assert.throws(
+    () => SelectTool.addTo(new MeshEditor(), { shift: 9 }),
+    /modifiersPolicy\.shift must be a SelectAction/,
+  );
+});
+
+test("SelectTool.setModifiersPolicy replaces a tool's modifiers policy", () => {
+  const { editor, tool, first, selected } = twoMeshSelectEditor();
+  const shiftClick = () => editor.pointerClick({ pick: [first(0)], modifiers: { shift: true } });
+
+  SelectTool.setModifiersPolicy(editor, tool, { shift: SelectAction.Add });
+  shiftClick();
+  shiftClick();
+  assert.deepEqual(selected()[0], [0]);
+
+  SelectTool.setModifiersPolicy(editor, tool);
+  shiftClick();
+  assert.deepEqual(selected()[0], []);
+
+  assert.throws(
+    () => SelectTool.setModifiersPolicy(editor, TranslateTool.addTo(editor), {}),
+    /is not a select tool/,
+  );
+  assert.throws(() => SelectTool.setModifiersPolicy(editor, 999, {}), /is not registered/);
+  assert.throws(
+    () => SelectTool.setModifiersPolicy(editor, tool, { control: 7 }),
+    /modifiersPolicy\.control must be a SelectAction/,
+  );
+  editor.free();
+});
+
+test("the default modifiers policy toggles with Shift, Ctrl, or Cmd", () => {
+  const { editor, first, selected } = twoMeshSelectEditor();
+
+  for (const modifiers of [{ shift: true }, { control: true }, { meta: true }]) {
+    editor.pointerClick({ pick: [first(0)], modifiers });
+    assert.deepEqual(selected()[0], [0], JSON.stringify(modifiers));
+
+    editor.pointerClick({ pick: [first(0)], modifiers });
+    assert.deepEqual(selected()[0], [], JSON.stringify(modifiers));
   }
   editor.free();
 });
