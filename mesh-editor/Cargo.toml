@@ -22,6 +22,7 @@ wasm = [
     "dep:serde",
     "dep:serde-wasm-bindgen",
     "dep:tsify",
+    "glam/serde",
     "mesh/wasm",
 ]
 

@@ -989,3 +989,69 @@ test("selectVertsByAttribute reports lookups that select nothing", () => {
   assert.throws(() => editor.selectVertsByAttribute(key, "_ID", Equal, 0), /is not registered/);
   editor.free();
 });
+
+/** Overlay indices of the vertices with `keys`, sorted. */
+function vertIndices(editor, key, keys) {
+  const vertKeys = readKeys(editor.overlayViews(key).componentKeys.verts);
+  return Array.from(keys, (vertKey) => vertKeys.indexOf(vertKey)).sort();
+}
+
+test("queryVertsByAttribute returns matching vertices without selecting them", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal, GreaterOrEqual } = AttributeComparison;
+
+  for (const [name, comparison, value, expected] of [
+    ["_ID", Equal, 0, [1]],
+    ["_ID", GreaterOrEqual, 0, [1, 2, 3]],
+    ["_COLOR", Equal, [1, 0, 0], [1, 2]],
+  ]) {
+    const { status, verts } = editor.queryVertsByAttribute(key, name, comparison, value);
+    assert.equal(status, VertsByAttributeResult.Ok);
+    assert.ok(verts instanceof BigUint64Array);
+    assert.deepEqual(vertIndices(editor, key, verts), expected, name);
+  }
+  assert.deepEqual(selectedVerts(editor, key), []);
+
+  editor.setMeshInactive(key);
+  const { verts } = editor.queryVertsByAttribute(key, "_ID", Equal, 2);
+  assert.deepEqual(vertIndices(editor, key, verts), [3]);
+  editor.free();
+});
+
+test("queryVertsByAttribute reports failed lookups with no vertices", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal, Less } = AttributeComparison;
+
+  for (const [name, comparison, value, status] of [
+    ["_MISSING", Equal, 0, VertsByAttributeResult.AttributeNotFound],
+    ["_ID", Equal, 1.5, VertsByAttributeResult.WrongType],
+    ["_COLOR", Equal, [1, 0], VertsByAttributeResult.WrongType],
+    ["_COLOR", Less, [1, 0, 0], VertsByAttributeResult.UnsupportedComparison],
+  ]) {
+    const result = editor.queryVertsByAttribute(key, name, comparison, value);
+    assert.deepEqual(result, { status, verts: new BigUint64Array() }, name);
+  }
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.queryVertsByAttribute(key, "_ID", Equal, 0), /is not registered/);
+  editor.free();
+});
+
+test("vertexAttributeValue reads a vertex's value in the form selectVertsByAttribute takes", () => {
+  const { editor, key } = attributeEditor();
+  const [vert0, vert1] = readKeys(editor.overlayViews(key).componentKeys.verts);
+
+  assert.equal(editor.vertexAttributeValue(key, vert0, "_ID"), -1);
+  const color = editor.vertexAttributeValue(key, vert1, "_COLOR");
+  assert.deepEqual(color, [1, 0, 0]);
+
+  editor.selectVertsByAttribute(key, "_COLOR", AttributeComparison.Equal, color);
+  assert.deepEqual(selectedVerts(editor, key), [1, 2]);
+
+  assert.equal(editor.vertexAttributeValue(key, vert0, "_MISSING"), undefined);
+  assert.equal(editor.vertexAttributeValue(key, 0n, "_ID"), undefined);
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.vertexAttributeValue(key, vert0, "_ID"), /is not registered/);
+  editor.free();
+});
