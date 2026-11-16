@@ -903,7 +903,7 @@ function attributeEditor() {
       undefined,
       undefined,
       [
-        CustomAttribute.int32("_ID", AttributeDomain.Vertex, new Int32Array([-1, 0, 1, 2])),
+        CustomAttribute.int32("_ID", AttributeDomain.Vertex, 1, new Int32Array([-1, 0, 1, 2])),
         CustomAttribute.float32(
           "_COLOR",
           AttributeDomain.Vertex,
@@ -1054,4 +1054,83 @@ test("vertexAttributeValue reads a vertex's value in the form selectVertsByAttri
   editor.removeMesh(key).free();
   assert.throws(() => editor.vertexAttributeValue(key, vert0, "_ID"), /is not registered/);
   editor.free();
+});
+
+/** An editor like `attributeEditor`'s with integer vector attributes: `_CELL` (ivec2) is equal at
+ * vertices 1 and 2, and `_MASK` (uvec4) at vertices 0 and 3. */
+function integerVectorEditor() {
+  const editor = new MeshEditor();
+  const key = editor.addMesh(
+    Mesh.fromBuffers(
+      new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0, 0.5, 0, 0.5, 0.5, 0]),
+      new Uint32Array([0, 1, 2, 1, 3, 2]),
+      undefined,
+      undefined,
+      undefined,
+      [
+        CustomAttribute.int32(
+          "_CELL",
+          AttributeDomain.Vertex,
+          2,
+          new Int32Array([0, 0, 1, -1, 1, -1, 2, 0]),
+        ),
+        CustomAttribute.uint32(
+          "_MASK",
+          AttributeDomain.Vertex,
+          4,
+          new Uint32Array([1, 2, 3, 4, 0, 0, 0, 0, 5, 6, 7, 8, 1, 2, 3, 4]),
+        ),
+      ],
+    ),
+  );
+  editor.setMode(1 << ComponentType.Vertex);
+  editor.setMeshActive(key);
+
+  return { editor, key };
+}
+
+test("integer vector attributes read back and compare for equality only", () => {
+  const { Equal, NotEqual, Less } = AttributeComparison;
+
+  for (const [name, comparison, value, result, expected] of [
+    ["_CELL", Equal, [1, -1], VertsByAttributeResult.Ok, [1, 2]],
+    ["_CELL", NotEqual, [1, -1], VertsByAttributeResult.Ok, [0, 3]],
+    ["_MASK", Equal, new Uint32Array([1, 2, 3, 4]), VertsByAttributeResult.Ok, [0, 3]],
+    ["_CELL", Less, [1, -1], VertsByAttributeResult.UnsupportedComparison, []],
+    ["_CELL", Equal, [1, -1, 0], VertsByAttributeResult.WrongType, []],
+    ["_CELL", Equal, [1.5, -1], VertsByAttributeResult.WrongType, []],
+    ["_CELL", Equal, 1, VertsByAttributeResult.WrongType, []],
+    ["_MASK", Equal, [-1, 2, 3, 4], VertsByAttributeResult.WrongType, []],
+  ]) {
+    const { editor, key } = integerVectorEditor();
+
+    assert.equal(editor.selectVertsByAttribute(key, name, comparison, value), result, name);
+    assert.deepEqual(selectedVerts(editor, key), expected, `${name} ${value}`);
+    editor.free();
+  }
+
+  const { editor, key } = integerVectorEditor();
+  const [vert0, vert1] = readKeys(editor.overlayViews(key).componentKeys.verts);
+  assert.deepEqual(editor.vertexAttributeValue(key, vert1, "_CELL"), [1, -1]);
+  assert.deepEqual(editor.vertexAttributeValue(key, vert0, "_MASK"), [1, 2, 3, 4]);
+  editor.free();
+});
+
+test("CustomAttribute constructors throw for a componentCount that doesn't fit the values", () => {
+  const { Vertex } = AttributeDomain;
+
+  for (const create of [
+    () => CustomAttribute.uint32("_A", Vertex, 0, new Uint32Array(4)),
+    () => CustomAttribute.int32("_A", Vertex, 5, new Int32Array(5)),
+    () => CustomAttribute.float32("_A", Vertex, 0, new Float32Array(4)),
+  ]) {
+    assert.throws(create, /_A componentCount \d is not 1, 2, 3 or 4/);
+  }
+
+  for (const create of [
+    () => CustomAttribute.uint32("_A", Vertex, 3, new Uint32Array(4)),
+    () => CustomAttribute.int32("_A", Vertex, 2, new Int32Array(3)),
+  ]) {
+    assert.throws(create, /_A length \d is not a multiple of \d/);
+  }
 });

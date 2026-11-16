@@ -22,15 +22,21 @@ fn keys(mesh: &Mesh) -> (Vec<VertKey>, Vec<FaceKey>) {
     )
 }
 
-/// Whether `typed::<T>` returns values, for each value type, in the order F32, Vec2, Vec3, Vec4, U32, I32.
-fn typed_matches(map: &AttributeMap<VertKey>) -> [bool; 6] {
+/// Whether `typed::<T>` returns values, for each value type, in [`AttributeMap`] variant order.
+fn typed_matches(map: &AttributeMap<VertKey>) -> [bool; 12] {
     [
         map.typed::<f32>().is_some(),
         map.typed::<Vec2>().is_some(),
         map.typed::<Vec3>().is_some(),
         map.typed::<Vec4>().is_some(),
         map.typed::<u32>().is_some(),
+        map.typed::<UVec2>().is_some(),
+        map.typed::<UVec3>().is_some(),
+        map.typed::<UVec4>().is_some(),
         map.typed::<i32>().is_some(),
+        map.typed::<IVec2>().is_some(),
+        map.typed::<IVec3>().is_some(),
+        map.typed::<IVec4>().is_some(),
     ]
 }
 
@@ -56,11 +62,17 @@ fn typed_returns_values_only_for_the_stored_type() {
         AttributeMap::Vec3(SecondaryMap::new()),
         AttributeMap::Vec4(SecondaryMap::new()),
         AttributeMap::U32(SecondaryMap::new()),
+        AttributeMap::UVec2(SecondaryMap::new()),
+        AttributeMap::UVec3(SecondaryMap::new()),
+        AttributeMap::UVec4(SecondaryMap::new()),
         AttributeMap::I32(SecondaryMap::new()),
+        AttributeMap::IVec2(SecondaryMap::new()),
+        AttributeMap::IVec3(SecondaryMap::new()),
+        AttributeMap::IVec4(SecondaryMap::new()),
     ];
 
     for (variant, map) in maps.iter().enumerate() {
-        let mut expected = [false; 6];
+        let mut expected = [false; 12];
         expected[variant] = true;
         assert_eq!(typed_matches(map), expected, "variant {variant}");
     }

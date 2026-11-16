@@ -1,7 +1,7 @@
 //! JS adapters for reading custom vertex attributes, and shared by operations on the vertices
 //! whose custom attribute matches a value.
 
-use glam::{Vec2, Vec3, Vec4};
+use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
 use js_sys::BigUint64Array;
 use mesh::{AttributeLookupError, AttributeMap, AttributeValue, Mesh, VertKey};
 use serde::Serialize;
@@ -57,25 +57,55 @@ macro_rules! with_predicate {
             }
             AttributeMap::Vec2(_) => {
                 let $predicate =
-                    vector_predicate($comparison, floats_from_js($value).map(Vec2::from_array));
+                    vector_predicate($comparison, vector_from_js::<Vec2, _, _>($value));
                 $body
             }
             AttributeMap::Vec3(_) => {
                 let $predicate =
-                    vector_predicate($comparison, floats_from_js($value).map(Vec3::from_array));
+                    vector_predicate($comparison, vector_from_js::<Vec3, _, _>($value));
                 $body
             }
             AttributeMap::Vec4(_) => {
                 let $predicate =
-                    vector_predicate($comparison, floats_from_js($value).map(Vec4::from_array));
+                    vector_predicate($comparison, vector_from_js::<Vec4, _, _>($value));
                 $body
             }
             AttributeMap::U32(_) => {
                 let $predicate = scalar_predicate($comparison, from_js::<u32>($value));
                 $body
             }
+            AttributeMap::UVec2(_) => {
+                let $predicate =
+                    vector_predicate($comparison, vector_from_js::<UVec2, _, _>($value));
+                $body
+            }
+            AttributeMap::UVec3(_) => {
+                let $predicate =
+                    vector_predicate($comparison, vector_from_js::<UVec3, _, _>($value));
+                $body
+            }
+            AttributeMap::UVec4(_) => {
+                let $predicate =
+                    vector_predicate($comparison, vector_from_js::<UVec4, _, _>($value));
+                $body
+            }
             AttributeMap::I32(_) => {
                 let $predicate = scalar_predicate($comparison, from_js::<i32>($value));
+                $body
+            }
+            AttributeMap::IVec2(_) => {
+                let $predicate =
+                    vector_predicate($comparison, vector_from_js::<IVec2, _, _>($value));
+                $body
+            }
+            AttributeMap::IVec3(_) => {
+                let $predicate =
+                    vector_predicate($comparison, vector_from_js::<IVec3, _, _>($value));
+                $body
+            }
+            AttributeMap::IVec4(_) => {
+                let $predicate =
+                    vector_predicate($comparison, vector_from_js::<IVec4, _, _>($value));
                 $body
             }
         }
@@ -150,7 +180,13 @@ impl MeshEditor {
             AttributeMap::Vec3(values) => value_to_js(values, vert),
             AttributeMap::Vec4(values) => value_to_js(values, vert),
             AttributeMap::U32(values) => value_to_js(values, vert),
+            AttributeMap::UVec2(values) => value_to_js(values, vert),
+            AttributeMap::UVec3(values) => value_to_js(values, vert),
+            AttributeMap::UVec4(values) => value_to_js(values, vert),
             AttributeMap::I32(values) => value_to_js(values, vert),
+            AttributeMap::IVec2(values) => value_to_js(values, vert),
+            AttributeMap::IVec3(values) => value_to_js(values, vert),
+            AttributeMap::IVec4(values) => value_to_js(values, vert),
         };
 
         Ok(value?.unwrap_or(JsValue::UNDEFINED))
@@ -256,10 +292,14 @@ fn from_js<T: DeserializeOwned>(value: &JsValue) -> Option<T> {
     serde_wasm_bindgen::from_value(value.clone()).ok()
 }
 
-/// `value` as exactly `N` floats, from an array or typed array.
-fn floats_from_js<const N: usize>(value: &JsValue) -> Option<[f32; N]> {
-    // Going through a `Vec` rejects extra elements, which deserializing `[f32; N]` ignores.
-    from_js::<Vec<f32>>(value)?.try_into().ok()
+/// `value` as a `V` with exactly `N` components of type `S`, from an array or typed array. `None` if
+/// the length is wrong or a component doesn't fit `S`.
+fn vector_from_js<V: From<[S; N]>, S: DeserializeOwned, const N: usize>(
+    value: &JsValue,
+) -> Option<V> {
+    // Going through a `Vec` rejects extra elements, which deserializing `[S; N]` ignores.
+    let components: [S; N] = from_js::<Vec<S>>(value)?.try_into().ok()?;
+    Some(components.into())
 }
 
 /// `vert`'s value as a number or array of numbers, or `None` if it has none.
