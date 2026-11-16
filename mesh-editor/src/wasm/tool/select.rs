@@ -4,7 +4,9 @@ use serde::Deserialize;
 use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
-use crate::{MeshEditor, SelectAction, SelectModifiersPolicy, SelectTool, ToolId};
+use crate::{
+    MeshEditor, SelectAction, SelectModifiersPolicy, SelectTool, ToolActivationError, ToolId,
+};
 
 /// The `SelectAction` for each modifier. Omitted modifiers keep their defaults: replacing, and
 /// toggling with Shift or Ctrl/Cmd.
@@ -35,6 +37,32 @@ impl SelectTool {
         let modifiers_policy = modifiers_policy_from_js(modifiers_policy.as_ref())?;
 
         Ok(editor.add_tool(SelectTool { modifiers_policy }).id())
+    }
+
+    /// Replaces the modifiers policy of select tool `id` in `editor`, like `addTo`. Throws if
+    /// `id` isn't a select tool in `editor`, or for an unknown `SelectAction`.
+    #[wasm_bindgen(js_name = setModifiersPolicy)]
+    pub fn set_modifiers_policy(
+        editor: &mut MeshEditor,
+        id: ToolId,
+        #[wasm_bindgen(js_name = modifiersPolicy)] modifiers_policy: Option<
+            Ts<SelectModifiersPolicyJs>,
+        >,
+    ) -> Result<(), JsError> {
+        let modifiers_policy = modifiers_policy_from_js(modifiers_policy.as_ref())?;
+
+        let Some(handle) = editor.tool_handle::<SelectTool>(id) else {
+            return Err(match editor.tool(id) {
+                Some(_) => JsError::new(&format!("tool {id:?} is not a select tool")),
+                None => ToolActivationError::NotFound { id }.into(),
+            });
+        };
+
+        if let Some(tool) = editor.tool_config_mut(&handle) {
+            tool.modifiers_policy = modifiers_policy;
+        }
+
+        Ok(())
     }
 }
 
