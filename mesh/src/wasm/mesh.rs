@@ -4,17 +4,7 @@ use bytemuck::Pod;
 use glam::{Vec2, Vec3};
 use wasm_bindgen::prelude::*;
 
-use crate::{AttributeBuffer, Mesh, MeshBuffers};
-
-/// Whether a custom attribute has one value per vertex or one per face corner.
-#[wasm_bindgen]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AttributeDomain {
-    /// One value per vertex, in `positions` order.
-    Vertex = 0,
-    /// One value per face corner, in `indices` order.
-    Corner = 1,
-}
+use crate::{AttributeBuffer, AttributeDomain, Mesh, MeshBuffers};
 
 /// A named custom attribute to pass to `Mesh.fromBuffers`. Create one with a per-type
 /// constructor. Passing it to `fromBuffers` consumes it.

@@ -129,6 +129,108 @@ fn names_are_unique_across_domains() {
 }
 
 #[test]
+fn value_type_reports_component_type_and_count() {
+    use AttributeComponentType::{Float32, Int32, Uint32};
+
+    let cases = [
+        (AttributeMap::F32(SecondaryMap::new()), Float32, 1),
+        (AttributeMap::Vec2(SecondaryMap::new()), Float32, 2),
+        (AttributeMap::Vec3(SecondaryMap::new()), Float32, 3),
+        (AttributeMap::Vec4(SecondaryMap::new()), Float32, 4),
+        (AttributeMap::U32(SecondaryMap::new()), Uint32, 1),
+        (AttributeMap::UVec2(SecondaryMap::new()), Uint32, 2),
+        (AttributeMap::UVec3(SecondaryMap::new()), Uint32, 3),
+        (AttributeMap::UVec4(SecondaryMap::new()), Uint32, 4),
+        (AttributeMap::I32(SecondaryMap::new()), Int32, 1),
+        (AttributeMap::IVec2(SecondaryMap::new()), Int32, 2),
+        (AttributeMap::IVec3(SecondaryMap::new()), Int32, 3),
+        (AttributeMap::IVec4(SecondaryMap::new()), Int32, 4),
+    ];
+
+    for (map, component_type, component_count) in cases {
+        let map: AttributeMap<VertKey> = map;
+        assert_eq!(
+            map.value_type(),
+            AttributeType {
+                component_type,
+                component_count,
+            }
+        );
+    }
+}
+
+fn descriptor(
+    name: &str,
+    domain: AttributeDomain,
+    component_type: AttributeComponentType,
+    component_count: u8,
+) -> AttributeDescriptor<'_> {
+    AttributeDescriptor {
+        name,
+        domain,
+        value_type: AttributeType {
+            component_type,
+            component_count,
+        },
+    }
+}
+
+#[test]
+fn descriptors_list_built_in_then_custom_attributes() {
+    use AttributeComponentType::{Float32, Int32, Uint32};
+    use AttributeDomain::{Corner, Vertex};
+
+    let mut mesh = two_triangles();
+    assert_eq!(
+        mesh.attributes.descriptors().collect::<Vec<_>>(),
+        [
+            descriptor("POSITION", Vertex, Float32, 3),
+            descriptor("NORMAL", Corner, Float32, 3),
+        ]
+    );
+
+    mesh.attributes
+        .add_corner_attribute("_COLOR".into(), AttributeMap::Vec4(SecondaryMap::new()));
+    mesh.attributes
+        .add_vertex_attribute("_B".into(), AttributeMap::U32(SecondaryMap::new()));
+    mesh.attributes
+        .add_vertex_attribute("_A".into(), AttributeMap::IVec2(SecondaryMap::new()));
+
+    assert_eq!(
+        mesh.attributes.descriptors().collect::<Vec<_>>(),
+        [
+            descriptor("POSITION", Vertex, Float32, 3),
+            descriptor("NORMAL", Corner, Float32, 3),
+            descriptor("_B", Vertex, Uint32, 1),
+            descriptor("_A", Vertex, Int32, 2),
+            descriptor("_COLOR", Corner, Float32, 4),
+        ]
+    );
+}
+
+#[test]
+fn descriptors_include_uvs_when_the_mesh_has_them() {
+    use AttributeComponentType::Float32;
+    use AttributeDomain::{Corner, Vertex};
+
+    let mesh = Mesh::from_buffers(MeshBuffers {
+        positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+        uvs: Some(vec![Vec2::ZERO, Vec2::X, Vec2::Y]),
+        indices: vec![0, 1, 2],
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(
+        mesh.attributes.descriptors().collect::<Vec<_>>(),
+        [
+            descriptor("POSITION", Vertex, Float32, 3),
+            descriptor("NORMAL", Corner, Float32, 3),
+            descriptor("TEXCOORD_0", Corner, Float32, 2),
+        ]
+    );
+}
+
+#[test]
 fn vertex_views_read_typed_values() {
     let mut mesh = two_triangles();
     let (verts, faces) = keys(&mesh);

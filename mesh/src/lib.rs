@@ -20,7 +20,8 @@ mod vert;
 mod wasm;
 
 pub use attributes::{
-    AttributeBuffer, AttributeLookupError, AttributeMap, AttributeValue, Attributes,
+    AttributeBuffer, AttributeComponentType, AttributeDescriptor, AttributeDomain,
+    AttributeLookupError, AttributeMap, AttributeType, AttributeValue, Attributes,
 };
 pub use edge::{Edge, EdgeRef};
 pub use face::{Face, FaceRef};
