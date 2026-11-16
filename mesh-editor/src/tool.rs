@@ -11,8 +11,8 @@ mod translate;
 
 pub use access::ToolAccessor;
 pub use context::ToolContext;
-pub use input::{Modifiers, PickResult, PointerInput, SceneInput};
-pub use select::SelectTool;
+pub use input::{Modifiers, PickHit, PickResult, PointerInput, SceneInput};
+pub use select::{SelectAction, SelectModifiersPolicy, SelectTool};
 pub use translate::TranslateTool;
 
 use crate::EditMode;
