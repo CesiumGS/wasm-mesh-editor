@@ -1555,12 +1555,12 @@ function selectedByType(editor, key) {
  */
 function selectOuterEdge(editor, key) {
   const edge = readElements(editor.overlayViews(key).edges).findIndex(([a, b]) => a + b === 1);
-  const [componentKey] = keysAt(editor.overlayViews(key).componentKeys.edges, [edge]);
+  const edges = keysAt(editor.overlayViews(key).componentKeys.edges, [edge]);
 
   editor.setMode(1 << ComponentType.Edge);
   editor.setMeshActive(key);
   editor.setActiveTool(SelectTool.addTo(editor));
-  editor.pointerClick({ pick: { mesh: key, componentType: ComponentType.Edge, componentKey } });
+  editor.pointerClick({ pick: [{ mesh: key, componentKeys: { edges } }] });
   update(editor);
 
   return edge;
