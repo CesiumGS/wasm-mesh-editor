@@ -833,34 +833,6 @@ test("a picked overlay index selects its component through componentKeys", async
   editor.free();
 });
 
-/** Runs an update, so overlay buffers reflect the latest mesh changes. */
-function update(editor) {
-  const result = new UpdateResult();
-  editor.update(0, result);
-  result.free();
-}
-
-/** Copies of the keys at `indices` in one of `componentKeys`' views. */
-function keysAt(view, indices) {
-  const keys = readKeys(view);
-  return BigUint64Array.from(indices, (index) => keys[index]);
-}
-
-/** Overlay indices of the selected components of each type. */
-function selectedByType(editor, key) {
-  const selected = (view) => {
-    const values = new Uint8Array(memory.buffer, view.address, view.elementCount);
-    return [...values.keys()].filter((index) => values[index]);
-  };
-  const { selection } = editor.overlayViews(key);
-
-  return {
-    verts: selected(selection.verts),
-    edges: selected(selection.edges),
-    faces: selected(selection.faces),
-  };
-}
-
 /** Activates the two-triangle mesh in vertex mode. Returns a getter for its selected vertices. */
 function vertexSelection(editor, key) {
   editor.setMode(1 << ComponentType.Vertex);
