@@ -22,6 +22,7 @@ impl TranslationDrag {
 /// whose position is derived from the selection centroid of the participating meshes.
 /// Scene context is required at drag start; its plane and placements are retained until completion.
 #[derive(Default)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct TranslateTool {
     meshes: Vec<MeshTransform>,
     drag: Option<TranslationDrag>,
