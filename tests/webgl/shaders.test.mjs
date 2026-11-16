@@ -7,7 +7,11 @@ import { after, before, test } from "node:test";
 import { chromium } from "playwright";
 
 import init, {
+  AttributeComparison,
+  AttributeComponentType,
+  AttributeDomain,
   ComponentType,
+  CustomAttribute,
   Mesh,
   MeshEditor,
   SelectAction,
@@ -15,6 +19,7 @@ import init, {
   SelectionStep,
   TranslateTool,
   UpdateResult,
+  VertsByAttributeResult,
   topologyOverlayShaders,
 } from "../../mesh-editor/pkg/mesh-editor.js";
 
@@ -883,4 +888,294 @@ test("the default modifiers policy toggles with Shift, Ctrl, or Cmd", () => {
     assert.deepEqual(selected()[0], [], JSON.stringify(modifiers));
   }
   editor.free();
+});
+
+/**
+ * An editor with one active, vertex-mode mesh of two triangles. `_ID` is -1, 0, 1, 2 by vertex, and
+ * `_COLOR` is red at vertices 1 and 2.
+ */
+function attributeEditor() {
+  const editor = new MeshEditor();
+  const key = editor.addMesh(
+    Mesh.fromBuffers(
+      new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0, 0.5, 0, 0.5, 0.5, 0]),
+      new Uint32Array([0, 1, 2, 1, 3, 2]),
+      undefined,
+      undefined,
+      undefined,
+      [
+        CustomAttribute.int32("_ID", AttributeDomain.Vertex, 1, new Int32Array([-1, 0, 1, 2])),
+        CustomAttribute.float32(
+          "_COLOR",
+          AttributeDomain.Vertex,
+          3,
+          new Float32Array([0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0]),
+        ),
+      ],
+    ),
+  );
+  editor.setMode(1 << ComponentType.Vertex);
+  editor.setMeshActive(key);
+
+  return { editor, key };
+}
+
+/** Overlay indices of the selected vertices. */
+function selectedVerts(editor, key) {
+  const result = new UpdateResult();
+  editor.update(0, result);
+  result.free();
+
+  const { address, elementCount } = editor.overlayViews(key).selection.verts;
+  const values = new Uint8Array(memory.buffer, address, elementCount);
+  return [...values.keys()].filter((index) => values[index] & 1);
+}
+
+test("selectVertsByAttribute compares scalar attributes", () => {
+  for (const [comparison, value, expected] of [
+    [AttributeComparison.Equal, 0, [1]],
+    [AttributeComparison.NotEqual, 0, [0, 2, 3]],
+    [AttributeComparison.Less, 1, [0, 1]],
+    [AttributeComparison.LessOrEqual, 1, [0, 1, 2]],
+    [AttributeComparison.Greater, 0, [2, 3]],
+    [AttributeComparison.GreaterOrEqual, 1, [2, 3]],
+  ]) {
+    const { editor, key } = attributeEditor();
+
+    assert.equal(
+      editor.selectVertsByAttribute(key, "_ID", comparison, value),
+      VertsByAttributeResult.Ok,
+    );
+    assert.deepEqual(selectedVerts(editor, key), expected, AttributeComparison[comparison]);
+    editor.free();
+  }
+});
+
+test("selectVertsByAttribute compares vector attributes for equality only", () => {
+  for (const [comparison, result, expected] of [
+    [AttributeComparison.Equal, VertsByAttributeResult.Ok, [1, 2]],
+    [AttributeComparison.NotEqual, VertsByAttributeResult.Ok, [0, 3]],
+    [AttributeComparison.Less, VertsByAttributeResult.UnsupportedComparison, []],
+    [AttributeComparison.GreaterOrEqual, VertsByAttributeResult.UnsupportedComparison, []],
+  ]) {
+    const { editor, key } = attributeEditor();
+
+    assert.equal(editor.selectVertsByAttribute(key, "_COLOR", comparison, [1, 0, 0]), result);
+    assert.deepEqual(selectedVerts(editor, key), expected, AttributeComparison[comparison]);
+    editor.free();
+  }
+});
+
+test("selectVertsByAttribute reports lookups that select nothing", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal } = AttributeComparison;
+
+  for (const [name, value, result] of [
+    ["_MISSING", 0, VertsByAttributeResult.AttributeNotFound],
+    ["_ID", 1.5, VertsByAttributeResult.WrongType],
+    ["_COLOR", 1, VertsByAttributeResult.WrongType],
+    ["_COLOR", [1, 0], VertsByAttributeResult.WrongType],
+  ]) {
+    assert.equal(editor.selectVertsByAttribute(key, name, Equal, value), result, name);
+  }
+  assert.deepEqual(selectedVerts(editor, key), []);
+
+  editor.setMeshInactive(key);
+  assert.equal(
+    editor.selectVertsByAttribute(key, "_ID", Equal, 0),
+    VertsByAttributeResult.MeshInactive,
+  );
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.selectVertsByAttribute(key, "_ID", Equal, 0), /is not registered/);
+  editor.free();
+});
+
+/** Overlay indices of the vertices with `keys`, sorted. */
+function vertIndices(editor, key, keys) {
+  const vertKeys = readKeys(editor.overlayViews(key).componentKeys.verts);
+  return Array.from(keys, (vertKey) => vertKeys.indexOf(vertKey)).sort();
+}
+
+test("queryVertsByAttribute returns matching vertices without selecting them", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal, GreaterOrEqual } = AttributeComparison;
+
+  for (const [name, comparison, value, expected] of [
+    ["_ID", Equal, 0, [1]],
+    ["_ID", GreaterOrEqual, 0, [1, 2, 3]],
+    ["_COLOR", Equal, [1, 0, 0], [1, 2]],
+  ]) {
+    const { status, verts } = editor.queryVertsByAttribute(key, name, comparison, value);
+    assert.equal(status, VertsByAttributeResult.Ok);
+    assert.ok(verts instanceof BigUint64Array);
+    assert.deepEqual(vertIndices(editor, key, verts), expected, name);
+  }
+  assert.deepEqual(selectedVerts(editor, key), []);
+
+  editor.setMeshInactive(key);
+  const { verts } = editor.queryVertsByAttribute(key, "_ID", Equal, 2);
+  assert.deepEqual(vertIndices(editor, key, verts), [3]);
+  editor.free();
+});
+
+test("queryVertsByAttribute reports failed lookups with no vertices", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal, Less } = AttributeComparison;
+
+  for (const [name, comparison, value, status] of [
+    ["_MISSING", Equal, 0, VertsByAttributeResult.AttributeNotFound],
+    ["_ID", Equal, 1.5, VertsByAttributeResult.WrongType],
+    ["_COLOR", Equal, [1, 0], VertsByAttributeResult.WrongType],
+    ["_COLOR", Less, [1, 0, 0], VertsByAttributeResult.UnsupportedComparison],
+  ]) {
+    const result = editor.queryVertsByAttribute(key, name, comparison, value);
+    assert.deepEqual(result, { status, verts: new BigUint64Array() }, name);
+  }
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.queryVertsByAttribute(key, "_ID", Equal, 0), /is not registered/);
+  editor.free();
+});
+
+test("vertexAttributeValue reads a vertex's value in the form selectVertsByAttribute takes", () => {
+  const { editor, key } = attributeEditor();
+  const [vert0, vert1] = readKeys(editor.overlayViews(key).componentKeys.verts);
+
+  assert.equal(editor.vertexAttributeValue(key, vert0, "_ID"), -1);
+  const color = editor.vertexAttributeValue(key, vert1, "_COLOR");
+  assert.deepEqual(color, [1, 0, 0]);
+
+  editor.selectVertsByAttribute(key, "_COLOR", AttributeComparison.Equal, color);
+  assert.deepEqual(selectedVerts(editor, key), [1, 2]);
+
+  assert.equal(editor.vertexAttributeValue(key, vert0, "_MISSING"), undefined);
+  assert.equal(editor.vertexAttributeValue(key, 0n, "_ID"), undefined);
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.vertexAttributeValue(key, vert0, "_ID"), /is not registered/);
+  editor.free();
+});
+
+/** An editor like `attributeEditor`'s with integer vector attributes: `_CELL` (ivec2) is equal at
+ * vertices 1 and 2, and `_MASK` (uvec4) at vertices 0 and 3. */
+function integerVectorEditor() {
+  const editor = new MeshEditor();
+  const key = editor.addMesh(
+    Mesh.fromBuffers(
+      new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0, 0.5, 0, 0.5, 0.5, 0]),
+      new Uint32Array([0, 1, 2, 1, 3, 2]),
+      undefined,
+      undefined,
+      undefined,
+      [
+        CustomAttribute.int32(
+          "_CELL",
+          AttributeDomain.Vertex,
+          2,
+          new Int32Array([0, 0, 1, -1, 1, -1, 2, 0]),
+        ),
+        CustomAttribute.uint32(
+          "_MASK",
+          AttributeDomain.Vertex,
+          4,
+          new Uint32Array([1, 2, 3, 4, 0, 0, 0, 0, 5, 6, 7, 8, 1, 2, 3, 4]),
+        ),
+      ],
+    ),
+  );
+  editor.setMode(1 << ComponentType.Vertex);
+  editor.setMeshActive(key);
+
+  return { editor, key };
+}
+
+test("integer vector attributes read back and compare for equality only", () => {
+  const { Equal, NotEqual, Less } = AttributeComparison;
+
+  for (const [name, comparison, value, result, expected] of [
+    ["_CELL", Equal, [1, -1], VertsByAttributeResult.Ok, [1, 2]],
+    ["_CELL", NotEqual, [1, -1], VertsByAttributeResult.Ok, [0, 3]],
+    ["_MASK", Equal, new Uint32Array([1, 2, 3, 4]), VertsByAttributeResult.Ok, [0, 3]],
+    ["_CELL", Less, [1, -1], VertsByAttributeResult.UnsupportedComparison, []],
+    ["_CELL", Equal, [1, -1, 0], VertsByAttributeResult.WrongType, []],
+    ["_CELL", Equal, [1.5, -1], VertsByAttributeResult.WrongType, []],
+    ["_CELL", Equal, 1, VertsByAttributeResult.WrongType, []],
+    ["_MASK", Equal, [-1, 2, 3, 4], VertsByAttributeResult.WrongType, []],
+  ]) {
+    const { editor, key } = integerVectorEditor();
+
+    assert.equal(editor.selectVertsByAttribute(key, name, comparison, value), result, name);
+    assert.deepEqual(selectedVerts(editor, key), expected, `${name} ${value}`);
+    editor.free();
+  }
+
+  const { editor, key } = integerVectorEditor();
+  const [vert0, vert1] = readKeys(editor.overlayViews(key).componentKeys.verts);
+  assert.deepEqual(editor.vertexAttributeValue(key, vert1, "_CELL"), [1, -1]);
+  assert.deepEqual(editor.vertexAttributeValue(key, vert0, "_MASK"), [1, 2, 3, 4]);
+  editor.free();
+});
+
+test("meshAttributes lists built-in then custom attributes with their types", () => {
+  const { Vertex, Corner } = AttributeDomain;
+  const { Float32, Int32 } = AttributeComponentType;
+  const editor = new MeshEditor();
+
+  const withoutUvs = editor.addMesh(
+    Mesh.fromBuffers(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), new Uint32Array([0, 1, 2])),
+  );
+  assert.deepEqual(editor.meshAttributes(withoutUvs), [
+    { name: "POSITION", domain: Vertex, componentType: Float32, componentCount: 3 },
+    { name: "NORMAL", domain: Corner, componentType: Float32, componentCount: 3 },
+  ]);
+
+  const custom = integerVectorEditor();
+  assert.deepEqual(
+    custom.editor.meshAttributes(custom.key).map(({ name }) => name),
+    ["POSITION", "NORMAL", "_CELL", "_MASK"],
+  );
+  assert.deepEqual(custom.editor.meshAttributes(custom.key)[2], {
+    name: "_CELL",
+    domain: Vertex,
+    componentType: Int32,
+    componentCount: 2,
+  });
+  custom.editor.free();
+
+  const withUvs = editor.addMesh(
+    Mesh.fromBuffers(
+      new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      new Uint32Array([0, 1, 2]),
+      undefined,
+      new Float32Array([0, 0, 1, 0, 0, 1]),
+      undefined,
+      [CustomAttribute.float32("_COLOR", Corner, 4, new Float32Array(12))],
+    ),
+  );
+  assert.deepEqual(editor.meshAttributes(withUvs).slice(2), [
+    { name: "TEXCOORD_0", domain: Corner, componentType: Float32, componentCount: 2 },
+    { name: "_COLOR", domain: Corner, componentType: Float32, componentCount: 4 },
+  ]);
+
+  editor.free();
+});
+
+test("CustomAttribute constructors throw for a componentCount that doesn't fit the values", () => {
+  const { Vertex } = AttributeDomain;
+
+  for (const create of [
+    () => CustomAttribute.uint32("_A", Vertex, 0, new Uint32Array(4)),
+    () => CustomAttribute.int32("_A", Vertex, 5, new Int32Array(5)),
+    () => CustomAttribute.float32("_A", Vertex, 0, new Float32Array(4)),
+  ]) {
+    assert.throws(create, /_A componentCount \d is not 1, 2, 3 or 4/);
+  }
+
+  for (const create of [
+    () => CustomAttribute.uint32("_A", Vertex, 3, new Uint32Array(4)),
+    () => CustomAttribute.int32("_A", Vertex, 2, new Int32Array(3)),
+  ]) {
+    assert.throws(create, /_A length \d is not a multiple of \d/);
+  }
 });

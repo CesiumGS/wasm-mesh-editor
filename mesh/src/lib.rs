@@ -19,7 +19,10 @@ mod vert;
 #[cfg(feature = "wasm")]
 mod wasm;
 
-pub use attributes::Attributes;
+pub use attributes::{
+    AttributeBuffer, AttributeComponentType, AttributeDescriptor, AttributeDomain,
+    AttributeLookupError, AttributeMap, AttributeType, AttributeValue, Attributes,
+};
 pub use edge::{Edge, EdgeRef};
 pub use face::{Face, FaceRef};
 pub use geometry::{Aabb, Plane, Ray, centroid, try_inverse_affine};

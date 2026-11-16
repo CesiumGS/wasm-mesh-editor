@@ -102,6 +102,7 @@ fn mixed_face_mesh() -> Mesh {
         uvs: None,
         indices: vec![0, 1, 2, 3, 1, 0, 4],
         face_vertex_counts: Some(vec![4, 3]),
+        ..Default::default()
     })
     .unwrap()
 }

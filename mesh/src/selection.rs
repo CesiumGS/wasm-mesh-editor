@@ -14,8 +14,9 @@ use event_emitter::EventEmitter;
 use glam::Vec3;
 
 use crate::{
-    Aabb, Attributes, ComponentKey, ComponentKeys, ComponentMask, ComponentRef, ComponentType,
-    EdgeKey, FaceKey, MeshChange, SelectionChange, Topology, VertKey,
+    Aabb, AttributeLookupError, AttributeValue, Attributes, ComponentKey, ComponentKeys,
+    ComponentMask, ComponentRef, ComponentType, EdgeKey, FaceKey, MeshChange, SelectionChange,
+    Topology, VertKey,
 };
 
 /// A component kind that can be selected: the three handle types and
@@ -277,6 +278,23 @@ impl<'a> Selection<'a> {
         let delta = self.apply_action(keys, Action::Toggle, self.state.level);
 
         self.emit_change(delta);
+    }
+
+    /// Selects every vertex whose `name` custom attribute satisfies `predicate`, such as
+    /// `|id: u32| id == 7`. Works just like [`Self::select`], so it does nothing unless vertices
+    /// are selectable.
+    ///
+    /// # Errors
+    /// If there's no vertex attribute called `name`, or it holds a different type than `T`.
+    pub fn select_verts_by_attribute<T: AttributeValue>(
+        &mut self,
+        name: &str,
+        predicate: impl Fn(T) -> bool,
+    ) -> Result<(), AttributeLookupError> {
+        let verts: Vec<_> = self.attrs.verts_where(name, predicate)?.collect();
+
+        self.select(&verts);
+        Ok(())
     }
 
     /// Clears all selected components, regardless of the current mode.
