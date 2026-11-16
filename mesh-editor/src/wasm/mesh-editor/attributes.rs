@@ -1,9 +1,11 @@
-//! JS adapters for reading custom vertex attributes, and shared by operations on the vertices
+//! JS adapters for listing and reading mesh attributes, and shared by operations on the vertices
 //! whose custom attribute matches a value.
 
 use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
 use js_sys::BigUint64Array;
-use mesh::{AttributeLookupError, AttributeMap, AttributeValue, Mesh, VertKey};
+use mesh::{
+    AttributeDescriptor, AttributeLookupError, AttributeMap, AttributeValue, Mesh, VertKey,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use slotmap::{Key, SecondaryMap};
@@ -123,8 +125,53 @@ pub struct VertsByAttributeQueryJs {
     verts: BigUint64Array,
 }
 
+/// One of a mesh's attributes, as listed by `meshAttributes`.
+#[derive(Serialize, Tsify)]
+#[serde(rename_all = "camelCase")]
+#[tsify(rename = "MeshAttribute")]
+pub struct MeshAttributeJs {
+    /// The glTF name of a built-in attribute (`POSITION`, `NORMAL` or `TEXCOORD_0`), or a custom
+    /// attribute's name.
+    name: String,
+    #[tsify(type = "AttributeDomain")]
+    domain: u8,
+    #[tsify(type = "AttributeComponentType")]
+    component_type: u8,
+    /// 1 for scalars, or 2 to 4 for vectors.
+    component_count: u8,
+}
+
+impl From<AttributeDescriptor<'_>> for MeshAttributeJs {
+    fn from(descriptor: AttributeDescriptor<'_>) -> Self {
+        Self {
+            name: descriptor.name.into(),
+            domain: descriptor.domain as u8,
+            component_type: descriptor.value_type.component_type as u8,
+            component_count: descriptor.value_type.component_count,
+        }
+    }
+}
+
 #[wasm_bindgen]
 impl MeshEditor {
+    /// The mesh's attributes: `POSITION` and `NORMAL`, then `TEXCOORD_0` if the mesh has UVs,
+    /// then custom vertex attributes and custom corner attributes, each in the order they were
+    /// added. Throws for an unknown mesh key.
+    #[wasm_bindgen(js_name = meshAttributes, unchecked_return_type = "MeshAttribute[]")]
+    pub fn mesh_attributes(
+        &self,
+        #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
+    ) -> Result<JsValue, JsError> {
+        let mesh = self.mesh(mesh_key).ok_or(MeshNotFound { key: mesh_key })?;
+        let attributes: Vec<MeshAttributeJs> = mesh
+            .attributes()
+            .descriptors()
+            .map(MeshAttributeJs::from)
+            .collect();
+
+        Ok(serde_wasm_bindgen::to_value(&attributes)?)
+    }
+
     /// The vertices whose `name` attribute compares to `value` as `comparison` says, like
     /// `selectVertsByAttribute`. Works on inactive meshes. Throws for an unknown mesh key.
     #[wasm_bindgen(js_name = queryVertsByAttribute)]

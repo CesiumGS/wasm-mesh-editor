@@ -8,6 +8,7 @@ import { chromium } from "playwright";
 
 import init, {
   AttributeComparison,
+  AttributeComponentType,
   AttributeDomain,
   ComponentType,
   CustomAttribute,
@@ -1113,6 +1114,50 @@ test("integer vector attributes read back and compare for equality only", () => 
   const [vert0, vert1] = readKeys(editor.overlayViews(key).componentKeys.verts);
   assert.deepEqual(editor.vertexAttributeValue(key, vert1, "_CELL"), [1, -1]);
   assert.deepEqual(editor.vertexAttributeValue(key, vert0, "_MASK"), [1, 2, 3, 4]);
+  editor.free();
+});
+
+test("meshAttributes lists built-in then custom attributes with their types", () => {
+  const { Vertex, Corner } = AttributeDomain;
+  const { Float32, Int32 } = AttributeComponentType;
+  const editor = new MeshEditor();
+
+  const withoutUvs = editor.addMesh(
+    Mesh.fromBuffers(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), new Uint32Array([0, 1, 2])),
+  );
+  assert.deepEqual(editor.meshAttributes(withoutUvs), [
+    { name: "POSITION", domain: Vertex, componentType: Float32, componentCount: 3 },
+    { name: "NORMAL", domain: Corner, componentType: Float32, componentCount: 3 },
+  ]);
+
+  const custom = integerVectorEditor();
+  assert.deepEqual(
+    custom.editor.meshAttributes(custom.key).map(({ name }) => name),
+    ["POSITION", "NORMAL", "_CELL", "_MASK"],
+  );
+  assert.deepEqual(custom.editor.meshAttributes(custom.key)[2], {
+    name: "_CELL",
+    domain: Vertex,
+    componentType: Int32,
+    componentCount: 2,
+  });
+  custom.editor.free();
+
+  const withUvs = editor.addMesh(
+    Mesh.fromBuffers(
+      new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      new Uint32Array([0, 1, 2]),
+      undefined,
+      new Float32Array([0, 0, 1, 0, 0, 1]),
+      undefined,
+      [CustomAttribute.float32("_COLOR", Corner, 4, new Float32Array(12))],
+    ),
+  );
+  assert.deepEqual(editor.meshAttributes(withUvs).slice(2), [
+    { name: "TEXCOORD_0", domain: Corner, componentType: Float32, componentCount: 2 },
+    { name: "_COLOR", domain: Corner, componentType: Float32, componentCount: 4 },
+  ]);
+
   editor.free();
 });
 
