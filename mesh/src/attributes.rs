@@ -18,6 +18,41 @@ pub struct Attributes {
     corner_custom: Vec<(String, AttributeMap<LoopKey>)>,
 }
 
+/// Whether an attribute has one value per vertex or one per face corner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
+pub enum AttributeDomain {
+    /// One value per vertex. Input buffers list them in `positions` order.
+    Vertex = 0,
+    /// One value per face corner. Input buffers list them in `indices` order.
+    Corner = 1,
+}
+
+/// The scalar type of each component of an attribute's values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
+pub enum AttributeComponentType {
+    Float32 = 0,
+    Uint32 = 1,
+    Int32 = 2,
+}
+
+/// The type of an attribute's values: a scalar ([`Self::component_count`] 1) or a 2 to 4
+/// component vector of [`Self::component_type`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AttributeType {
+    pub component_type: AttributeComponentType,
+    pub component_count: u8,
+}
+
+/// Describes one attribute of a mesh, built-in or custom. See [`Attributes::descriptors`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AttributeDescriptor<'a> {
+    pub name: &'a str,
+    pub domain: AttributeDomain,
+    pub value_type: AttributeType,
+}
+
 /// The values of one custom attribute, keyed by vertex ([`VertKey`]) or face corner ([`LoopKey`]).
 /// The variant is the value type; match on it when the type isn't known in advance,
 /// or use [`Self::typed`] when it is.
@@ -80,6 +115,17 @@ macro_rules! match_variants {
     };
 }
 
+impl<K: Key> AttributeMap<K> {
+    /// The type of the stored values.
+    pub fn value_type(&self) -> AttributeType {
+        match_variants!(Self, self, values => value_type_of(values))
+    }
+}
+
+fn value_type_of<K: Key, T: AttributeValue>(_: &SecondaryMap<K, T>) -> AttributeType {
+    T::VALUE_TYPE
+}
+
 impl AttributeBuffer {
     /// The number of values (not components).
     pub fn len(&self) -> usize {
@@ -112,7 +158,10 @@ fn zip_map<K: Key, T: AttributeValue>(
 /// of one (`Vec2`..`Vec4`, `UVec2`..`UVec4`, `IVec2`..`IVec4`).
 /// Used to request typed values, as in [`AttributeMap::typed`]. Sealed; it can't be implemented
 /// outside this crate.
-pub trait AttributeValue: Copy + 'static + sealed::Sealed {}
+pub trait AttributeValue: Copy + 'static + sealed::Sealed {
+    /// The attribute type with values of this type.
+    const VALUE_TYPE: AttributeType;
+}
 
 mod sealed {
     use slotmap::{Key, SecondaryMap};
@@ -129,7 +178,7 @@ mod sealed {
 }
 
 macro_rules! impl_attribute_value {
-    ($($type:ty => $variant:ident),* $(,)?) => {$(
+    ($($type:ty => $variant:ident ($component_type:ident, $component_count:literal)),* $(,)?) => {$(
         impl sealed::Sealed for $type {
             fn from_map<K: Key>(map: &AttributeMap<K>) -> Option<&SecondaryMap<K, Self>> {
                 match map {
@@ -143,23 +192,28 @@ macro_rules! impl_attribute_value {
             }
         }
 
-        impl AttributeValue for $type {}
+        impl AttributeValue for $type {
+            const VALUE_TYPE: AttributeType = AttributeType {
+                component_type: AttributeComponentType::$component_type,
+                component_count: $component_count,
+            };
+        }
     )*};
 }
 
 impl_attribute_value!(
-    f32 => F32,
-    Vec2 => Vec2,
-    Vec3 => Vec3,
-    Vec4 => Vec4,
-    u32 => U32,
-    UVec2 => UVec2,
-    UVec3 => UVec3,
-    UVec4 => UVec4,
-    i32 => I32,
-    IVec2 => IVec2,
-    IVec3 => IVec3,
-    IVec4 => IVec4,
+    f32 => F32 (Float32, 1),
+    Vec2 => Vec2 (Float32, 2),
+    Vec3 => Vec3 (Float32, 3),
+    Vec4 => Vec4 (Float32, 4),
+    u32 => U32 (Uint32, 1),
+    UVec2 => UVec2 (Uint32, 2),
+    UVec3 => UVec3 (Uint32, 3),
+    UVec4 => UVec4 (Uint32, 4),
+    i32 => I32 (Int32, 1),
+    IVec2 => IVec2 (Int32, 2),
+    IVec3 => IVec3 (Int32, 3),
+    IVec4 => IVec4 (Int32, 4),
 );
 
 impl Attributes {
@@ -181,6 +235,37 @@ impl Attributes {
             vertex_custom: Vec::new(),
             corner_custom: Vec::new(),
         }
+    }
+
+    /// Every attribute of the mesh: positions and normals, then UVs if present, using the
+    /// glTF names in [`Self::RESERVED_NAMES`], then custom vertex attributes and custom corner
+    /// attributes, each in insertion order.
+    pub fn descriptors(&self) -> impl Iterator<Item = AttributeDescriptor<'_>> {
+        let [position, normal, uv] = Self::RESERVED_NAMES;
+        let built_in = [
+            Some((position, AttributeDomain::Vertex, Vec3::VALUE_TYPE)),
+            Some((normal, AttributeDomain::Corner, Vec3::VALUE_TYPE)),
+            (!self.uvs.is_empty()).then_some((uv, AttributeDomain::Corner, Vec2::VALUE_TYPE)),
+        ];
+
+        let vertex_custom = self
+            .vertex_attributes()
+            .map(|(name, values)| (name, AttributeDomain::Vertex, values.value_type()));
+
+        let corner_custom = self
+            .corner_attributes()
+            .map(|(name, values)| (name, AttributeDomain::Corner, values.value_type()));
+
+        built_in
+            .into_iter()
+            .flatten()
+            .chain(vertex_custom)
+            .chain(corner_custom)
+            .map(|(name, domain, value_type)| AttributeDescriptor {
+                name,
+                domain,
+                value_type,
+            })
     }
 
     /// Custom vertex attributes and their names, in insertion order.
