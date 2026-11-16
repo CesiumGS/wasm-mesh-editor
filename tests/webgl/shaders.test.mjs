@@ -11,6 +11,7 @@ import init, {
   Mesh,
   MeshEditor,
   SelectTool,
+  SelectionStep,
   UpdateResult,
   topologyOverlayShaders,
 } from "../../mesh-editor/pkg/mesh-editor.js";
@@ -656,5 +657,129 @@ test("pointerClick rejects a pick with an unknown componentType", () => {
     () => editor.pointerClick({ pick: { mesh: key, componentType: 3, componentKey } }),
     /pick\.componentType must be a ComponentType/,
   );
+  editor.free();
+});
+
+/** Runs an update, so overlay buffers reflect the latest mesh changes. */
+function update(editor) {
+  const result = new UpdateResult();
+  editor.update(0, result);
+  result.free();
+}
+
+/** Copies of the keys at `indices` in one of `componentKeys`' views. */
+function keysAt(view, indices) {
+  const keys = readKeys(view);
+  return BigUint64Array.from(indices, (index) => keys[index]);
+}
+
+/** Overlay indices of the selected components of each type. */
+function selectedByType(editor, key) {
+  const selected = (view) => {
+    const values = new Uint8Array(memory.buffer, view.address, view.elementCount);
+    return [...values.keys()].filter((index) => values[index]);
+  };
+  const { selection } = editor.overlayViews(key);
+
+  return {
+    verts: selected(selection.verts),
+    edges: selected(selection.edges),
+    faces: selected(selection.faces),
+  };
+}
+
+/** Activates the two-triangle mesh in vertex mode. Returns a getter for its selected vertices. */
+function vertexSelection(editor, key) {
+  editor.setMode(1 << ComponentType.Vertex);
+  editor.setMeshActive(key);
+
+  return () => {
+    update(editor);
+    return selectedByType(editor, key).verts;
+  };
+}
+
+test("selection edits set, add, remove, toggle, and clear components", () => {
+  const { editor, key } = twoTriangleEditor();
+  const selectedVerts = vertexSelection(editor, key);
+  const verts = (...indices) => keysAt(editor.overlayViews(key).componentKeys.verts, indices);
+
+  assert.equal(editor.setSelection(key, { verts: verts(0, 1) }), true);
+  assert.deepEqual(selectedVerts(), [0, 1]);
+
+  assert.equal(editor.selectComponents(key, { verts: verts(3) }), true);
+  assert.deepEqual(selectedVerts(), [0, 1, 3]);
+
+  assert.equal(editor.deselectComponents(key, { verts: verts(0) }), true);
+  assert.deepEqual(selectedVerts(), [1, 3]);
+
+  assert.equal(editor.toggleComponents(key, { verts: verts(1, 2) }), true);
+  assert.deepEqual(selectedVerts(), [2, 3]);
+
+  assert.equal(editor.clearSelection(key), true);
+  assert.deepEqual(selectedVerts(), []);
+
+  editor.selectComponents(key, { verts: verts(0) });
+  assert.equal(editor.setSelection(key, {}), true);
+  assert.deepEqual(selectedVerts(), []);
+  editor.free();
+});
+
+test("selection edits ignore non-interactable types and invalid keys", () => {
+  const { editor, key } = twoTriangleEditor();
+  const selectedVerts = vertexSelection(editor, key);
+  const { componentKeys } = editor.overlayViews(key);
+
+  editor.selectComponents(key, {
+    verts: BigUint64Array.of(0n, ...keysAt(componentKeys.verts, [2])),
+    faces: keysAt(componentKeys.faces, [0]),
+  });
+
+  assert.deepEqual(selectedVerts(), [2]);
+  assert.deepEqual(selectedByType(editor, key).faces, []);
+  editor.free();
+});
+
+test("growSelection and shrinkSelection step across the selection boundary", () => {
+  const { editor, key } = twoTriangleEditor();
+  const selectedVerts = vertexSelection(editor, key);
+  const { componentKeys } = editor.overlayViews(key);
+  editor.setSelection(key, { verts: keysAt(componentKeys.verts, [0]) });
+
+  assert.equal(editor.growSelection(key, SelectionStep.Edge), true);
+  assert.deepEqual(selectedVerts(), [0, 1, 2]);
+
+  assert.equal(editor.shrinkSelection(key, SelectionStep.Edge), true);
+  assert.deepEqual(selectedVerts(), [0]);
+
+  editor.growSelection(key, SelectionStep.Face);
+  assert.deepEqual(selectedVerts(), [0, 1, 2]);
+  editor.free();
+});
+
+test("selection edits need an active mesh and throw for unknown meshes", () => {
+  const { editor, key } = twoTriangleEditor();
+  const verts = keysAt(editor.overlayViews(key).componentKeys.verts, [0]);
+  const calls = [
+    () => editor.setSelection(key, { verts }),
+    () => editor.selectComponents(key, { verts }),
+    () => editor.deselectComponents(key, { verts }),
+    () => editor.toggleComponents(key, { verts }),
+    () => editor.clearSelection(key),
+    () => editor.growSelection(key, SelectionStep.Edge),
+    () => editor.shrinkSelection(key, SelectionStep.Edge),
+  ];
+
+  editor.setMode(1 << ComponentType.Vertex);
+  for (const call of calls) {
+    assert.equal(call(), false);
+  }
+  update(editor);
+  assert.deepEqual(selectedByType(editor, key).verts, []);
+
+  editor.removeMesh(key).free();
+  for (const call of calls) {
+    assert.throws(call, /is not registered/);
+  }
   editor.free();
 });
