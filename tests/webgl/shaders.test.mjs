@@ -1628,6 +1628,16 @@ test("hideByAttribute and showByAttribute hide and show matching vertices", () =
   editor.free();
 });
 
+test("queryByAttribute includes hidden components", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal, GreaterOrEqual } = AttributeComparison;
+  editor.hideByAttribute(key, "_ID", Equal, 1);
+
+  const { keys } = editor.queryByAttribute(key, "_ID", GreaterOrEqual, 0);
+  assert.deepEqual(vertIndices(editor, key, keys), [1, 2, 3]);
+  editor.free();
+});
+
 test("hideByAttribute reports lookups that hide nothing", () => {
   const { editor, key } = attributeEditor();
   const { Equal, Less } = AttributeComparison;
