@@ -9,7 +9,8 @@ use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
 use super::attributes::{
-    AttributeComparison, VertsByAttribute, VertsByAttributeResult, apply_by_js_value,
+    AttributeComparison, VertsByAttributeOperation, VertsByAttributeResult,
+    operate_on_verts_by_js_value,
 };
 use super::{ComponentKeysJs, active_mesh};
 use crate::{MeshEditor, MeshKey, MeshNotFound};
@@ -143,14 +144,16 @@ impl MeshEditor {
             return Ok(VertsByAttributeResult::MeshInactive);
         };
 
-        Ok(apply_by_js_value(mesh, name, comparison, &value, &Select))
+        Ok(operate_on_verts_by_js_value(
+            mesh, name, comparison, &value, &Select,
+        ))
     }
 }
 
 struct Select;
 
-impl VertsByAttribute for Select {
-    fn apply<T: AttributeValue>(
+impl VertsByAttributeOperation for Select {
+    fn operate_on_verts_where<T: AttributeValue>(
         &self,
         mesh: &mut Mesh,
         name: &str,
