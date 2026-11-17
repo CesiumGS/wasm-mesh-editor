@@ -15,7 +15,8 @@ use crate::selection::{SelectionBoundary, SelectionState};
 use crate::{
     Aabb, AttributeChange, AttributeError, AttributeKey, AttributeValue, Attributes, ComponentKey,
     ComponentMask, ComponentRef, ComponentSet, EdgeKey, EdgeRef, FaceKey, FaceRef,
-    HiddenComponents, LoopKey, MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
+    HiddenComponents, LoopKey, MeshChange, Selection, SelectionView, SpatialQuery, Topology,
+    VertKey, VertRef,
 };
 
 pub use build::{EdgeAttributeBuffer, MeshBuffers, MeshBuildError};
@@ -315,6 +316,10 @@ impl Mesh {
 
         self.interactable_components = components;
         self.selection_mut().rebuild();
+    }
+
+    pub fn spatial_query(&self) -> SpatialQuery<'_> {
+        SpatialQuery { mesh: self }
     }
 
     pub fn selection(&self) -> SelectionView<'_> {

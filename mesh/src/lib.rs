@@ -15,6 +15,7 @@ mod mesh;
 mod mesh_change;
 mod mesh_component;
 mod selection;
+mod spatial_query;
 mod topology;
 mod vert;
 #[cfg(feature = "wasm")]
@@ -36,5 +37,6 @@ pub use mesh_component::{
     FaceKey, IntoComponentKey, LoopKey, VertKey,
 };
 pub use selection::{Selection, SelectionBoundary, SelectionStep, SelectionView};
+pub use spatial_query::{ClosestPoint, SpatialQuery};
 pub use topology::Topology;
 pub use vert::{Vert, VertRef};

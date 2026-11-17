@@ -6,6 +6,8 @@ mod attributes;
 mod hidden_components;
 #[path = "mesh-editor/selection.rs"]
 mod selection;
+#[path = "mesh-editor/spatial_query.rs"]
+mod spatial_query;
 
 use std::ops::Range;
 
