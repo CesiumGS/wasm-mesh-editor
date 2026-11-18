@@ -176,6 +176,17 @@ fn new_packs_buffers_with_keys_in_buffer_order() {
 }
 
 #[test]
+fn vertex_buffer_index_follows_buffer_order() {
+    let mut mesh = mixed_face_mesh();
+    let overlay = TopologyOverlay::new(&mut mesh);
+
+    for (index, &key) in overlay.buffers.component_keys.verts.iter().enumerate() {
+        assert_eq!(overlay.vertex_buffer_index(key), Some(index as u32));
+    }
+    assert_eq!(overlay.vertex_buffer_index(VertKey::null()), None);
+}
+
+#[test]
 fn face_keys_follow_triangle_face_indices_not_triangle_indices() {
     let mut mesh = mixed_face_mesh();
     let faces: Vec<_> = mesh.topology().faces().collect();
