@@ -288,11 +288,6 @@ impl TopologyOverlay {
         &self.buffers
     }
 
-    /// The vertex's index in the `positions` buffer, or `None` if the buffers don't include it yet.
-    pub fn vertex_buffer_index(&self, key: VertKey) -> Option<u32> {
-        self.vertex_key_to_buffer_index.get(key).copied()
-    }
-
     fn process_mesh_changes(&mut self, mesh: &Mesh) {
         while let Ok(event) = self.mesh_changes.try_recv() {
             match event.as_ref() {
