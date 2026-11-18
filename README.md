@@ -16,6 +16,7 @@ Small, reusable utility crates live under `utils/`:
 | --- | --- |
 | [event-emitter](utils/event-emitter/) | Queued broadcasts with shared read-only payloads and receiver-owned subscriptions. |
 | [geometry](utils/geometry/) | Geometry types and calculations, independent of any mesh data structure. |
+| [spatial-index](utils/spatial-index/) | Acceleration structures for finding items by their bounding boxes. |
 
 ## Prerequisites
 
