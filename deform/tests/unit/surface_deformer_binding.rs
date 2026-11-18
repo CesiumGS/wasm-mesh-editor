@@ -49,7 +49,7 @@ fn frame_coords_reconstruct_points_above_below_and_beyond_edges_and_vertices() {
 }
 
 #[test]
-fn frame_coords_are_affine_in_the_plane_and_unit_distance_along_the_normal() {
+fn margins_are_the_largest_normal_distance_and_overshoot() {
     let mesh = Mesh::from_buffers(MeshBuffers {
         positions: vec![
             Vec3::ZERO,
@@ -63,8 +63,9 @@ fn frame_coords_are_affine_in_the_plane_and_unit_distance_along_the_normal() {
     let positions = [Vec3::new(0.5, 1.0, 3.0), Vec3::new(1.0, -1.0, -2.0)];
     let binding = SurfaceDeformerBinding::new(&mesh, &positions, DMat4::IDENTITY).unwrap();
 
-    assert_eq!(binding.points[0].frame_coords, DVec3::new(0.25, 0.5, 3.0));
-    assert_eq!(binding.points[1].frame_coords, DVec3::new(0.5, -0.5, -2.0));
+    // Weights (0.25, 0.25, 0.5) and (1.0, 0.5, -0.5).
+    assert_eq!(binding.max_normal_distance, 3.0);
+    assert_eq!(binding.max_overshoot, 0.5);
 }
 
 #[test]
@@ -85,15 +86,37 @@ fn positions_are_transformed_into_deformer_space() {
 }
 
 #[test]
-fn max_distance_is_the_largest_distance_to_the_surface() {
-    let (mesh, _) = deformer();
-    // Beyond the edge from vertex 0 to vertex 1, the closest point is on the edge, so the distance
-    // exceeds the distance along the normal.
-    let positions = [Vec3::new(1.0, 0.5, 0.25), Vec3::new(1.0, -1.0, 0.25)];
+fn deformed_points_stay_within_the_expanded_deformer_bounds() {
+    let (mesh, verts) = deformer();
+    let positions = [
+        Vec3::new(0.5, 0.5, 1.0),
+        Vec3::new(1.0, -1.0, 0.0),
+        Vec3::new(-1.0, -1.0, -1.0),
+        Vec3::new(3.0, 3.0, 2.0),
+        Vec3::new(-0.5, 2.5, 0.0),
+    ];
     let binding = SurfaceDeformerBinding::new(&mesh, &positions, DMat4::IDENTITY).unwrap();
+    assert!(binding.max_overshoot > 0.0);
 
-    assert!((binding.max_distance - 1.0).abs() < 1e-12);
-    assert!(binding.points[1].frame_coords.z.abs() < binding.max_distance);
+    // Stretches, shears, and flattens the deformer.
+    let moved = |key: VertKey| {
+        let p = mesh.attributes().positions[key].as_dvec3();
+        DVec3::new(5.0 * p.x + p.y, 0.5 * p.y, 0.1 * p.z - p.x)
+    };
+    let corners: Vec<_> = verts.iter().map(|&key| moved(key)).collect();
+    let min = corners.iter().copied().reduce(DVec3::min).unwrap();
+    let max = corners.iter().copied().reduce(DVec3::max).unwrap();
+    let margin = binding.max_overshoot * (max - min) + binding.max_normal_distance;
+
+    for point in &binding.points {
+        let [p0, p1, p2] = point.deformer_verts.map(moved);
+        let normal = (p1 - p0).cross(p2 - p0).normalize();
+        let [a, b, c] = point.frame_coords.to_array();
+        let deformed = p0 + a * (p1 - p0) + b * (p2 - p0) + c * normal;
+
+        assert!(deformed.cmpge(min - margin - 1e-12).all());
+        assert!(deformed.cmple(max + margin + 1e-12).all());
+    }
 }
 
 #[test]
@@ -101,7 +124,8 @@ fn binding_is_none_without_a_surface_and_empty_without_positions() {
     let (mesh, _) = deformer();
     let binding = SurfaceDeformerBinding::new(&mesh, &[], DMat4::IDENTITY).unwrap();
     assert!(binding.points.is_empty());
-    assert_eq!(binding.max_distance, 0.0);
+    assert_eq!(binding.max_normal_distance, 0.0);
+    assert_eq!(binding.max_overshoot, 0.0);
 
     assert!(SurfaceDeformerBinding::new(&Mesh::new(), &[Vec3::ZERO], DMat4::IDENTITY).is_none());
     assert!(SurfaceDeformerBinding::new(&mesh, &[Vec3::NAN], DMat4::IDENTITY).is_none());
