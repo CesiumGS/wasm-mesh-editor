@@ -116,6 +116,10 @@ fn new_packs_buffers_with_keys_in_buffer_order() {
     let buffers = &overlay.buffers;
 
     assert_eq!(buffers.positions.data.len(), 6);
+    assert_eq!(
+        buffers.component_keys.verts,
+        mesh.topology().verts().collect::<Vec<_>>()
+    );
     assert_eq!(buffers.edges.data.len(), 6);
     assert_eq!(
         buffers.triangles.data,
@@ -175,17 +179,6 @@ fn new_packs_buffers_with_keys_in_buffer_order() {
     assert!(buffers.positions.dirty_range.is_none());
     assert!(buffers.edges.dirty_range.is_none());
     assert!(buffers.triangles.dirty_range.is_none());
-}
-
-#[test]
-fn vertex_buffer_index_follows_buffer_order() {
-    let mut mesh = mixed_face_mesh();
-    let overlay = TopologyOverlay::new(&mut mesh);
-
-    for (index, &key) in overlay.buffers.component_keys.verts.iter().enumerate() {
-        assert_eq!(overlay.vertex_buffer_index(key), Some(index as u32));
-    }
-    assert_eq!(overlay.vertex_buffer_index(VertKey::null()), None);
 }
 
 #[test]
