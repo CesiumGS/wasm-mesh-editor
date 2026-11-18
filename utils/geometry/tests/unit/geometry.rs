@@ -250,23 +250,6 @@ fn aabb_translated_moves_both_corners() {
 }
 
 #[test]
-fn closest_point_on_triangle_handles_interior_edge_and_vertex_regions() {
-    let triangle = [DVec3::ZERO, DVec3::X, DVec3::Y];
-
-    for (point, expected) in [
-        (DVec3::new(0.25, 0.25, 2.0), [0.5, 0.25, 0.25]),
-        (DVec3::new(-1.0, -1.0, 0.0), [1.0, 0.0, 0.0]),
-        (DVec3::new(2.0, -0.5, 0.0), [0.0, 1.0, 0.0]),
-        (DVec3::new(-0.5, 2.0, 1.0), [0.0, 0.0, 1.0]),
-        (DVec3::new(0.5, -1.0, 0.0), [0.5, 0.5, 0.0]),
-        (DVec3::new(-1.0, 0.25, 0.0), [0.75, 0.0, 0.25]),
-        (DVec3::new(1.0, 1.0, 0.0), [0.0, 0.5, 0.5]),
-    ] {
-        assert_eq!(closest_point_on_triangle(point, triangle), expected);
-    }
-}
-
-#[test]
 fn aabb_distance_squared_is_zero_inside_and_measures_to_the_nearest_face_edge_or_corner() {
     let aabb = Aabb {
         min: Vec3::ZERO,

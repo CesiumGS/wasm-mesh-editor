@@ -1,3 +1,4 @@
+use geometry::Triangle;
 use glam::{DMat4, DVec3, Vec3};
 use mesh::{Mesh, VertKey};
 
@@ -40,13 +41,12 @@ impl SurfaceBinding {
                 max_distance_squared = max_distance_squared
                     .max(point.distance_squared(closest_deformer_point.position));
 
-                let triangle = closest_deformer_point
-                    .verts
-                    .map(|key| positions[key].as_dvec3());
+                let verts = closest_deformer_point.verts;
+                let triangle = Triangle::new(verts.map(|key| positions[key].as_dvec3()))?;
 
                 Some(BoundPoint {
-                    verts: closest_deformer_point.verts,
-                    coords: frame_coords(point, triangle),
+                    verts,
+                    coords: triangle.to_frame(point),
                 })
             })
             .collect::<Option<_>>()?;
@@ -77,20 +77,6 @@ impl SurfaceBinding {
             out.copy_from_slice(&[i0, i1, i2, a, b, c]);
         }
     }
-}
-
-/// `[a, b, c]` such that `point = p0 + a * (p1 - p0) + b * (p2 - p0) + c * n`, where `n` is the
-/// triangle's unit normal. The triangle must not be degenerate.
-fn frame_coords(point: DVec3, [p0, p1, p2]: [DVec3; 3]) -> DVec3 {
-    let (e1, e2, offset) = (p1 - p0, p2 - p0, point - p0);
-    let normal = e1.cross(e2);
-    let length_squared = normal.length_squared();
-
-    DVec3::new(
-        offset.cross(e2).dot(normal) / length_squared,
-        e1.cross(offset).dot(normal) / length_squared,
-        offset.dot(normal) / length_squared.sqrt(),
-    )
 }
 
 #[cfg(test)]

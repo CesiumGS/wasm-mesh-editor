@@ -1,4 +1,4 @@
-use geometry::closest_point_on_triangle;
+use geometry::Triangle;
 use glam::Vec3;
 
 use crate::{Attributes, MeshBuffers};
@@ -145,12 +145,8 @@ fn closest_point_matches_brute_force() {
             .topology
             .faces()
             .flat_map(|face| mesh.face(face).unwrap().triangulation().collect::<Vec<_>>())
-            .map(|verts| {
-                let triangle = verts.map(|key| positions[key].as_dvec3());
-                let bary = closest_point_on_triangle(point, triangle);
-                point
-                    .distance(triangle[0] * bary[0] + triangle[1] * bary[1] + triangle[2] * bary[2])
-            })
+            .filter_map(|verts| Triangle::new(verts.map(|key| positions[key].as_dvec3())))
+            .map(|triangle| point.distance(triangle.point_at(triangle.closest_point(point))))
             .fold(f64::INFINITY, f64::min);
         let closest = mesh.spatial_query().closest_point(point).unwrap();
 
