@@ -3,7 +3,7 @@ use glam::{DMat4, DVec3, Vec3};
 use mesh::{Mesh, VertKey};
 
 /// Points bound to a deformer mesh's triangles, so they follow the triangles as the mesh is edited.
-pub struct SurfaceBinding {
+pub struct SurfaceDeformerBinding {
     /// One per deformable position, in input order, expressed in the frame of its closest deformer
     /// triangle.
     pub points: Vec<BoundPoint>,
@@ -11,16 +11,16 @@ pub struct SurfaceBinding {
     pub max_distance: f64,
 }
 
-/// A point in the frame of its deformer triangle `verts = [P0, P1, P2]`:
-/// `P0 + a * (P1 - P0) + b * (P2 - P0) + c * n`, where `[a, b, c] = coords` and `n` is the
+/// A point in the frame of its deformer triangle `deformer_verts = [P0, P1, P2]`:
+/// `P0 + a * (P1 - P0) + b * (P2 - P0) + c * n`, where `[a, b, c] = frame_coords` and `n` is the
 /// triangle's unit normal.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoundPoint {
-    pub verts: [VertKey; 3],
-    pub coords: DVec3,
+    pub deformer_verts: [VertKey; 3],
+    pub frame_coords: DVec3,
 }
 
-impl SurfaceBinding {
+impl SurfaceDeformerBinding {
     /// Binds each of `deformable_positions` to its closest triangle of `deformer`, after
     /// transforming it into deformer-local space. Returns `None` if a point has no closest point
     /// (see [`SpatialQuery::closest_point`](mesh::SpatialQuery::closest_point)).
@@ -41,12 +41,12 @@ impl SurfaceBinding {
                 max_distance_squared = max_distance_squared
                     .max(point.distance_squared(closest_deformer_point.position));
 
-                let verts = closest_deformer_point.verts;
-                let triangle = Triangle::new(verts.map(|key| positions[key].as_dvec3()))?;
+                let deformer_verts = closest_deformer_point.verts;
+                let triangle = Triangle::new(deformer_verts.map(|key| positions[key].as_dvec3()))?;
 
                 Some(BoundPoint {
-                    verts,
-                    coords: triangle.to_frame(point),
+                    deformer_verts,
+                    frame_coords: triangle.to_frame(point),
                 })
             })
             .collect::<Option<_>>()?;
@@ -72,13 +72,13 @@ impl SurfaceBinding {
         );
 
         for (point, out) in self.points.iter().zip(out.chunks_exact_mut(6)) {
-            let [i0, i1, i2] = point.verts.map(|key| vertex_index(key) as f32);
-            let [a, b, c] = point.coords.as_vec3().to_array();
+            let [i0, i1, i2] = point.deformer_verts.map(|key| vertex_index(key) as f32);
+            let [a, b, c] = point.frame_coords.as_vec3().to_array();
             out.copy_from_slice(&[i0, i1, i2, a, b, c]);
         }
     }
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/surface_binding.rs"]
+#[path = "../tests/unit/surface_deformer_binding.rs"]
 mod tests;
