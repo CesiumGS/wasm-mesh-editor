@@ -4,13 +4,16 @@ mod build;
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::OnceLock;
 use std::sync::mpsc::Receiver;
 
 use event_emitter::{Event, EventEmitter};
 use geometry::corner_angle;
 use glam::{DVec3, Vec3};
+use spatial_index::{Bvh, SpatialIndex};
 
 use crate::selection::{SelectionBoundary, SelectionState};
+use crate::spatial_query::face_bounds;
 use crate::{
     Aabb, AttributeChange, AttributeError, AttributeKey, AttributeValue, Attributes, ComponentKey,
     ComponentMask, ComponentRef, ComponentSet, EdgeKey, EdgeRef, FaceKey, FaceRef,
@@ -33,6 +36,9 @@ pub struct Mesh {
     /// Face normals cached per smooth update; storage is reused across updates
     /// just to avoid reallocating the storage on each update.
     face_normals: HashMap<FaceKey, DVec3>,
+
+    /// Built by the first query after an edit that moves or changes faces.
+    spatial_index: OnceLock<Bvh<FaceKey>>,
 }
 
 impl Default for Mesh {
@@ -45,6 +51,7 @@ impl Default for Mesh {
             interactable_components: ComponentMask::VERTEX,
             changes: EventEmitter::default(),
             face_normals: HashMap::new(),
+            spatial_index: OnceLock::new(),
         }
     }
 }
@@ -142,6 +149,7 @@ impl Mesh {
         }
 
         selection.translate_bounds(delta);
+        self.spatial_index.take();
 
         let boundary = SelectionBoundary::new(selection, topology);
         let loops = Rc::clone(boundary.mixed_face_loops());
@@ -281,8 +289,13 @@ impl Mesh {
         self.selection_mut().rebuild();
     }
 
-    pub fn spatial_query(&self) -> SpatialQuery<'_> {
-        SpatialQuery { mesh: self }
+    /// Spatial queries over the mesh's faces, such as finding the closest point on its surface.
+    /// The first call after the faces move or change rebuilds an index over them.
+    pub fn spatial_query(&self) -> SpatialQuery<'_, impl SpatialIndex<FaceKey>> {
+        let index = self
+            .spatial_index
+            .get_or_init(|| Bvh::new(face_bounds(self)));
+        SpatialQuery::new(self, index)
     }
 
     pub fn selection(&self) -> SelectionView<'_> {

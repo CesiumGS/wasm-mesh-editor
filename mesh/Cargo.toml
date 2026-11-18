@@ -12,6 +12,7 @@ event-emitter = { path = "../utils/event-emitter" }
 geometry = { path = "../utils/geometry" }
 glam.workspace = true
 slotmap.workspace = true
+spatial-index = { path = "../utils/spatial-index" }
 wasm-bindgen = { workspace = true, optional = true }
 
 [features]

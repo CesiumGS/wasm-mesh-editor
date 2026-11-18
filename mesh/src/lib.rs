@@ -36,6 +36,7 @@ pub use mesh_component::{
     FaceKey, IntoComponentKey, LoopKey, VertKey,
 };
 pub use selection::{Selection, SelectionBoundary, SelectionStep, SelectionView};
+pub use spatial_index::SpatialIndex;
 pub use spatial_query::{ClosestPoint, SpatialQuery};
 pub use topology::Topology;
 pub use vert::{Vert, VertRef};
