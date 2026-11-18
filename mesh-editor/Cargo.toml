@@ -18,6 +18,7 @@ crate-type = ["cdylib", "rlib"]
 # Exposes the editor to JS through wasm-bindgen. Enabled when building with wasm-pack.
 wasm = [
     "dep:bytemuck",
+    "dep:deform",
     "dep:wasm-bindgen",
     "dep:js-sys",
     "dep:serde",
@@ -30,6 +31,7 @@ wasm = [
 
 [dependencies]
 bytemuck = { workspace = true, optional = true }
+deform = { path = "../deform", optional = true }
 geometry = { path = "../utils/geometry" }
 glam.workspace = true
 js-sys = { workspace = true, optional = true }

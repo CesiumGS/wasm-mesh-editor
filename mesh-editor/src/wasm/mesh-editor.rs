@@ -8,6 +8,8 @@ mod hidden_components;
 mod selection;
 #[path = "mesh-editor/spatial_query.rs"]
 mod spatial_query;
+#[path = "mesh-editor/surface_deformer_binding.rs"]
+mod surface_deformer_binding;
 
 use std::ops::Range;
 

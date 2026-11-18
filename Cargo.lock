@@ -110,6 +110,7 @@ name = "mesh-editor"
 version = "0.1.0-alpha.0"
 dependencies = [
  "bytemuck",
+ "deform",
  "geometry",
  "glam",
  "js-sys",
