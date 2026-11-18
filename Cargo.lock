@@ -216,6 +216,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "spatial-index"
+version = "0.1.0-alpha.0"
+dependencies = [
+ "geometry",
+ "glam",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"

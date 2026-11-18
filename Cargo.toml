@@ -6,6 +6,7 @@ members = [
     "mesh-editor",
     "utils/event-emitter",
     "utils/geometry",
+    "utils/spatial-index",
 ]
 
 [workspace.package]

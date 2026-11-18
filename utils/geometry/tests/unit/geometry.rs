@@ -265,3 +265,30 @@ fn closest_point_on_triangle_handles_interior_edge_and_vertex_regions() {
         assert_eq!(closest_point_on_triangle(point, triangle), expected);
     }
 }
+
+#[test]
+fn aabb_distance_squared_is_zero_inside_and_measures_to_the_nearest_face_edge_or_corner() {
+    let aabb = Aabb {
+        min: Vec3::ZERO,
+        max: Vec3::ONE,
+    };
+
+    for (point, expected) in [
+        (DVec3::splat(0.5), 0.0),
+        (DVec3::new(0.5, 0.5, 3.0), 4.0),
+        (DVec3::new(-1.0, 0.5, 2.0), 2.0),
+        (DVec3::new(2.0, 3.0, -1.0), 6.0),
+    ] {
+        assert_eq!(aabb.distance_squared(point), expected);
+    }
+}
+
+#[test]
+fn aabb_center_is_the_midpoint_of_its_corners() {
+    let aabb = Aabb {
+        min: Vec3::new(-1.0, 0.0, 2.0),
+        max: Vec3::new(3.0, 4.0, 2.0),
+    };
+
+    assert_eq!(aabb.center(), Vec3::new(1.0, 2.0, 2.0));
+}

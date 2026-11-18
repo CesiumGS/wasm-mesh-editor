@@ -93,6 +93,15 @@ impl Aabb {
             max: self.max + delta,
         }
     }
+
+    /// The squared distance from `point` to the nearest point in the box; zero inside it.
+    pub fn distance_squared(self, point: DVec3) -> f64 {
+        point.distance_squared(point.clamp(self.min.as_dvec3(), self.max.as_dvec3()))
+    }
+
+    pub fn center(self) -> Vec3 {
+        (self.min + self.max) * 0.5
+    }
 }
 
 /// Returns a finite inverse, or `None` for non-affine, singular, or non-finite matrices.
