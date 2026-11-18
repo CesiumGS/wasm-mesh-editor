@@ -1,6 +1,6 @@
 //! Spatial queries over a mesh's surface.
 
-use geometry::{Aabb, closest_point_on_triangle, polygon_normal};
+use geometry::{Aabb, Triangle};
 use glam::DVec3;
 use spatial_index::SpatialIndex;
 
@@ -43,14 +43,13 @@ impl<'a, I: SpatialIndex<FaceKey>> SpatialQuery<'a, I> {
             |bounds| Some(bounds.distance_squared(point)),
             |face| {
                 for verts in self.mesh.face(face).unwrap().triangulation() {
-                    let triangle = verts.map(|key| positions[key].as_dvec3());
-                    if polygon_normal(triangle).is_none() {
+                    let Some(triangle) = Triangle::new(verts.map(|key| positions[key].as_dvec3()))
+                    else {
                         continue;
-                    }
+                    };
 
-                    let bary = closest_point_on_triangle(point, triangle);
-                    let position =
-                        triangle[0] * bary[0] + triangle[1] * bary[1] + triangle[2] * bary[2];
+                    let bary = triangle.closest_point(point);
+                    let position = triangle.point_at(bary);
                     let distance = point.distance_squared(position);
 
                     if closest.is_none_or(|(closest_distance, _)| distance < closest_distance) {

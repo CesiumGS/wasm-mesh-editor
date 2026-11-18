@@ -6,5 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+geometry = { path = "../utils/geometry" }
 glam.workspace = true
 mesh = { path = "../mesh" }
