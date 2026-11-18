@@ -16,7 +16,7 @@ mod wasm;
 
 pub use edit_mode::EditMode;
 /// A ray interpreted in world coordinates by editor tools.
-pub use mesh::Ray as WorldRay;
+pub use geometry::Ray as WorldRay;
 pub use mesh_editor::{MeshEditor, MeshKey, MeshNotFound, ToolActivationError, UpdateResult};
 pub use mesh_transform::MeshTransform;
 pub use tool::{

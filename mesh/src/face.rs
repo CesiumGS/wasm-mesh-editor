@@ -1,8 +1,8 @@
 //! Face component and its composed view.
 
+use geometry::polygon_normal;
 use glam::{DVec3, Vec2, Vec3};
 
-use crate::geometry::polygon_normal;
 use crate::{AttributeValue, Attributes, EdgeKey, FaceKey, LoopKey, Topology, VertKey};
 
 /// A face (n-gon), reached from an entry loop.

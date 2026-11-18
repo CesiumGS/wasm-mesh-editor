@@ -1,7 +1,7 @@
 use std::any::Any;
 
+use geometry::Plane;
 use glam::DVec3;
-use mesh::Plane;
 
 use crate::{EditMode, MeshTransform, PointerInput, Tool, ToolContext};
 
