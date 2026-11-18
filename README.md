@@ -9,6 +9,7 @@ A modular mesh-editing library for the web and native. Use it headless, or bring
 | `mesh` | Headless mesh kernel based on a radial edge structure. |
 | `topology-overlay` | A translation layer from the mesh data model to GPU-ready data buffers for drawing the mesh overlay (points, edges, and faces), plus the WebGL2 shaders that draw them. |
 | `mesh-editor` | An orchestration layer for composing multiple meshes and overlays, and manager of global state (like edit mode, tools, etc.). With the `wasm` feature, it also compiles everything into one `.wasm` and exposes the editor to JS via `wasm-bindgen`. |
+| `deform` | Computes the data that lets one mesh deform another, such as binding points to a mesh's surface. |
 
 Small, reusable utility crates live under `utils/`:
 
