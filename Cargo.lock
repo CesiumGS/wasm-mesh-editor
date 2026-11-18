@@ -55,6 +55,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "geometry"
+version = "0.1.0-alpha.0"
+dependencies = [
+ "glam",
+]
+
+[[package]]
 name = "glam"
 version = "0.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -82,6 +89,7 @@ dependencies = [
  "bitflags",
  "bytemuck",
  "event-emitter",
+ "geometry",
  "glam",
  "slotmap",
  "wasm-bindgen",
@@ -92,6 +100,7 @@ name = "mesh-editor"
 version = "0.1.0-alpha.0"
 dependencies = [
  "bytemuck",
+ "geometry",
  "glam",
  "js-sys",
  "mesh",

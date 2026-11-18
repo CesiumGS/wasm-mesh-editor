@@ -1,7 +1,7 @@
 //! Shared selection helpers and drag-position tracking for tools.
 
+use geometry::centroid;
 use glam::DVec3;
-use mesh::centroid;
 
 use crate::{MeshTransform, ToolContext};
 

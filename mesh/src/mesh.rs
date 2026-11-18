@@ -7,10 +7,10 @@ use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 
 use event_emitter::{Event, EventEmitter};
+use geometry::corner_angle;
 use glam::{DVec3, Vec3};
 use slotmap::SecondaryMap;
 
-use crate::geometry::corner_angle;
 use crate::selection::{SelectionBoundary, SelectionState};
 use crate::{
     Aabb, AttributeChange, AttributeError, AttributeKey, AttributeValue, Attributes, ComponentKey,

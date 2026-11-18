@@ -9,6 +9,7 @@ rust-version.workspace = true
 bitflags.workspace = true
 bytemuck = { workspace = true, optional = true }
 event-emitter = { path = "../utils/event-emitter" }
+geometry = { path = "../utils/geometry" }
 glam.workspace = true
 slotmap.workspace = true
 wasm-bindgen = { workspace = true, optional = true }

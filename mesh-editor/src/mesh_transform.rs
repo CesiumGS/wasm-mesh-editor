@@ -1,5 +1,5 @@
+use geometry::try_inverse_affine;
 use glam::{DMat4, DVec3, Vec3};
-use mesh::try_inverse_affine;
 
 use crate::MeshKey;
 

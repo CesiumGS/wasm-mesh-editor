@@ -15,6 +15,7 @@ Small, reusable utility crates live under `utils/`:
 | Crate | Role |
 | --- | --- |
 | [event-emitter](utils/event-emitter/) | Queued broadcasts with shared read-only payloads and receiver-owned subscriptions. |
+| [geometry](utils/geometry/) | Geometry types and calculations, independent of any mesh data structure. |
 
 ## Prerequisites
 

@@ -1,8 +1,8 @@
 //! Spatial queries over a mesh's surface.
 
+use geometry::{closest_point_on_triangle, polygon_normal};
 use glam::DVec3;
 
-use crate::geometry::{closest_point_on_triangle, polygon_normal};
 use crate::{FaceKey, Mesh, VertKey};
 
 /// Read-only spatial queries over a mesh's faces, including hidden ones.

@@ -5,6 +5,7 @@ members = [
     "topology-overlay",
     "mesh-editor",
     "utils/event-emitter",
+    "utils/geometry",
 ]
 
 [workspace.package]

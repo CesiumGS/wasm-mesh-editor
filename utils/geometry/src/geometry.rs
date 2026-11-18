@@ -1,4 +1,4 @@
-//! Geometry calculations independent of mesh topology and selection.
+//! Geometry types and calculations.
 
 use glam::{DMat4, DVec3, Vec3};
 
@@ -142,7 +142,7 @@ pub fn centroid(positions: impl IntoIterator<Item = DVec3>) -> Option<(DVec3, us
 }
 
 /// For planar polygons, points along the normal and has length equal to the area.
-pub(crate) fn polygon_area_vector(positions: impl IntoIterator<Item = DVec3>) -> DVec3 {
+fn polygon_area_vector(positions: impl IntoIterator<Item = DVec3>) -> DVec3 {
     let mut positions = positions.into_iter();
     let Some(origin) = positions.next() else {
         return DVec3::ZERO;
@@ -162,7 +162,7 @@ pub(crate) fn polygon_area_vector(positions: impl IntoIterator<Item = DVec3>) ->
 }
 
 /// A unit normal, or `None` when the polygon has no usable area.
-pub(crate) fn polygon_normal(positions: impl IntoIterator<Item = DVec3>) -> Option<DVec3> {
+pub fn polygon_normal(positions: impl IntoIterator<Item = DVec3>) -> Option<DVec3> {
     polygon_area_vector(positions).try_normalize()
 }
 
@@ -170,7 +170,7 @@ pub(crate) fn polygon_normal(positions: impl IntoIterator<Item = DVec3>) -> Opti
 /// `[wa, wb, wc]` such that the closest point is `wa * a + wb * b + wc * c`. All positions must be
 /// in the same space. From Ericson's Real-Time Collision Detection (5.1.5).
 /// The input triangle must not be degenerate.
-pub(crate) fn closest_point_on_triangle(point: DVec3, [a, b, c]: [DVec3; 3]) -> [f64; 3] {
+pub fn closest_point_on_triangle(point: DVec3, [a, b, c]: [DVec3; 3]) -> [f64; 3] {
     let ab = b - a;
     let ac = c - a;
 
@@ -220,7 +220,7 @@ pub(crate) fn closest_point_on_triangle(point: DVec3, [a, b, c]: [DVec3; 3]) -> 
 }
 
 /// The angle inside the face, including corners greater than 180 degrees.
-pub(crate) fn corner_angle(to_previous: DVec3, to_next: DVec3, face_normal: DVec3) -> f64 {
+pub fn corner_angle(to_previous: DVec3, to_next: DVec3, face_normal: DVec3) -> f64 {
     let Some(previous) = to_previous.try_normalize() else {
         return 0.0;
     };

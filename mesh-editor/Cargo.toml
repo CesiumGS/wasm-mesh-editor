@@ -30,6 +30,7 @@ wasm = [
 
 [dependencies]
 bytemuck = { workspace = true, optional = true }
+geometry = { path = "../utils/geometry" }
 glam.workspace = true
 js-sys = { workspace = true, optional = true }
 mesh = { path = "../mesh" }
