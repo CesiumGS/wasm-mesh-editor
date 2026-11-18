@@ -92,6 +92,7 @@ dependencies = [
  "geometry",
  "glam",
  "slotmap",
+ "spatial-index",
  "wasm-bindgen",
 ]
 
