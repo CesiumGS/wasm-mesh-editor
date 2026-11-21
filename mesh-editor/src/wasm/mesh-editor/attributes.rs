@@ -1,26 +1,32 @@
-//! JS adapters for listing and reading mesh attributes, and shared by operations on the vertices
-//! whose custom attribute matches a value.
+//! JS adapters for listing, reading and writing mesh attributes, and shared by operations on the
+//! components whose attribute matches a value.
 
+use std::cmp::Ordering;
+
+use bytemuck::Pod;
 use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
-use js_sys::BigUint64Array;
-use mesh::{AttributeDescriptor, AttributeError, AttributeMap, AttributeValue, Mesh, VertKey};
+use js_sys::{BigUint64Array, Float32Array, Int32Array, Uint8Array, Uint32Array};
+use mesh::{
+    AttributeComponentType, AttributeDescriptor, AttributeDomain, AttributeError, AttributeKey,
+    AttributeType, AttributeValue, EdgeKey, FaceKey, Mesh, SelectionKind, VertKey,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use slotmap::{Key, SecondaryMap};
 use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
+use super::{active_mesh, ffi, key_from_ffi};
 use crate::{MeshEditor, MeshKey, MeshNotFound};
 
-/// The result of calling a function that operates on a set of vertices specified by attribute value, like
-/// `selectVertsByAttribute` or `queryVertsByAttribute`. Only `Ok` indicates success.
+/// The result of calling a function that operates on the components specified by attribute value,
+/// like `selectByAttribute` or `queryByAttribute`. Only `Ok` indicates success.
 #[wasm_bindgen]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VertsByAttributeResult {
-    /// The attribute was found and the operation applied to any matching vertices. That may be
-    /// none, if nothing matched or vertices aren't selectable in the current mode.
+pub enum ByAttributeResult {
+    /// The attribute was found and the operation applied to any matching components. That may be
+    /// none, if nothing matched or the components aren't selectable in the current mode.
     Ok = 0,
-    /// The mesh has no vertex attribute with that name.
+    /// The mesh has no attribute with that name.
     AttributeNotFound = 1,
     /// The value doesn't fit the attribute's type, like `1.5` for an integer attribute or a
     /// number for a vector attribute.
@@ -30,11 +36,12 @@ pub enum VertsByAttributeResult {
     /// The comparison doesn't apply to the attribute's type: vector attributes only support
     /// `Equal` and `NotEqual`.
     UnsupportedComparison = 4,
+    /// The operation doesn't apply to corner attributes, since JS has no corner keys.
+    UnsupportedDomain = 5,
 }
 
-/// How functions that operate on vertices by attribute compare each
-/// vertex's attribute value to the given value.
-/// Float comparisons follow IEEE 754, so a NaN only matches `NotEqual`.
+/// How functions that operate on components by attribute compare each component's attribute
+/// value to the given value. Float comparisons follow IEEE 754, so a NaN only matches `NotEqual`.
 #[wasm_bindgen]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttributeComparison {
@@ -46,81 +53,67 @@ pub enum AttributeComparison {
     GreaterOrEqual = 5,
 }
 
-/// Evaluates `$body` with `$predicate` comparing `$attribute`'s values to the JS `$value`.
-/// A macro since each attribute type needs its own predicate type.
-macro_rules! with_predicate {
-    ($attribute:expr, $comparison:expr, $value:expr, $predicate:ident => $body:expr) => {
-        match $attribute {
-            AttributeMap::F32(_) => {
-                let $predicate = scalar_predicate($comparison, from_js::<f32>($value));
-                $body
+/// Evaluates `$body` with `$K` and `$T` as the key and value types of an attribute in `$domain`
+/// with `$value_type` values, or evaluates `$corner` for corner attributes, since JS has no corner
+/// keys. A macro since each pair of types needs its own instance of `$body`.
+macro_rules! with_attribute_types {
+    ($domain:expr, $value_type:expr, $K:ident, $T:ident => $body:expr, corner => $corner:expr) => {
+        match $domain {
+            AttributeDomain::Vertex => {
+                type $K = VertKey;
+                with_value_type!($value_type, $T => $body)
             }
-            AttributeMap::Vec2(_) => {
-                let $predicate =
-                    vector_predicate($comparison, vector_from_js::<Vec2, _, _>($value));
-                $body
+            AttributeDomain::Edge => {
+                type $K = EdgeKey;
+                with_value_type!($value_type, $T => $body)
             }
-            AttributeMap::Vec3(_) => {
-                let $predicate =
-                    vector_predicate($comparison, vector_from_js::<Vec3, _, _>($value));
-                $body
+            AttributeDomain::Face => {
+                type $K = FaceKey;
+                with_value_type!($value_type, $T => $body)
             }
-            AttributeMap::Vec4(_) => {
-                let $predicate =
-                    vector_predicate($comparison, vector_from_js::<Vec4, _, _>($value));
-                $body
-            }
-            AttributeMap::U32(_) => {
-                let $predicate = scalar_predicate($comparison, from_js::<u32>($value));
-                $body
-            }
-            AttributeMap::UVec2(_) => {
-                let $predicate =
-                    vector_predicate($comparison, vector_from_js::<UVec2, _, _>($value));
-                $body
-            }
-            AttributeMap::UVec3(_) => {
-                let $predicate =
-                    vector_predicate($comparison, vector_from_js::<UVec3, _, _>($value));
-                $body
-            }
-            AttributeMap::UVec4(_) => {
-                let $predicate =
-                    vector_predicate($comparison, vector_from_js::<UVec4, _, _>($value));
-                $body
-            }
-            AttributeMap::I32(_) => {
-                let $predicate = scalar_predicate($comparison, from_js::<i32>($value));
-                $body
-            }
-            AttributeMap::IVec2(_) => {
-                let $predicate =
-                    vector_predicate($comparison, vector_from_js::<IVec2, _, _>($value));
-                $body
-            }
-            AttributeMap::IVec3(_) => {
-                let $predicate =
-                    vector_predicate($comparison, vector_from_js::<IVec3, _, _>($value));
-                $body
-            }
-            AttributeMap::IVec4(_) => {
-                let $predicate =
-                    vector_predicate($comparison, vector_from_js::<IVec4, _, _>($value));
-                $body
-            }
+            AttributeDomain::Corner => $corner,
         }
     };
 }
 
-/// The result of `queryVertsByAttribute`. `verts` is empty unless `status` is `Ok`.
+/// Evaluates `$body` with `$T` as the [`AttributeValue`] type whose `VALUE_TYPE` is `$value_type`.
+macro_rules! with_value_type {
+    ($value_type:expr, $T:ident => $body:expr) => {
+        with_value_type!(
+            $value_type, $T => $body;
+            f32, Vec2, Vec3, Vec4, u32, UVec2, UVec3, UVec4, i32, IVec2, IVec3, IVec4
+        )
+    };
+    ($value_type:expr, $T:ident => $body:expr; $($type:ty),*) => {{
+        let value_type: AttributeType = $value_type;
+        $(
+            if value_type == <$type as AttributeValue>::VALUE_TYPE {
+                type $T = $type;
+                $body
+            } else
+        )* {
+            unreachable!("every attribute type is an AttributeValue's")
+        }
+    }};
+}
+
+#[wasm_bindgen]
+extern "C" {
+    /// One attribute value: a number for scalar attributes and an array of numbers for vector ones.
+    #[wasm_bindgen(typescript_type = "number | ArrayLike<number>")]
+    pub type AttributeValueJs;
+}
+
+/// The result of `queryByAttribute`. `keys` is empty unless `status` is `Ok`, and otherwise holds
+/// keys of the attribute's domain.
 #[derive(Serialize, Tsify)]
-#[tsify(rename = "VertsByAttributeQuery")]
-pub struct VertsByAttributeQueryJs {
-    #[tsify(type = "VertsByAttributeResult")]
+#[tsify(rename = "ByAttributeQuery")]
+pub struct ByAttributeQueryJs {
+    #[tsify(type = "ByAttributeResult")]
     status: u8,
     #[serde(with = "serde_wasm_bindgen::preserve")]
     #[tsify(type = "BigUint64Array")]
-    verts: BigUint64Array,
+    keys: BigUint64Array,
 }
 
 /// One of a mesh's attributes, as listed by `meshAttributes`.
@@ -171,78 +164,89 @@ impl MeshEditor {
         Ok(serde_wasm_bindgen::to_value(&attributes)?)
     }
 
-    /// The vertices whose `name` attribute compares to `value` as `comparison` says, like
-    /// `selectVertsByAttribute`. Works on inactive meshes. Throws for an unknown mesh key.
-    #[wasm_bindgen(js_name = queryVertsByAttribute)]
-    pub fn query_verts_by_attribute(
+    /// The vertices, edges or faces whose `name` attribute compares to `value` as `comparison`
+    /// says, like `selectByAttribute`. Works on inactive meshes. Throws for an unknown mesh key.
+    #[wasm_bindgen(js_name = queryByAttribute)]
+    pub fn query_by_attribute(
         &self,
         #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
         name: &str,
         comparison: AttributeComparison,
         #[wasm_bindgen(unchecked_param_type = "number | ArrayLike<number>")] value: JsValue,
-    ) -> Result<Ts<VertsByAttributeQueryJs>, JsError> {
+    ) -> Result<Ts<ByAttributeQueryJs>, JsError> {
         let mesh = self.mesh(mesh_key).ok_or(MeshNotFound { key: mesh_key })?;
 
-        let (status, verts) = match mesh.attributes().get::<VertKey>(name) {
-            None => (VertsByAttributeResult::AttributeNotFound, Vec::new()),
-            Some(attribute) => {
-                with_predicate!(attribute, comparison, &value, predicate => {
-                    vert_keys_where(mesh, name, predicate)
-                })
-            }
+        let (status, keys) = match descriptor_types(mesh, name) {
+            None => (ByAttributeResult::AttributeNotFound, Vec::new()),
+            Some((domain, value_type)) => with_attribute_types!(domain, value_type, K, T => {
+                match predicate::<T>(comparison, &value) {
+                    Ok(predicate) => (ByAttributeResult::Ok, keys_where::<K, T>(mesh, name, predicate)),
+                    Err(status) => (status, Vec::new()),
+                }
+            }, corner => (ByAttributeResult::UnsupportedDomain, Vec::new())),
         };
 
-        Ok(VertsByAttributeQueryJs {
+        Ok(ByAttributeQueryJs {
             status: status as u8,
-            verts: BigUint64Array::from(verts.as_slice()),
+            keys: BigUint64Array::from(keys.as_slice()),
         }
         .into_ts()?)
     }
 
-    /// A vertex's `name` attribute value: a number for scalar attributes and an array of numbers
-    /// for vector ones. `undefined` for an unknown vertex or attribute. Throws for an unknown mesh
-    /// key.
-    #[wasm_bindgen(
-        js_name = vertexAttributeValue,
-        unchecked_return_type = "number | number[] | undefined"
-    )]
-    pub fn vertex_attribute_value(
+    /// Writes the `name` attribute's values at vertex, edge or face `keys` to `out`, a typed array
+    /// matching the attribute's component type, with `componentCount` values per key. Keys that
+    /// aren't in the mesh get `noData`: a number for scalar attributes and an array of numbers for
+    /// vector ones. Works on inactive meshes. Throws for an unknown mesh key or attribute, a corner
+    /// attribute, a wrong `out` or `noData`, or a missing key without `noData`.
+    #[wasm_bindgen(js_name = attributeValues)]
+    pub fn attribute_values(
         &self,
         #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
-        #[wasm_bindgen(js_name = vertKey)] vert_key: u64,
         name: &str,
-    ) -> Result<JsValue, JsError> {
+        keys: Vec<u64>,
+        #[wasm_bindgen(unchecked_param_type = "Float32Array | Uint32Array | Int32Array")]
+        out: JsValue,
+        #[wasm_bindgen(js_name = noData)] no_data: Option<AttributeValueJs>,
+    ) -> Result<(), JsError> {
         let mesh = self.mesh(mesh_key).ok_or(MeshNotFound { key: mesh_key })?;
-        let (Some(vert), Some(attribute)) = (
-            VertKey::try_from_ffi(vert_key),
-            mesh.attributes().get::<VertKey>(name),
-        ) else {
-            return Ok(JsValue::UNDEFINED);
-        };
+        let (domain, value_type) = descriptor_types(mesh, name).ok_or_else(|| not_found(name))?;
 
-        let value = match attribute {
-            AttributeMap::F32(values) => value_to_js(values, vert),
-            AttributeMap::Vec2(values) => value_to_js(values, vert),
-            AttributeMap::Vec3(values) => value_to_js(values, vert),
-            AttributeMap::Vec4(values) => value_to_js(values, vert),
-            AttributeMap::U32(values) => value_to_js(values, vert),
-            AttributeMap::UVec2(values) => value_to_js(values, vert),
-            AttributeMap::UVec3(values) => value_to_js(values, vert),
-            AttributeMap::UVec4(values) => value_to_js(values, vert),
-            AttributeMap::I32(values) => value_to_js(values, vert),
-            AttributeMap::IVec2(values) => value_to_js(values, vert),
-            AttributeMap::IVec3(values) => value_to_js(values, vert),
-            AttributeMap::IVec4(values) => value_to_js(values, vert),
-        };
+        with_attribute_types!(domain, value_type, K, T => {
+            read_values::<K, T>(mesh, name, &keys, &out, no_data.as_deref())
+        }, corner => Err(corner_attribute(name)))
+    }
 
-        Ok(value?.unwrap_or(JsValue::UNDEFINED))
+    /// Writes `values` to an active mesh's `name` attribute at vertex, edge or face `keys`, like
+    /// `attributeValues` in reverse. Ignores keys that aren't in the mesh. Writing `POSITION` also
+    /// recomputes flat normals on the faces using the written vertices, so prefer
+    /// `translateSelected` for moving the selection. Returns `false` and does nothing if the mesh
+    /// is inactive. Throws like `attributeValues`, writing nothing.
+    #[wasm_bindgen(js_name = setAttributeValues)]
+    pub fn set_attribute_values(
+        &mut self,
+        #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
+        name: &str,
+        keys: Vec<u64>,
+        #[wasm_bindgen(unchecked_param_type = "Float32Array | Uint32Array | Int32Array")]
+        values: JsValue,
+    ) -> Result<bool, JsError> {
+        let Some(mesh) = active_mesh(self, mesh_key)? else {
+            return Ok(false);
+        };
+        let (domain, value_type) = descriptor_types(mesh, name).ok_or_else(|| not_found(name))?;
+
+        with_attribute_types!(domain, value_type, K, T => {
+            write_values::<K, T>(mesh, name, &keys, &values)
+        }, corner => Err(corner_attribute(name)))?;
+
+        Ok(true)
     }
 }
 
-/// An operation on the vertices whose `name` attribute satisfies a predicate, like
+/// An operation on the components whose `name` attribute satisfies a predicate, like
 /// [`mesh::Selection::select_by_attribute`].
-pub(super) trait VertsByAttributeOperation {
-    fn operate_on_verts_where<T: AttributeValue>(
+pub(super) trait ByAttributeOperation {
+    fn apply<K: AttributeKey + SelectionKind, T: AttributeValue>(
         &self,
         mesh: &mut Mesh,
         name: &str,
@@ -250,90 +254,217 @@ pub(super) trait VertsByAttributeOperation {
     ) -> Result<(), AttributeError>;
 }
 
-/// Applies `operation` to the vertices whose `name` attribute compares to `value`, converted to the
-/// attribute's stored type, as `comparison` says.
-pub(super) fn operate_on_verts_by_js_value(
+/// Applies `operation` to the vertices, edges or faces whose `name` attribute compares to `value`,
+/// converted to the attribute's type, as `comparison` says.
+pub(super) fn apply_by_js_value(
     mesh: &mut Mesh,
     name: &str,
     comparison: AttributeComparison,
     value: &JsValue,
-    operation: &impl VertsByAttributeOperation,
-) -> VertsByAttributeResult {
-    let Some(attribute) = mesh.attributes().get::<VertKey>(name) else {
-        return VertsByAttributeResult::AttributeNotFound;
+    operation: &impl ByAttributeOperation,
+) -> ByAttributeResult {
+    let Some((domain, value_type)) = descriptor_types(mesh, name) else {
+        return ByAttributeResult::AttributeNotFound;
     };
 
-    with_predicate!(attribute, comparison, value, predicate => match predicate {
-        Ok(predicate) => {
-            lookup_status(operation.operate_on_verts_where(mesh, name, predicate))
+    with_attribute_types!(domain, value_type, K, T => {
+        match predicate::<T>(comparison, value) {
+            Ok(predicate) => lookup_status(operation.apply::<K, T>(mesh, name, predicate)),
+            Err(status) => status,
         }
-        Err(result) => result,
-    })
+    }, corner => ByAttributeResult::UnsupportedDomain)
 }
 
-/// The FFI keys of the vertices whose `name` attribute satisfies `predicate`, and the status.
-fn vert_keys_where<T: AttributeValue>(
+/// The domain and value type of the attribute called `name`, if there is one.
+fn descriptor_types(mesh: &Mesh, name: &str) -> Option<(AttributeDomain, AttributeType)> {
+    let descriptor = mesh.attributes().descriptor(name)?;
+    Some((descriptor.domain, descriptor.value_type))
+}
+
+/// The FFI keys whose `name` attribute satisfies `predicate`.
+fn keys_where<K: AttributeKey, T: AttributeValue>(
     mesh: &Mesh,
     name: &str,
-    predicate: Result<impl Fn(T) -> bool, VertsByAttributeResult>,
-) -> (VertsByAttributeResult, Vec<u64>) {
-    let predicate = match predicate {
-        Ok(predicate) => predicate,
-        Err(result) => return (result, Vec::new()),
-    };
+    predicate: impl Fn(T) -> bool,
+) -> Vec<u64> {
+    mesh.attributes()
+        .keys_where::<K, T, _>(name, predicate)
+        .expect("the descriptor matches the attribute")
+        .map(ffi)
+        .collect()
+}
 
-    match mesh
-        .attributes()
-        .keys_where::<VertKey, _, _>(name, predicate)
-    {
-        Ok(verts) => (
-            VertsByAttributeResult::Ok,
-            verts.map(|vert| vert.data().as_ffi()).collect(),
+fn read_values<K: AttributeKey, T: AttributeValue + Pod>(
+    mesh: &Mesh,
+    name: &str,
+    keys: &[u64],
+    out: &JsValue,
+    no_data: Option<&JsValue>,
+) -> Result<(), JsError> {
+    let out = typed_array_bytes(out, T::VALUE_TYPE, keys.len(), "out")?;
+    let no_data = no_data
+        .map(|no_data| value_from_js::<T>(no_data).ok_or_else(|| wrong_type("noData")))
+        .transpose()?;
+    let map = mesh.attributes().values::<K, T>(name)?;
+
+    let values = keys
+        .iter()
+        .map(|&key| {
+            key_from_ffi(key)
+                .and_then(|key| map.get(key).copied())
+                .or(no_data)
+                .ok_or_else(|| JsError::new(&format!("key {key} is not in the mesh")))
+        })
+        .collect::<Result<Vec<T>, _>>()?;
+
+    out.copy_from(bytemuck::cast_slice(&values));
+    Ok(())
+}
+
+fn write_values<K: AttributeKey, T: AttributeValue + Pod>(
+    mesh: &mut Mesh,
+    name: &str,
+    keys: &[u64],
+    values: &JsValue,
+) -> Result<(), JsError> {
+    let bytes = typed_array_bytes(values, T::VALUE_TYPE, keys.len(), "values")?;
+    let mut values = vec![T::zeroed(); keys.len()];
+    bytes.copy_to(bytemuck::cast_slice_mut(&mut values));
+
+    let values: Vec<(K, T)> = keys
+        .iter()
+        .zip(values)
+        .filter_map(|(&key, value)| Some((key_from_ffi(key)?, value)))
+        .collect();
+
+    Ok(mesh.set_attribute_values(name, &values)?)
+}
+
+/// A byte view of `array`, if it's the typed array for `value_type`'s components and holds `count`
+/// values. `argument` names it in errors.
+fn typed_array_bytes(
+    array: &JsValue,
+    value_type: AttributeType,
+    count: usize,
+    argument: &str,
+) -> Result<Uint8Array, JsError> {
+    let (class, view) = match value_type.component_type {
+        AttributeComponentType::Float32 => (
+            "a Float32Array",
+            array
+                .dyn_ref::<Float32Array>()
+                .map(|array| (array.buffer(), array.byte_offset(), array.length())),
         ),
-        Err(error) => (lookup_status(Err(error)), Vec::new()),
+        AttributeComponentType::Uint32 => (
+            "a Uint32Array",
+            array
+                .dyn_ref::<Uint32Array>()
+                .map(|array| (array.buffer(), array.byte_offset(), array.length())),
+        ),
+        AttributeComponentType::Int32 => (
+            "an Int32Array",
+            array
+                .dyn_ref::<Int32Array>()
+                .map(|array| (array.buffer(), array.byte_offset(), array.length())),
+        ),
+    };
+    let (buffer, offset, length) =
+        view.ok_or_else(|| JsError::new(&format!("{argument} is not {class}")))?;
+
+    let expected = count * usize::from(value_type.component_count);
+    if length as usize != expected {
+        return Err(JsError::new(&format!(
+            "{argument} length {length} is not {expected}"
+        )));
     }
+
+    // Every component type is 4 bytes.
+    Ok(Uint8Array::new_with_byte_offset_and_length(
+        &buffer,
+        offset,
+        length * 4,
+    ))
 }
 
-fn lookup_status(result: Result<(), AttributeError>) -> VertsByAttributeResult {
+fn lookup_status(result: Result<(), AttributeError>) -> ByAttributeResult {
     match result {
-        Ok(()) => VertsByAttributeResult::Ok,
-        Err(AttributeError::NotFound { .. }) => VertsByAttributeResult::AttributeNotFound,
-        Err(AttributeError::WrongType { .. }) => VertsByAttributeResult::WrongType,
+        Ok(()) => ByAttributeResult::Ok,
+        Err(AttributeError::NotFound { .. }) => ByAttributeResult::AttributeNotFound,
+        Err(AttributeError::WrongType { .. }) => ByAttributeResult::WrongType,
     }
 }
 
-/// A predicate comparing values to `value`. `WrongType` if `value` is `None`, meaning the JS
-/// value didn't convert.
-fn scalar_predicate<T: PartialOrd + Copy>(
+/// A predicate comparing values to `value`, converted from JS. `UnsupportedComparison` for an
+/// ordering comparison on vectors, and `WrongType` if `value` doesn't fit `T`.
+fn predicate<T: AttributeValue + Pod + PartialEq>(
     comparison: AttributeComparison,
-    value: Option<T>,
-) -> Result<impl Fn(T) -> bool, VertsByAttributeResult> {
-    let value = value.ok_or(VertsByAttributeResult::WrongType)?;
+    value: &JsValue,
+) -> Result<impl Fn(T) -> bool, ByAttributeResult> {
+    let is_vector = T::VALUE_TYPE.component_count > 1;
+    let is_equality = matches!(
+        comparison,
+        AttributeComparison::Equal | AttributeComparison::NotEqual
+    );
+    if is_vector && !is_equality {
+        return Err(ByAttributeResult::UnsupportedComparison);
+    }
 
-    Ok(move |vert_value: T| match comparison {
-        AttributeComparison::Equal => vert_value == value,
-        AttributeComparison::NotEqual => vert_value != value,
-        AttributeComparison::Less => vert_value < value,
-        AttributeComparison::LessOrEqual => vert_value <= value,
-        AttributeComparison::Greater => vert_value > value,
-        AttributeComparison::GreaterOrEqual => vert_value >= value,
+    let value = value_from_js::<T>(value).ok_or(ByAttributeResult::WrongType)?;
+
+    Ok(move |other: T| {
+        let order = || scalar_order(other, value);
+        match comparison {
+            AttributeComparison::Equal => other == value,
+            AttributeComparison::NotEqual => other != value,
+            AttributeComparison::Less => order().is_some_and(Ordering::is_lt),
+            AttributeComparison::LessOrEqual => order().is_some_and(Ordering::is_le),
+            AttributeComparison::Greater => order().is_some_and(Ordering::is_gt),
+            AttributeComparison::GreaterOrEqual => order().is_some_and(Ordering::is_ge),
+        }
     })
 }
 
-/// Like [`scalar_predicate`], for vector types: `UnsupportedComparison` for anything but `Equal`
-/// and `NotEqual`.
-fn vector_predicate<T: PartialEq + Copy>(
-    comparison: AttributeComparison,
-    value: Option<T>,
-) -> Result<impl Fn(T) -> bool, VertsByAttributeResult> {
-    let matches_equal = match comparison {
-        AttributeComparison::Equal => true,
-        AttributeComparison::NotEqual => false,
-        _ => return Err(VertsByAttributeResult::UnsupportedComparison),
-    };
-    let value = value.ok_or(VertsByAttributeResult::WrongType)?;
+/// How scalar `a` compares to `b`, or `None` if either is NaN.
+fn scalar_order<T: AttributeValue + Pod>(a: T, b: T) -> Option<Ordering> {
+    match T::VALUE_TYPE.component_type {
+        AttributeComponentType::Float32 => {
+            bytemuck::cast::<T, f32>(a).partial_cmp(&bytemuck::cast(b))
+        }
+        AttributeComponentType::Uint32 => Some(bytemuck::cast::<T, u32>(a).cmp(&bytemuck::cast(b))),
+        AttributeComponentType::Int32 => Some(bytemuck::cast::<T, i32>(a).cmp(&bytemuck::cast(b))),
+    }
+}
 
-    Ok(move |vert_value: T| (vert_value == value) == matches_equal)
+/// `value` as `T`: a number for scalars, or an array or typed array of exactly as many numbers as
+/// `T` has components. `None` if it doesn't fit, like a fractional number for an integer type.
+fn value_from_js<T: AttributeValue + Pod>(value: &JsValue) -> Option<T> {
+    let mut result = T::zeroed();
+    let bytes = bytemuck::bytes_of_mut(&mut result);
+    let count = usize::from(T::VALUE_TYPE.component_count);
+
+    match T::VALUE_TYPE.component_type {
+        AttributeComponentType::Float32 => bytes.copy_from_slice(bytemuck::cast_slice(
+            &components_from_js::<f32>(value, count)?,
+        )),
+        AttributeComponentType::Uint32 => bytes.copy_from_slice(bytemuck::cast_slice(
+            &components_from_js::<u32>(value, count)?,
+        )),
+        AttributeComponentType::Int32 => bytes.copy_from_slice(bytemuck::cast_slice(
+            &components_from_js::<i32>(value, count)?,
+        )),
+    }
+
+    Some(result)
+}
+
+fn components_from_js<S: DeserializeOwned>(value: &JsValue, count: usize) -> Option<Vec<S>> {
+    let components = if count == 1 {
+        vec![from_js(value)?]
+    } else {
+        from_js::<Vec<S>>(value)?
+    };
+
+    (components.len() == count).then_some(components)
 }
 
 /// `value` as `T`, or `None` if it doesn't fit, like a fractional number for an integer.
@@ -341,23 +472,16 @@ fn from_js<T: DeserializeOwned>(value: &JsValue) -> Option<T> {
     serde_wasm_bindgen::from_value(value.clone()).ok()
 }
 
-/// `value` as a `V` with exactly `N` components of type `S`, from an array or typed array. `None` if
-/// the length is wrong or a component doesn't fit `S`.
-fn vector_from_js<V: From<[S; N]>, S: DeserializeOwned, const N: usize>(
-    value: &JsValue,
-) -> Option<V> {
-    // Going through a `Vec` rejects extra elements, which deserializing `[S; N]` ignores.
-    let components: [S; N] = from_js::<Vec<S>>(value)?.try_into().ok()?;
-    Some(components.into())
+fn not_found(name: &str) -> JsError {
+    AttributeError::NotFound { name: name.into() }.into()
 }
 
-/// `vert`'s value as a number or array of numbers, or `None` if it has none.
-fn value_to_js<T: Serialize>(
-    values: &SecondaryMap<VertKey, T>,
-    vert: VertKey,
-) -> Result<Option<JsValue>, serde_wasm_bindgen::Error> {
-    values
-        .get(vert)
-        .map(serde_wasm_bindgen::to_value)
-        .transpose()
+fn wrong_type(argument: &str) -> JsError {
+    JsError::new(&format!("{argument} doesn't fit the attribute's type"))
+}
+
+fn corner_attribute(name: &str) -> JsError {
+    JsError::new(&format!(
+        "attribute {name:?} is a corner attribute, and JS has no corner keys"
+    ))
 }

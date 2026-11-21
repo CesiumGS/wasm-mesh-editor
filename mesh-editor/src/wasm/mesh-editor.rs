@@ -490,6 +490,16 @@ impl MeshEditor {
     }
 }
 
+fn ffi(key: impl Key) -> u64 {
+    key.data().as_ffi()
+}
+
+/// The `K` key whose FFI value is `id`, or `None` if no slot map could have issued it.
+fn key_from_ffi<K: Key>(id: u64) -> Option<K> {
+    let key = K::from(KeyData::from_ffi(id));
+    (key.data().as_ffi() == id).then_some(key)
+}
+
 /// The mesh to edit, or `None` if it's inactive. Throws for an unknown mesh key.
 fn active_mesh(
     editor: &mut MeshEditor,

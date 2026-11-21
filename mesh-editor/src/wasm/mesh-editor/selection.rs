@@ -3,16 +3,16 @@
 //! Each edit returns `false` and does nothing if the mesh is inactive, and throws for an unknown
 //! mesh key. Unknown component keys are ignored.
 
-use mesh::{AttributeError, AttributeValue, Mesh, Selection, SelectionStep, VertKey};
-use slotmap::Key;
+use mesh::{
+    AttributeError, AttributeKey, AttributeValue, Mesh, Selection, SelectionKind, SelectionStep,
+};
 use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
 use super::attributes::{
-    AttributeComparison, VertsByAttributeOperation, VertsByAttributeResult,
-    operate_on_verts_by_js_value,
+    AttributeComparison, ByAttributeOperation, ByAttributeResult, apply_by_js_value,
 };
-use super::{ComponentKeysJs, active_mesh};
+use super::{ComponentKeysJs, active_mesh, ffi};
 use crate::{MeshEditor, MeshKey, MeshNotFound};
 
 #[wasm_bindgen]
@@ -123,43 +123,37 @@ fn edit_selection(
     Ok(true)
 }
 
-fn ffi(key: impl Key) -> u64 {
-    key.data().as_ffi()
-}
-
 #[wasm_bindgen]
 impl MeshEditor {
-    /// Selects every vertex in an active mesh whose `name` attribute compares to `value` as
-    /// `comparison` says, like selecting them directly. Pass a number for scalar attributes and an
-    /// array of numbers for vector ones. Only throws for an unknown mesh key.
-    #[wasm_bindgen(js_name = selectVertsByAttribute)]
-    pub fn select_verts_by_attribute(
+    /// Selects every vertex, edge or face in an active mesh whose `name` attribute compares to
+    /// `value` as `comparison` says, like selecting them directly. Pass a number for scalar
+    /// attributes and an array of numbers for vector ones. Only throws for an unknown mesh key.
+    #[wasm_bindgen(js_name = selectByAttribute)]
+    pub fn select_by_attribute(
         &mut self,
         #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
         name: &str,
         comparison: AttributeComparison,
         #[wasm_bindgen(unchecked_param_type = "number | ArrayLike<number>")] value: JsValue,
-    ) -> Result<VertsByAttributeResult, JsError> {
+    ) -> Result<ByAttributeResult, JsError> {
         let Some(mesh) = active_mesh(self, mesh_key)? else {
-            return Ok(VertsByAttributeResult::MeshInactive);
+            return Ok(ByAttributeResult::MeshInactive);
         };
 
-        Ok(operate_on_verts_by_js_value(
-            mesh, name, comparison, &value, &Select,
-        ))
+        Ok(apply_by_js_value(mesh, name, comparison, &value, &Select))
     }
 }
 
 struct Select;
 
-impl VertsByAttributeOperation for Select {
-    fn operate_on_verts_where<T: AttributeValue>(
+impl ByAttributeOperation for Select {
+    fn apply<K: AttributeKey + SelectionKind, T: AttributeValue>(
         &self,
         mesh: &mut Mesh,
         name: &str,
         predicate: impl Fn(T) -> bool,
     ) -> Result<(), AttributeError> {
         mesh.selection_mut()
-            .select_by_attribute::<VertKey, _>(name, predicate)
+            .select_by_attribute::<K, T>(name, predicate)
     }
 }
