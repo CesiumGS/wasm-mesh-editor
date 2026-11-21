@@ -2366,3 +2366,131 @@ fn validate_index_bounds_and_repeated_face_indices() {
     options.face_vertex_counts = Some(vec![3, 3]);
     assert_eq!(options.validate(), Ok(()));
 }
+
+#[test]
+fn set_attribute_values_writes_custom_values_and_ignores_unknown_keys() {
+    let mut options = two_triangle_buffers();
+    options.vertex_attributes = vec![("_ID".into(), AttributeBuffer::U32(vec![0; 4]))];
+    options.face_attributes = vec![("_FACE".into(), AttributeBuffer::I32(vec![0; 2]))];
+    let mut mesh = Mesh::from_buffers(options).unwrap();
+    let verts: Vec<_> = mesh.topology().verts().collect();
+    let faces: Vec<_> = mesh.topology().faces().collect();
+    let other = Mesh::from_buffers(quad_and_triangle_buffers()).unwrap();
+    let unknown = other.topology().verts().last().unwrap();
+    let changes = mesh.subscribe();
+
+    let ids = [(verts[1], 5_u32), (unknown, 6), (verts[3], 7)];
+    assert_eq!(mesh.set_attribute_values("_ID", &ids), Ok(()));
+    assert_eq!(
+        mesh.set_attribute_values("_FACE", &[(faces[1], -1_i32)]),
+        Ok(())
+    );
+
+    assert_eq!(
+        vertex_values(&mesh, "_ID"),
+        [Some(0_u32), Some(5), Some(0), Some(7)]
+    );
+    assert_eq!(
+        mesh.face(faces[1]).unwrap().attribute::<i32>("_FACE"),
+        Some(-1)
+    );
+    assert!(mesh.vert(unknown).is_none());
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn set_attribute_values_rejects_bad_writes_without_writing() {
+    let mut mesh = Mesh::from_buffers(two_triangle_buffers()).unwrap();
+    let verts: Vec<_> = mesh.topology().verts().collect();
+    let positions = mesh.attributes().positions().clone();
+    let changes = mesh.subscribe();
+    let position = || Attributes::POSITION.to_string();
+
+    assert_eq!(
+        mesh.set_attribute_values("_MISSING", &[(verts[0], 1_u32)]),
+        Err(AttributeError::NotFound {
+            name: "_MISSING".into()
+        })
+    );
+    assert_eq!(
+        mesh.set_attribute_values::<LoopKey, Vec3>(Attributes::POSITION, &[]),
+        Err(AttributeError::NotFound { name: position() })
+    );
+    assert_eq!(
+        mesh.set_attribute_values(Attributes::POSITION, &[(verts[0], Vec4::ONE)]),
+        Err(AttributeError::WrongType { name: position() })
+    );
+
+    assert_eq!(mesh.attributes().positions(), &positions);
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn set_attribute_values_moves_positions_and_recomputes_touched_face_normals() {
+    let mut options = triangle_buffers();
+    options.positions.extend([Vec3::Z, -Vec3::X, -Vec3::Y]);
+    options.indices = vec![0, 1, 2, 1, 0, 3, 3, 4, 5];
+    options.normals = Some(vec![Vec3::X; 6]);
+    let mut mesh = Mesh::from_buffers(options).unwrap();
+    let verts: Vec<_> = mesh.topology().verts().collect();
+    let faces: Vec<_> = mesh.topology().faces().collect();
+    mesh.selection_mut().select(&[verts[2]]);
+    // Fill the bounds caches, which the write must invalidate.
+    assert_eq!(mesh.selection().bounds().unwrap().max, Vec3::Y);
+    assert_eq!(mesh.bounds().unwrap().max, Vec3::ONE);
+    let changes = mesh.subscribe();
+
+    let moved = Vec3::new(0.0, 0.0, 2.0);
+    assert_eq!(
+        mesh.set_attribute_values(Attributes::POSITION, &[(verts[2], moved)]),
+        Ok(())
+    );
+
+    assert_position_event(&changes, &[verts[2]]);
+    assert_normal_event(
+        &changes,
+        &mesh.topology.face_loops(faces[0]).collect::<Vec<_>>(),
+    );
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
+    assert_eq!(mesh.attributes.positions()[verts[2]], moved);
+    for (key, corner) in &mesh.topology.loops {
+        let expected = if corner.face == faces[0] {
+            -Vec3::Y
+        } else {
+            Vec3::X
+        };
+        assert!(mesh.attributes.normals()[key].abs_diff_eq(expected, 1.0e-6));
+    }
+    assert_eq!(mesh.selection().bounds().unwrap().max, moved);
+    assert_eq!(mesh.bounds().unwrap().max, Vec3::new(1.0, 0.0, 2.0));
+}
+
+#[test]
+fn set_attribute_values_emits_normal_and_uv_changes() {
+    let mut options = two_triangle_buffers();
+    options.uvs = Some(vec![Vec2::ONE; 4]);
+    let mut mesh = Mesh::from_buffers(options).unwrap();
+    let loops: Vec<_> = mesh.topology().loops().take(2).collect();
+    let changes = mesh.subscribe();
+
+    let normals = [(loops[0], Vec3::Y)];
+    assert_eq!(
+        mesh.set_attribute_values(Attributes::NORMAL, &normals),
+        Ok(())
+    );
+    assert_normal_event(&changes, &loops[..1]);
+
+    let uvs = [(loops[1], Vec2::ZERO)];
+    assert_eq!(
+        mesh.set_attribute_values(Attributes::TEXCOORD_0, &uvs),
+        Ok(())
+    );
+    let event = changes.try_recv().unwrap();
+    let MeshChange::Attributes(AttributeChange::Uv(keys)) = event.as_ref() else {
+        panic!("expected a UV change");
+    };
+    assert_eq!(**keys, [loops[1]]);
+
+    assert_eq!(mesh.attributes.normals()[loops[0]], Vec3::Y);
+    assert_eq!(mesh.attributes.uvs().unwrap()[loops[1]], Vec2::ZERO);
+}

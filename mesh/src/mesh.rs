@@ -2,7 +2,7 @@
 
 mod build;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 
@@ -12,8 +12,9 @@ use glam::{DVec3, Vec3};
 use crate::geometry::corner_angle;
 use crate::selection::{SelectionBoundary, SelectionState};
 use crate::{
-    Aabb, AttributeChange, Attributes, ComponentKey, ComponentRef, EdgeKey, EdgeRef, FaceKey,
-    FaceRef, LoopKey, MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
+    Aabb, AttributeChange, AttributeError, AttributeKey, AttributeValue, Attributes, ComponentKey,
+    ComponentRef, EdgeKey, EdgeRef, FaceKey, FaceRef, LoopKey, MeshChange, Selection,
+    SelectionView, Topology, VertKey, VertRef,
 };
 
 pub use build::{EdgeAttributeBuffer, MeshBuffers, MeshBuildError};
@@ -130,12 +131,73 @@ impl Mesh {
         let loops = Rc::clone(boundary.mixed_face_loops());
         Self::recompute_flat_normals(topology, attributes, boundary.mixed_faces().iter().copied());
 
-        self.changes
-            .emit(MeshChange::Attributes(AttributeChange::Position(
-                Rc::clone(&selection.verts),
-            )));
-
+        let verts = Rc::clone(&selection.verts);
+        self.emit_position_change(verts);
         self.emit_normal_change(loops);
+    }
+
+    /// Writes `values` to the attribute called `name`, built-in or custom, ignoring keys that
+    /// aren't in the mesh. Writing positions is a special case that triggers normals recomputation
+    /// on the faces using the written vertices. For writing positions, prefer
+    /// [`Self::translate_selected`], which amortizes  the overhead frame-to-frame by caching
+    /// derived sets of the selection.
+    ///
+    /// # Errors
+    /// Like [`Attributes::values`]. Writes nothing on error.
+    pub fn set_attribute_values<K: AttributeKey, T: AttributeValue>(
+        &mut self,
+        name: &str,
+        values: &[(K, T)],
+    ) -> Result<(), AttributeError> {
+        let map = self.attributes.values_mut::<K, T>(name)?;
+
+        // Write the provided values to the attribute map, collecting the keys that were successfully written.
+        let written: Vec<K> = values
+            .iter()
+            .filter_map(|&(key, value)| {
+                *map.get_mut(key)? = value;
+                Some(key)
+            })
+            .collect();
+
+        if written.is_empty() {
+            return Ok(());
+        }
+
+        let keys = written.iter().map(|key| key.data());
+        match name {
+            Attributes::POSITION => {
+                let verts: HashSet<_> = keys.map(VertKey::from).collect();
+                let faces: HashSet<_> = verts
+                    .iter()
+                    .flat_map(|&vert| self.topology.vert_faces(vert))
+                    .collect();
+                let loops = faces
+                    .iter()
+                    .flat_map(|&face| self.topology.face_loops(face))
+                    .collect();
+
+                Self::recompute_flat_normals(
+                    &self.topology,
+                    &mut self.attributes,
+                    faces.iter().copied(),
+                );
+
+                self.selection.invalidate_bounds();
+                self.emit_position_change(Rc::new(verts));
+                self.emit_normal_change(Rc::new(loops));
+            }
+            Attributes::NORMAL => {
+                self.emit_normal_change(Rc::new(keys.map(LoopKey::from).collect()));
+            }
+            Attributes::TEXCOORD_0 => {
+                let change = AttributeChange::Uv(Rc::new(keys.map(LoopKey::from).collect()));
+                self.changes.emit(MeshChange::Attributes(change));
+            }
+            _ => {}
+        }
+
+        Ok(())
     }
 
     /// Recompute flat normals on the selected faces.
@@ -202,6 +264,11 @@ impl Mesh {
     /// Translation events share vertex and loop-key snapshots; selection edits leave queued snapshots intact.
     pub fn subscribe(&mut self) -> Receiver<Event<MeshChange>> {
         self.changes.subscribe()
+    }
+
+    fn emit_position_change(&mut self, verts: Rc<HashSet<VertKey>>) {
+        self.changes
+            .emit(MeshChange::Attributes(AttributeChange::Position(verts)));
     }
 
     fn emit_normal_change(&mut self, loops: Rc<Vec<LoopKey>>) {
