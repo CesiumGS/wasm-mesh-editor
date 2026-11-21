@@ -118,6 +118,8 @@ extern "C" {
 pub struct ByAttributeQueryJs {
     #[tsify(type = "AttributeResult")]
     status: u8,
+    // tsify names a field's type after the Rust type, not its `rename`.
+    #[tsify(type = "ComponentKeys")]
     keys: ComponentKeysJs,
 }
 
