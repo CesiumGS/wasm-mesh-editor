@@ -1634,7 +1634,7 @@ test("queryByAttribute includes hidden components", () => {
   editor.hideByAttribute(key, "_ID", Equal, 1);
 
   const { keys } = editor.queryByAttribute(key, "_ID", GreaterOrEqual, 0);
-  assert.deepEqual(vertIndices(editor, key, keys), [1, 2, 3]);
+  assert.deepEqual(vertIndices(editor, key, keys.verts), [1, 2, 3]);
   editor.free();
 });
 
