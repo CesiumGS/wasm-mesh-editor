@@ -28,9 +28,9 @@ pub enum AttributeResult {
     Ok = 0,
     /// The mesh has no attribute with that name.
     AttributeNotFound = 1,
-    /// A value doesn't fit the attribute's type, like `1.5` for an integer attribute or a number
-    /// for a vector attribute, or a `defaultValue` that isn't a `Float32Array`, `Uint32Array` or
-    /// `Int32Array` of 1 to 4 values.
+    /// A value or `noData` doesn't fit the attribute's type, like `1.5` for an integer attribute or
+    /// a number for a vector attribute, or a `defaultValue` isn't a `Float32Array`, `Uint32Array`
+    /// or `Int32Array` of 1 to 4 values.
     WrongType = 2,
     /// The mesh isn't active, so it can't be edited.
     MeshInactive = 3,
@@ -43,6 +43,8 @@ pub enum AttributeResult {
     NameInUse = 6,
     /// `addAttribute` with a reserved name, or `removeAttribute` on a built-in attribute.
     Reserved = 7,
+    /// `attributeValues`: a key isn't in the mesh, and there's no `noData`.
+    KeyNotFound = 8,
 }
 
 /// How functions that operate on components by attribute compare each component's attribute
@@ -200,8 +202,8 @@ impl MeshEditor {
     /// Writes the `name` attribute's values at vertex, edge or face `keys` to `out`, a typed array
     /// matching the attribute's component type, with `componentCount` values per key. Keys that
     /// aren't in the mesh get `noData`: a number for scalar attributes and an array of numbers for
-    /// vector ones. Works on inactive meshes. Throws for an unknown mesh key or attribute, a corner
-    /// attribute, a wrong `out` or `noData`, or a missing key without `noData`.
+    /// vector ones. Works on inactive meshes. Leaves `out` unchanged unless the result is `Ok`.
+    /// Throws for an unknown mesh key or a wrong `out`.
     #[wasm_bindgen(js_name = attributeValues)]
     pub fn attribute_values(
         &self,
@@ -211,20 +213,22 @@ impl MeshEditor {
         #[wasm_bindgen(unchecked_param_type = "Float32Array | Uint32Array | Int32Array")]
         out: JsValue,
         #[wasm_bindgen(js_name = noData)] no_data: Option<AttributeValueJs>,
-    ) -> Result<(), JsError> {
+    ) -> Result<AttributeResult, JsError> {
         let mesh = self.mesh(mesh_key).ok_or(MeshNotFound { key: mesh_key })?;
-        let (domain, value_type) = descriptor_types(mesh, name).ok_or_else(|| not_found(name))?;
+        let Some((domain, value_type)) = descriptor_types(mesh, name) else {
+            return Ok(AttributeResult::AttributeNotFound);
+        };
 
         with_attribute_types!(domain, value_type, K, T => {
             read_values::<K, T>(mesh, name, &keys, &out, no_data.as_deref())
-        }, corner => Err(corner_attribute(name)))
+        }, corner => Ok(AttributeResult::UnsupportedDomain))
     }
 
     /// Writes `values` to an active mesh's `name` attribute at vertex, edge or face `keys`, like
     /// `attributeValues` in reverse. Ignores keys that aren't in the mesh. Writing `POSITION` also
     /// recomputes flat normals on the faces using the written vertices, so prefer
-    /// `translateSelected` for moving the selection. Returns `false` and does nothing if the mesh
-    /// is inactive. Throws like `attributeValues`, writing nothing.
+    /// `translateSelected` for moving the selection. Writes nothing unless the result is `Ok`.
+    /// Throws for an unknown mesh key or a wrong `values`, like `attributeValues`.
     #[wasm_bindgen(js_name = setAttributeValues)]
     pub fn set_attribute_values(
         &mut self,
@@ -233,17 +237,17 @@ impl MeshEditor {
         keys: Vec<u64>,
         #[wasm_bindgen(unchecked_param_type = "Float32Array | Uint32Array | Int32Array")]
         values: JsValue,
-    ) -> Result<bool, JsError> {
+    ) -> Result<AttributeResult, JsError> {
         let Some(mesh) = active_mesh(self, mesh_key)? else {
-            return Ok(false);
+            return Ok(AttributeResult::MeshInactive);
         };
-        let (domain, value_type) = descriptor_types(mesh, name).ok_or_else(|| not_found(name))?;
+        let Some((domain, value_type)) = descriptor_types(mesh, name) else {
+            return Ok(AttributeResult::AttributeNotFound);
+        };
 
         with_attribute_types!(domain, value_type, K, T => {
             write_values::<K, T>(mesh, name, &keys, &values)
-        }, corner => Err(corner_attribute(name)))?;
-
-        Ok(true)
+        }, corner => Ok(AttributeResult::UnsupportedDomain))
     }
 }
 
@@ -371,25 +375,31 @@ fn read_values<K: AttributeKey, T: AttributeValue + Pod>(
     keys: &[u64],
     out: &JsValue,
     no_data: Option<&JsValue>,
-) -> Result<(), JsError> {
+) -> Result<AttributeResult, JsError> {
     let out = typed_array_bytes(out, T::VALUE_TYPE, keys.len(), "out")?;
-    let no_data = no_data
-        .map(|no_data| value_from_js::<T>(no_data).ok_or_else(|| wrong_type("noData")))
-        .transpose()?;
-    let map = mesh.attributes().values::<K, T>(name)?;
+    let no_data = match no_data.map(value_from_js::<T>) {
+        Some(None) => return Ok(AttributeResult::WrongType),
+        no_data => no_data.flatten(),
+    };
+    let map = mesh
+        .attributes()
+        .values::<K, T>(name)
+        .expect("the descriptor matches the attribute");
 
-    let values = keys
+    let values: Option<Vec<T>> = keys
         .iter()
         .map(|&key| {
             key_from_ffi(key)
                 .and_then(|key| map.get(key).copied())
                 .or(no_data)
-                .ok_or_else(|| JsError::new(&format!("key {key} is not in the mesh")))
         })
-        .collect::<Result<Vec<T>, _>>()?;
+        .collect();
+    let Some(values) = values else {
+        return Ok(AttributeResult::KeyNotFound);
+    };
 
     out.copy_from(bytemuck::cast_slice(&values));
-    Ok(())
+    Ok(AttributeResult::Ok)
 }
 
 fn write_values<K: AttributeKey, T: AttributeValue + Pod>(
@@ -397,7 +407,7 @@ fn write_values<K: AttributeKey, T: AttributeValue + Pod>(
     name: &str,
     keys: &[u64],
     values: &JsValue,
-) -> Result<(), JsError> {
+) -> Result<AttributeResult, JsError> {
     let bytes = typed_array_bytes(values, T::VALUE_TYPE, keys.len(), "values")?;
     let mut values = vec![T::zeroed(); keys.len()];
     bytes.copy_to(bytemuck::cast_slice_mut(&mut values));
@@ -408,7 +418,7 @@ fn write_values<K: AttributeKey, T: AttributeValue + Pod>(
         .filter_map(|(&key, value)| Some((key_from_ffi(key)?, value)))
         .collect();
 
-    Ok(mesh.set_attribute_values(name, &values)?)
+    Ok(status(mesh.set_attribute_values(name, &values)))
 }
 
 /// A byte view of `array`, if it's the typed array for `value_type`'s components and holds `count`
@@ -544,18 +554,4 @@ fn components_from_js<S: DeserializeOwned>(value: &JsValue, count: usize) -> Opt
 /// `value` as `T`, or `None` if it doesn't fit, like a fractional number for an integer.
 fn from_js<T: DeserializeOwned>(value: &JsValue) -> Option<T> {
     serde_wasm_bindgen::from_value(value.clone()).ok()
-}
-
-fn not_found(name: &str) -> JsError {
-    AttributeError::NotFound { name: name.into() }.into()
-}
-
-fn wrong_type(argument: &str) -> JsError {
-    JsError::new(&format!("{argument} doesn't fit the attribute's type"))
-}
-
-fn corner_attribute(name: &str) -> JsError {
-    JsError::new(&format!(
-        "attribute {name:?} is a corner attribute, and JS has no corner keys"
-    ))
 }

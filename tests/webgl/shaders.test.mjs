@@ -1085,7 +1085,10 @@ test("attributeValues reads values by key in the form selectByAttribute takes", 
   const [vert0, vert1, vert2] = readKeys(editor.overlayViews(key).componentKeys.verts);
 
   const ids = new Int32Array(2);
-  editor.attributeValues(key, "_ID", BigUint64Array.of(vert2, vert0), ids);
+  assert.equal(
+    editor.attributeValues(key, "_ID", BigUint64Array.of(vert2, vert0), ids),
+    AttributeResult.Ok,
+  );
   assert.deepEqual([...ids], [1, -1]);
 
   const color = new Float32Array(3);
@@ -1104,21 +1107,29 @@ test("attributeValues reads values by key in the form selectByAttribute takes", 
   editor.free();
 });
 
-test("attributeValues throws for bad arguments", () => {
+test("attributeValues reports failed reads and throws for a wrong out", () => {
   const { editor, key } = attributeEditor();
   const [vert0] = readKeys(editor.overlayViews(key).componentKeys.verts);
   const keys = BigUint64Array.of(vert0);
+  const { AttributeNotFound, KeyNotFound, UnsupportedDomain, WrongType } = AttributeResult;
 
-  for (const [name, keys_, out, noData, error] of [
-    ["_MISSING", keys, new Int32Array(1), undefined, /"_MISSING" not found/],
-    ["NORMAL", keys, new Float32Array(3), undefined, /corner attribute/],
-    ["_ID", keys, new Float32Array(1), undefined, /out is not an Int32Array/],
-    ["_ID", keys, new Int32Array(2), undefined, /out length 2 is not 1/],
-    ["_ID", BigUint64Array.of(0n), new Int32Array(1), undefined, /key 0 is not in the mesh/],
-    ["_ID", BigUint64Array.of(0n), new Int32Array(1), 1.5, /noData doesn't fit/],
-    ["_COLOR", keys, new Float32Array(3), [1, 0], /noData doesn't fit/],
+  for (const [name, keys_, out, noData, result] of [
+    ["_MISSING", keys, new Int32Array(1), undefined, AttributeNotFound],
+    ["NORMAL", keys, new Float32Array(3), undefined, UnsupportedDomain],
+    ["_ID", BigUint64Array.of(vert0, 0n), new Int32Array([5, 5]), undefined, KeyNotFound],
+    ["_ID", BigUint64Array.of(0n), new Int32Array([5]), 1.5, WrongType],
+    ["_COLOR", keys, new Float32Array([5, 5, 5]), [1, 0], WrongType],
   ]) {
-    assert.throws(() => editor.attributeValues(key, name, keys_, out, noData), error, name);
+    const before = [...out];
+    assert.equal(editor.attributeValues(key, name, keys_, out, noData), result, name);
+    assert.deepEqual([...out], before, name);
+  }
+
+  for (const [out, error] of [
+    [new Float32Array(1), /out is not an Int32Array/],
+    [new Int32Array(2), /out length 2 is not 1/],
+  ]) {
+    assert.throws(() => editor.attributeValues(key, "_ID", keys, out), error);
   }
 
   editor.removeMesh(key).free();
@@ -1136,12 +1147,15 @@ test("setAttributeValues writes values by key and ignores unknown keys", () => {
 
   assert.equal(
     editor.setAttributeValues(key, "_ID", BigUint64Array.of(vert2, 0n), new Int32Array([7, 8])),
-    true,
+    AttributeResult.Ok,
   );
   assert.deepEqual(read("_ID", BigUint64Array.of(vert0, vert2), new Int32Array(2)), [-1, 7]);
 
   const moved = new Float32Array([0, 0.5, 1]);
-  assert.equal(editor.setAttributeValues(key, "POSITION", BigUint64Array.of(vert2), moved), true);
+  assert.equal(
+    editor.setAttributeValues(key, "POSITION", BigUint64Array.of(vert2), moved),
+    AttributeResult.Ok,
+  );
   assert.deepEqual(read("POSITION", BigUint64Array.of(vert2), new Float32Array(3)), [0, 0.5, 1]);
 
   const result = new UpdateResult();
@@ -1155,15 +1169,18 @@ test("setAttributeValues writes values by key and ignores unknown keys", () => {
     () => editor.setAttributeValues(key, "_ID", BigUint64Array.of(vert0), new Uint32Array(1)),
     /values is not an Int32Array/,
   );
-  assert.throws(
-    () => editor.setAttributeValues(key, "NORMAL", BigUint64Array.of(vert0), new Float32Array(3)),
-    /corner attribute/,
-  );
+  for (const [name, result] of [
+    ["NORMAL", AttributeResult.UnsupportedDomain],
+    ["_MISSING", AttributeResult.AttributeNotFound],
+  ]) {
+    const values = new Float32Array(3);
+    assert.equal(editor.setAttributeValues(key, name, BigUint64Array.of(vert0), values), result);
+  }
 
   editor.setMeshInactive(key);
   assert.equal(
     editor.setAttributeValues(key, "_ID", BigUint64Array.of(vert0), new Int32Array([5])),
-    false,
+    AttributeResult.MeshInactive,
   );
   assert.deepEqual(read("_ID", BigUint64Array.of(vert0), new Int32Array(1)), [-1]);
   editor.free();
