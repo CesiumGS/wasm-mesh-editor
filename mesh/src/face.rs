@@ -60,6 +60,13 @@ impl<'a> FaceRef<'a> {
         self.attrs.uvs.get(key).copied()
     }
 
+    /// This face's value of the named custom face attribute, or `None` if the attribute doesn't
+    /// exist or stores a different type.
+    pub fn attribute<T: AttributeValue>(&self, name: &str) -> Option<T> {
+        let values = self.attrs.custom_attribute::<FaceKey>(name)?.typed::<T>()?;
+        values.get(self.key).copied()
+    }
+
     /// The value of the named custom corner attribute at this vertex's corner, or `None` if the
     /// vertex isn't in the face, or the attribute doesn't exist / stores a different type / or has no value here.
     pub fn corner_attribute<T: AttributeValue>(&self, name: &str, vertex: VertKey) -> Option<T> {

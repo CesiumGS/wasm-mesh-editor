@@ -4,7 +4,7 @@ use bytemuck::Pod;
 use glam::{Vec2, Vec3};
 use wasm_bindgen::prelude::*;
 
-use crate::{AttributeBuffer, AttributeDomain, Mesh, MeshBuffers};
+use crate::{AttributeBuffer, AttributeDomain, EdgeAttributeBuffer, Mesh, MeshBuffers};
 
 /// A named custom attribute to pass to `Mesh.fromBuffers`. Create one with a per-type
 /// constructor. Passing it to `fromBuffers` consumes it.
@@ -13,6 +13,8 @@ pub struct CustomAttribute {
     name: String,
     domain: AttributeDomain,
     values: AttributeBuffer,
+    /// Only for `Edge` attributes, which require one.
+    default: Option<AttributeBuffer>,
 }
 
 /// Wraps flat `$values` in the `AttributeBuffer` variant for `$component_count` components:
@@ -41,55 +43,105 @@ macro_rules! by_component_count {
 #[wasm_bindgen]
 impl CustomAttribute {
     /// Float values with 1 to 4 components each (scalar, vec2, vec3 or vec4), flattened.
-    /// Throws if `componentCount` is out of range or doesn't divide the length of `values`.
+    /// `Edge` attributes require `defaultValue`, one value for the edges `edgeIndices` doesn't
+    /// list, and other domains don't take one.
+    /// Throws if `componentCount` is out of range or doesn't divide the length of `values`, or for
+    /// a missing or unexpected `defaultValue`.
     pub fn float32(
         name: String,
         domain: AttributeDomain,
         #[wasm_bindgen(js_name = componentCount)] component_count: u32,
         values: Vec<f32>,
+        #[wasm_bindgen(js_name = defaultValue)] default_value: Option<Vec<f32>>,
     ) -> Result<CustomAttribute, JsError> {
-        let values = by_component_count!(&name, component_count, values, F32, Vec2, Vec3, Vec4);
+        let wrap = |values| -> Result<_, JsError> {
+            Ok(by_component_count!(
+                &name,
+                component_count,
+                values,
+                F32,
+                Vec2,
+                Vec3,
+                Vec4
+            ))
+        };
+        let values = wrap(values)?;
+        let default = default_value.map(wrap).transpose()?;
 
-        Ok(Self {
-            name,
-            domain,
-            values,
-        })
+        Self::new(name, domain, values, default)
     }
 
     /// Unsigned integer values with 1 to 4 components each (scalar, uvec2, uvec3 or uvec4),
-    /// flattened. Throws if `componentCount` is out of range or doesn't divide the length of
-    /// `values`.
+    /// flattened, like `float32`.
     pub fn uint32(
         name: String,
         domain: AttributeDomain,
         #[wasm_bindgen(js_name = componentCount)] component_count: u32,
         values: Vec<u32>,
+        #[wasm_bindgen(js_name = defaultValue)] default_value: Option<Vec<u32>>,
     ) -> Result<CustomAttribute, JsError> {
-        let values = by_component_count!(&name, component_count, values, U32, UVec2, UVec3, UVec4);
+        let wrap = |values| -> Result<_, JsError> {
+            Ok(by_component_count!(
+                &name,
+                component_count,
+                values,
+                U32,
+                UVec2,
+                UVec3,
+                UVec4
+            ))
+        };
+        let values = wrap(values)?;
+        let default = default_value.map(wrap).transpose()?;
 
-        Ok(Self {
-            name,
-            domain,
-            values,
-        })
+        Self::new(name, domain, values, default)
     }
 
     /// Signed integer values with 1 to 4 components each (scalar, ivec2, ivec3 or ivec4),
-    /// flattened. Throws if `componentCount` is out of range or doesn't divide the length of
-    /// `values`.
+    /// flattened, like `float32`.
     pub fn int32(
         name: String,
         domain: AttributeDomain,
         #[wasm_bindgen(js_name = componentCount)] component_count: u32,
         values: Vec<i32>,
+        #[wasm_bindgen(js_name = defaultValue)] default_value: Option<Vec<i32>>,
     ) -> Result<CustomAttribute, JsError> {
-        let values = by_component_count!(&name, component_count, values, I32, IVec2, IVec3, IVec4);
+        let wrap = |values| -> Result<_, JsError> {
+            Ok(by_component_count!(
+                &name,
+                component_count,
+                values,
+                I32,
+                IVec2,
+                IVec3,
+                IVec4
+            ))
+        };
+        let values = wrap(values)?;
+        let default = default_value.map(wrap).transpose()?;
+
+        Self::new(name, domain, values, default)
+    }
+}
+
+impl CustomAttribute {
+    fn new(
+        name: String,
+        domain: AttributeDomain,
+        values: AttributeBuffer,
+        default: Option<AttributeBuffer>,
+    ) -> Result<Self, JsError> {
+        if (domain == AttributeDomain::Edge) != default.is_some() {
+            return Err(JsError::new(&format!(
+                "{name} defaultValue is required for Edge attributes and not allowed for others"
+            )));
+        }
 
         Ok(Self {
             name,
             domain,
             values,
+            default,
         })
     }
 }
@@ -97,8 +149,8 @@ impl CustomAttribute {
 #[wasm_bindgen]
 impl Mesh {
     /// Builds a mesh from flat buffers: xyz `positions` and `normals`, uv pairs, face `indices`,
-    /// and custom attributes. Throws if the buffers are invalid. See [`MeshBuffers`] for each
-    /// buffer's meaning.
+    /// vertex index pairs in `edgeIndices` for edge attributes, and custom attributes. Throws if
+    /// the buffers are invalid. See [`MeshBuffers`] for each buffer's meaning.
     #[wasm_bindgen(js_name = fromBuffers)]
     pub fn from_flat_buffers(
         positions: Vec<f32>,
@@ -107,11 +159,9 @@ impl Mesh {
         uvs: Option<Vec<f32>>,
         #[wasm_bindgen(js_name = faceVertexCounts)] face_vertex_counts: Option<Vec<u32>>,
         attributes: Option<Vec<CustomAttribute>>,
+        #[wasm_bindgen(js_name = edgeIndices)] edge_indices: Option<Vec<u32>>,
     ) -> Result<Mesh, JsError> {
-        let (vertex_attributes, corner_attributes) =
-            split_by_domain(attributes.unwrap_or_default());
-
-        let mesh = Mesh::from_buffers(MeshBuffers {
+        let mut buffers = MeshBuffers {
             positions: vectors::<f32, Vec3>("positions", positions)?,
             normals: normals
                 .map(|normals| vectors::<f32, Vec3>("normals", normals))
@@ -121,30 +171,35 @@ impl Mesh {
                 .transpose()?,
             indices,
             face_vertex_counts,
-            vertex_attributes,
-            corner_attributes,
-        })?;
+            edge_indices: edge_indices.unwrap_or_default(),
+            ..MeshBuffers::default()
+        };
+        add_custom_attributes(&mut buffers, attributes.unwrap_or_default());
 
-        Ok(mesh)
+        Ok(Mesh::from_buffers(buffers)?)
     }
 }
 
-type NamedBuffers = Vec<(String, AttributeBuffer)>;
-
-/// Separates attributes into `MeshBuffers`' vertex and corner lists, keeping their order.
-fn split_by_domain(attributes: Vec<CustomAttribute>) -> (NamedBuffers, NamedBuffers) {
-    let mut vertex_attributes = Vec::new();
-    let mut corner_attributes = Vec::new();
-
-    for attribute in attributes {
-        let list = match attribute.domain {
-            AttributeDomain::Vertex => &mut vertex_attributes,
-            AttributeDomain::Corner => &mut corner_attributes,
-        };
-        list.push((attribute.name, attribute.values));
+/// Adds attributes to `buffers`' list for their domain, keeping their order.
+fn add_custom_attributes(buffers: &mut MeshBuffers, attributes: Vec<CustomAttribute>) {
+    for CustomAttribute {
+        name,
+        domain,
+        values,
+        default,
+    } in attributes
+    {
+        match domain {
+            AttributeDomain::Vertex => buffers.vertex_attributes.push((name, values)),
+            AttributeDomain::Corner => buffers.corner_attributes.push((name, values)),
+            AttributeDomain::Face => buffers.face_attributes.push((name, values)),
+            AttributeDomain::Edge => buffers.edge_attributes.push(EdgeAttributeBuffer {
+                name,
+                values,
+                default: default.expect("CustomAttribute::new requires an edge default"),
+            }),
+        }
     }
-
-    (vertex_attributes, corner_attributes)
 }
 
 /// Groups flat `S` components into vectors, reusing the buffer JS copied into wasm memory.

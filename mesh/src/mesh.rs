@@ -16,7 +16,7 @@ use crate::{
     FaceRef, LoopKey, MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
 };
 
-pub use build::{MeshBuffers, MeshBuildError};
+pub use build::{EdgeAttributeBuffer, MeshBuffers, MeshBuildError};
 
 /// A headless, editable mesh: connectivity, geometry attributes, and selection.
 #[derive(Default)]
@@ -87,6 +87,7 @@ impl Mesh {
         }
         Some(EdgeRef {
             topo: &self.topology,
+            attrs: &self.attributes,
             key,
         })
     }
