@@ -47,6 +47,14 @@ bool topologyOverlay_clipToNearPlane(
 void main()
 {
     uint edgeIndex = uint(gl_InstanceID);
+    uint flags = topologyOverlay_fetchFlags(edgeIndex);
+
+    if (topologyOverlay_isHidden(flags))
+    {
+        gl_Position = TOPOLOGY_OVERLAY_CULLED;
+        return;
+    }
+
     uvec2 endpoints = texelFetch(
         u_edgeTexture, topologyOverlay_texelCoord(edgeIndex, textureSize(u_edgeTexture, 0)), 0).xy;
 
@@ -73,10 +81,10 @@ void main()
 
     gl_Position = visible
         ? topologyOverlay_offsetByPixels(atB ? bClip : aClip, normal * side * u_edgeWidth * 0.5)
-        // Entirely behind the near plane: collapse outside the clip volume.
-        : vec4(2.0, 2.0, 2.0, 1.0);
+        // Entirely behind the near plane.
+        : TOPOLOGY_OVERLAY_CULLED;
 
     v_perp = side;
-    v_selected = topologyOverlay_fetchSelected(edgeIndex);
+    v_selected = topologyOverlay_isSelected(flags) ? 1.0 : 0.0;
     topologyOverlay_setVertexOutputs(positionEC, edgeIndex);
 }

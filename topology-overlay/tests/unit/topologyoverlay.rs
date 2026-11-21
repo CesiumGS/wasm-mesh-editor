@@ -1,13 +1,13 @@
 use event_emitter::EventEmitter;
 use glam::Vec3;
-use mesh::{ComponentMask, MeshBuffers, TopologyChange};
+use mesh::{ComponentMask, HideOptions, MeshBuffers, TopologyChange};
 use std::sync::mpsc::TryRecvError;
 
 use super::*;
 
 #[test]
-fn selection_buffers_index_independent_component_kinds() {
-    let mut buffers = SelectionBuffers::default();
+fn flag_buffers_index_independent_component_types() {
+    let mut buffers = ComponentFlagBuffers::default();
     let values = [
         (ComponentType::Vertex, 1),
         (ComponentType::Edge, 2),
@@ -78,14 +78,14 @@ fn update_merges_sparse_changes_into_covering_range() {
     mesh.selection_mut().select(&[verts[4], verts[1]]);
 
     let buffers = overlay.update(&mesh).unwrap();
-    assert_eq!(buffers.selection.verts.dirty_range, Some(1..5));
+    assert_eq!(buffers.flags.verts.dirty_range, Some(1..5));
     assert!(buffers.positions.dirty_range.is_none());
 
     mesh.translate_selected(Vec3::X);
 
     let buffers = overlay.update(&mesh).unwrap();
     assert_eq!(buffers.positions.dirty_range, Some(1..5));
-    assert!(buffers.selection.verts.dirty_range.is_none());
+    assert!(buffers.flags.verts.dirty_range.is_none());
 }
 
 fn mixed_face_mesh() -> Mesh {
@@ -164,8 +164,8 @@ fn new_packs_buffers_with_keys_in_buffer_order() {
         (ComponentType::Edge, 6),
         (ComponentType::Face, 2),
     ] {
-        assert_eq!(buffers.selection[kind].data, vec![0; count]);
-        assert!(buffers.selection[kind].dirty_range.is_none());
+        assert_eq!(buffers.flags[kind].data, vec![0; count]);
+        assert!(buffers.flags[kind].dirty_range.is_none());
     }
 
     assert!(buffers.full_refresh);
@@ -196,28 +196,21 @@ fn face_keys_follow_triangle_face_indices_not_triangle_indices() {
 fn new_seeds_selection_and_subscribes_to_future_changes() {
     let mut mesh = mixed_face_mesh();
     let face = mesh.topology().faces().nth(1).unwrap();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().select(&[face]);
 
     let overlay = TopologyOverlay::new(&mut mesh);
 
     assert_eq!(
-        overlay.buffers.selection[ComponentType::Vertex].data,
-        vec![255, 255, 0, 0, 255, 0]
+        overlay.buffers.flags[ComponentType::Vertex].data,
+        vec![1, 1, 0, 0, 1, 0]
     );
-    assert_eq!(
-        overlay.buffers.selection[ComponentType::Face].data,
-        vec![0, 255]
-    );
+    assert_eq!(overlay.buffers.flags[ComponentType::Face].data, vec![0, 1]);
 
     for (index, &key) in overlay.buffers.component_keys.edges.iter().enumerate() {
         assert_eq!(
-            overlay.buffers.selection[ComponentType::Edge].data[index],
-            if mesh.selection().contains(key) {
-                255
-            } else {
-                0
-            }
+            overlay.buffers.flags[ComponentType::Edge].data[index],
+            if mesh.selection().contains(key) { 1 } else { 0 }
         );
     }
 
@@ -255,7 +248,7 @@ fn new_accepts_an_empty_mesh() {
         ComponentType::Edge,
         ComponentType::Face,
     ] {
-        assert!(overlay.buffers.selection[kind].data.is_empty());
+        assert!(overlay.buffers.flags[kind].data.is_empty());
     }
 
     assert!(overlay.buffers.full_refresh);
@@ -307,17 +300,17 @@ fn buffers_preserves_data_between_updates() {
         let buffers = overlay.buffers();
 
         assert!(!buffers.full_refresh);
-        assert_eq!(buffers.selection.verts.data[5], 255);
-        assert_eq!(buffers.selection.verts.dirty_range, Some(5..6));
+        assert_eq!(buffers.flags.verts.data[5], 1);
+        assert_eq!(buffers.flags.verts.dirty_range, Some(5..6));
         assert!(buffers.positions.dirty_range.is_none());
     }
 
     overlay.update(&mesh).unwrap();
 
-    assert_eq!(overlay.buffers().selection.verts.data[5], 0);
+    assert_eq!(overlay.buffers().flags.verts.data[5], 0);
     assert!(overlay.update(&mesh).is_none());
-    assert_eq!(overlay.buffers().selection.verts.data[5], 0);
-    assert!(overlay.buffers().selection.verts.dirty_range.is_none());
+    assert_eq!(overlay.buffers().flags.verts.data[5], 0);
+    assert!(overlay.buffers().flags.verts.dirty_range.is_none());
     assert!(!overlay.buffers().full_refresh);
 }
 
@@ -334,15 +327,11 @@ fn update_includes_changes_queued_before_initial_upload() {
     assert!(buffers.full_refresh);
     assert_eq!(buffers.positions.data[5], [3.0, 3.0, 4.0, 0.0]);
     assert_eq!(
-        buffers.selection[ComponentType::Vertex].data,
-        vec![0, 0, 0, 0, 0, 255]
+        buffers.flags[ComponentType::Vertex].data,
+        vec![0, 0, 0, 0, 0, 1]
     );
     assert!(buffers.positions.dirty_range.is_none());
-    assert!(
-        buffers.selection[ComponentType::Vertex]
-            .dirty_range
-            .is_none()
-    );
+    assert!(buffers.flags[ComponentType::Vertex].dirty_range.is_none());
     assert!(overlay.update(&mesh).is_none());
 }
 
@@ -357,11 +346,8 @@ fn update_returns_partial_uploads_and_clears_previous_ranges() {
 
     let buffers = overlay.update(&mesh).unwrap();
     assert!(!buffers.full_refresh);
-    assert_eq!(buffers.selection[ComponentType::Vertex].data[5], 255);
-    assert_eq!(
-        buffers.selection[ComponentType::Vertex].dirty_range,
-        Some(5..6)
-    );
+    assert_eq!(buffers.flags[ComponentType::Vertex].data[5], 1);
+    assert_eq!(buffers.flags[ComponentType::Vertex].dirty_range, Some(5..6));
     assert!(buffers.positions.dirty_range.is_none());
 
     mesh.translate_selected(Vec3::X);
@@ -371,21 +357,17 @@ fn update_returns_partial_uploads_and_clears_previous_ranges() {
     assert!(!buffers.full_refresh);
     assert_eq!(buffers.positions.data[5], [3.0, 4.0, 4.0, 0.0]);
     assert_eq!(buffers.positions.dirty_range, Some(5..6));
-    assert!(
-        buffers.selection[ComponentType::Vertex]
-            .dirty_range
-            .is_none()
-    );
+    assert!(buffers.flags[ComponentType::Vertex].dirty_range.is_none());
 
     mesh.selection_mut().clear();
 
     let buffers = overlay.update(&mesh).unwrap();
     assert!(!buffers.full_refresh);
-    assert_eq!(buffers.selection[ComponentType::Vertex].data[5], 0);
+    assert_eq!(buffers.flags[ComponentType::Vertex].data[5], 0);
     assert!(buffers.positions.dirty_range.is_none());
     assert!(overlay.update(&mesh).is_none());
     assert!(
-        overlay.buffers.selection[ComponentType::Vertex]
+        overlay.buffers.flags[ComponentType::Vertex]
             .dirty_range
             .is_none()
     );
@@ -395,7 +377,7 @@ fn update_returns_partial_uploads_and_clears_previous_ranges() {
 fn update_replays_queued_selection_changes_in_order() {
     let mut mesh = mixed_face_mesh();
     let faces: Vec<_> = mesh.topology().faces().collect();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     let mut overlay = TopologyOverlay::new(&mut mesh);
     overlay.update(&mesh).unwrap();
 
@@ -406,19 +388,15 @@ fn update_replays_queued_selection_changes_in_order() {
     let buffers = overlay.update(&mesh).unwrap();
     assert!(!buffers.full_refresh);
     assert_eq!(
-        buffers.selection[ComponentType::Vertex].data,
-        vec![255, 255, 255, 255, 0, 0]
+        buffers.flags[ComponentType::Vertex].data,
+        vec![1, 1, 1, 1, 0, 0]
     );
-    assert_eq!(buffers.selection[ComponentType::Face].data, vec![255, 0]);
+    assert_eq!(buffers.flags[ComponentType::Face].data, vec![1, 0]);
 
     for (index, key) in mesh.topology().edges().enumerate() {
         assert_eq!(
-            buffers.selection[ComponentType::Edge].data[index],
-            if mesh.selection().contains(key) {
-                255
-            } else {
-                0
-            }
+            buffers.flags[ComponentType::Edge].data[index],
+            if mesh.selection().contains(key) { 1 } else { 0 }
         );
     }
 
@@ -427,7 +405,7 @@ fn update_replays_queued_selection_changes_in_order() {
         ComponentType::Edge,
         ComponentType::Face,
     ] {
-        assert!(buffers.selection[kind].dirty_range.is_some());
+        assert!(buffers.flags[kind].dirty_range.is_some());
     }
 
     assert!(overlay.update(&mesh).is_none());
@@ -436,10 +414,10 @@ fn update_replays_queued_selection_changes_in_order() {
 
     let buffers = overlay.update(&mesh).unwrap();
     assert_eq!(
-        buffers.selection[ComponentType::Vertex].data,
-        vec![255, 255, 0, 0, 255, 0]
+        buffers.flags[ComponentType::Vertex].data,
+        vec![1, 1, 0, 0, 1, 0]
     );
-    assert_eq!(buffers.selection[ComponentType::Face].data, vec![0, 255]);
+    assert_eq!(buffers.flags[ComponentType::Face].data, vec![0, 1]);
 
     mesh.selection_mut().clear();
     mesh.selection_mut().select(&[faces[0]]);
@@ -453,8 +431,8 @@ fn update_replays_queued_selection_changes_in_order() {
         ComponentType::Edge,
         ComponentType::Face,
     ] {
-        assert!(buffers.selection[kind].data.iter().all(|&value| value == 0));
-        assert!(buffers.selection[kind].dirty_range.is_some());
+        assert!(buffers.flags[kind].data.iter().all(|&value| value == 0));
+        assert!(buffers.flags[kind].dirty_range.is_some());
     }
 
     assert!(overlay.update(&mesh).is_none());
@@ -470,10 +448,10 @@ fn update_reports_nonempty_selection_deltas_even_when_keys_are_unmapped() {
 
     let mut changes = EventEmitter::new();
     overlay.mesh_changes = changes.subscribe();
-    changes.emit(MeshChange::Selection(SelectionChange::default()));
+    changes.emit(MeshChange::Selection(ComponentSetChange::default()));
     assert!(overlay.update(&mesh).is_none());
 
-    let mut change = SelectionChange::default();
+    let mut change = ComponentSetChange::default();
     change.added.verts.push(VertKey::null());
     change.removed.edges.push(EdgeKey::null());
     change.added.faces.push(FaceKey::null());
@@ -487,8 +465,8 @@ fn update_reports_nonempty_selection_deltas_even_when_keys_are_unmapped() {
         ComponentType::Edge,
         ComponentType::Face,
     ] {
-        assert!(buffers.selection[kind].data.is_empty());
-        assert!(buffers.selection[kind].dirty_range.is_none());
+        assert!(buffers.flags[kind].data.is_empty());
+        assert!(buffers.flags[kind].dirty_range.is_none());
     }
 
     assert!(overlay.update(&mesh).is_none());
@@ -498,7 +476,7 @@ fn update_reports_nonempty_selection_deltas_even_when_keys_are_unmapped() {
 fn update_ignores_shading_changes() {
     let mut mesh = mixed_face_mesh();
     let face = mesh.topology().faces().next().unwrap();
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     mesh.selection_mut().select(&[face]);
     let mut overlay = TopologyOverlay::new(&mut mesh);
     overlay.update(&mesh).unwrap();
@@ -534,7 +512,7 @@ fn update_rebuilds_buffers_keys_and_maps_on_topology_events() {
             removed_faces,
         }));
 
-        let mut selection_change = SelectionChange::default();
+        let mut selection_change = ComponentSetChange::default();
         selection_change.added.verts = mesh.topology().verts().collect();
         changes.emit(MeshChange::Selection(selection_change));
 
@@ -548,11 +526,7 @@ fn update_rebuilds_buffers_keys_and_maps_on_topology_events() {
             topology.loop_count() - 2 * topology.face_count()
         );
         assert!(buffers.positions.dirty_range.is_none());
-        assert!(
-            buffers.selection[ComponentType::Vertex]
-                .dirty_range
-                .is_none()
-        );
+        assert!(buffers.flags[ComponentType::Vertex].dirty_range.is_none());
         assert_eq!(
             buffers.component_keys.verts,
             topology.verts().collect::<Vec<_>>()
@@ -580,4 +554,72 @@ fn update_rebuilds_buffers_keys_and_maps_on_topology_events() {
 
         assert!(overlay.update(&mesh).is_none());
     }
+}
+
+#[test]
+fn new_seeds_hidden_and_selected_flags_together() {
+    let mut mesh = mixed_face_mesh();
+    let verts: Vec<_> = mesh.topology().verts().collect();
+    mesh.selection_mut().select(&[verts[0], verts[5]]);
+    mesh.hidden_components_mut().hide(
+        &[verts[0], verts[1]],
+        HideOptions {
+            extend_to_connected_faces: true,
+        },
+    );
+
+    let overlay = TopologyOverlay::new(&mut mesh);
+    let selected = ComponentFlags::SELECTED.bits();
+    let hidden = ComponentFlags::HIDDEN.bits();
+
+    assert_eq!(
+        overlay.buffers.flags.verts.data,
+        vec![selected | hidden, hidden, 0, 0, 0, selected]
+    );
+    assert_eq!(overlay.buffers.flags.faces.data, vec![hidden, hidden]);
+    assert!(
+        overlay
+            .buffers
+            .flags
+            .edges
+            .data
+            .iter()
+            .all(|&flags| flags == 0)
+    );
+}
+
+#[test]
+fn hidden_and_selected_flags_change_independently() {
+    let mut mesh = mixed_face_mesh();
+    let vertex = mesh.topology().verts().last().unwrap();
+    let face = mesh.topology().faces().next().unwrap();
+    let mut overlay = TopologyOverlay::new(&mut mesh);
+    overlay.update(&mesh).unwrap();
+    let selected = ComponentFlags::SELECTED.bits();
+    let hidden = ComponentFlags::HIDDEN.bits();
+
+    mesh.selection_mut().select(&[vertex]);
+    mesh.hidden_components_mut()
+        .hide(&[vertex], HideOptions::default());
+
+    let buffers = overlay.update(&mesh).unwrap();
+    assert!(!buffers.full_refresh);
+    assert_eq!(buffers.flags.verts.data[5], selected | hidden);
+    assert_eq!(buffers.flags.verts.dirty_range, Some(5..6));
+
+    mesh.selection_mut().clear();
+
+    let buffers = overlay.update(&mesh).unwrap();
+    assert_eq!(buffers.flags.verts.data[5], hidden);
+
+    mesh.set_interactable_components(ComponentMask::FACE);
+    mesh.hidden_components_mut()
+        .hide(&[face], HideOptions::default());
+    mesh.hidden_components_mut().show_all();
+
+    let buffers = overlay.update(&mesh).unwrap();
+    assert_eq!(buffers.flags.verts.data[5], 0);
+    assert_eq!(buffers.flags.faces.data, vec![0, 0]);
+    assert_eq!(buffers.flags.faces.dirty_range, Some(0..1));
+    assert!(buffers.flags.edges.dirty_range.is_none());
 }

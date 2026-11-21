@@ -70,7 +70,7 @@ impl<'editor> ToolContext<'editor> {
     }
 
     /// Keeps only the active meshes for which `keep` returns `true`, preserving their order.
-    /// Deactivated meshes keep their selection and selection level.
+    /// Deactivated meshes keep their selection and interactable components.
     pub fn retain_active_meshes(&mut self, keep: impl FnMut(&MeshKey) -> bool) {
         self.active_meshes.retain(keep);
     }

@@ -11,6 +11,14 @@ flat out float v_selected;
 void main()
 {
     uint vertexIndex = uint(gl_InstanceID);
+    uint flags = topologyOverlay_fetchFlags(vertexIndex);
+
+    if (topologyOverlay_isHidden(flags))
+    {
+        gl_Position = TOPOLOGY_OVERLAY_CULLED;
+        return;
+    }
+
     vec4 positionEC = topologyOverlay_applyDepthBias(
         topologyOverlay_modelToEye(topologyOverlay_fetchPosition(vertexIndex)));
 
@@ -20,6 +28,6 @@ void main()
         topologyOverlay_eyeToClip(positionEC), corner * u_pointSize * 0.5);
 
     v_quadCoord = corner;
-    v_selected = topologyOverlay_fetchSelected(vertexIndex);
+    v_selected = topologyOverlay_isSelected(flags) ? 1.0 : 0.0;
     topologyOverlay_setVertexOutputs(positionEC, vertexIndex);
 }

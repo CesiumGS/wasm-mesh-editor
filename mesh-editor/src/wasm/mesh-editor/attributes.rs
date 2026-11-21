@@ -8,7 +8,7 @@ use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
 use js_sys::{BigUint64Array, Float32Array, Int32Array, Uint8Array, Uint32Array};
 use mesh::{
     AttributeComponentType, AttributeDescriptor, AttributeDomain, AttributeError, AttributeKey,
-    AttributeType, AttributeValue, EdgeKey, FaceKey, Mesh, SelectionKind, VertKey,
+    AttributeType, AttributeValue, EdgeKey, FaceKey, IntoComponentKey, Mesh, VertKey,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -19,12 +19,12 @@ use super::{active_mesh, ffi, key_from_ffi};
 use crate::{MeshEditor, MeshKey, MeshNotFound};
 
 /// The result of calling a function that operates on the components specified by attribute value,
-/// like `selectByAttribute` or `queryByAttribute`. Only `Ok` indicates success.
+/// like `selectByAttribute`, `hideByAttribute` or `queryByAttribute`. Only `Ok` indicates success.
 #[wasm_bindgen]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ByAttributeResult {
     /// The attribute was found and the operation applied to any matching components. That may be
-    /// none, if nothing matched or the components aren't selectable in the current mode.
+    /// none, if nothing matched or the components aren't interactable in the current mode.
     Ok = 0,
     /// The mesh has no attribute with that name.
     AttributeNotFound = 1,
@@ -165,7 +165,8 @@ impl MeshEditor {
     }
 
     /// The vertices, edges or faces whose `name` attribute compares to `value` as `comparison`
-    /// says, like `selectByAttribute`. Works on inactive meshes. Throws for an unknown mesh key.
+    /// says, like `selectByAttribute`. Includes hidden components and works on inactive meshes.
+    /// Throws for an unknown mesh key.
     #[wasm_bindgen(js_name = queryByAttribute)]
     pub fn query_by_attribute(
         &self,
@@ -246,7 +247,7 @@ impl MeshEditor {
 /// An operation on the components whose `name` attribute satisfies a predicate, like
 /// [`mesh::Selection::select_by_attribute`].
 pub(super) trait ByAttributeOperation {
-    fn apply<K: AttributeKey + SelectionKind, T: AttributeValue>(
+    fn apply<K: AttributeKey + IntoComponentKey, T: AttributeValue>(
         &self,
         mesh: &mut Mesh,
         name: &str,

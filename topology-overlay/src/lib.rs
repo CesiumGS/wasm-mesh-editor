@@ -6,4 +6,6 @@
 pub mod shaders;
 mod topologyoverlay;
 
-pub use topologyoverlay::{OverlayBuffer, OverlayBuffers, SelectionBuffers, TopologyOverlay};
+pub use topologyoverlay::{
+    ComponentFlagBuffers, ComponentFlags, OverlayBuffer, OverlayBuffers, TopologyOverlay,
+};

@@ -2,6 +2,8 @@
 
 #[path = "mesh-editor/attributes.rs"]
 mod attributes;
+#[path = "mesh-editor/hidden_components.rs"]
+mod hidden_components;
 #[path = "mesh-editor/selection.rs"]
 mod selection;
 
@@ -197,10 +199,11 @@ impl ComponentKeysJs {
     }
 }
 
-/// Selection buffers by component kind. One value per component: 0 unselected, 255 selected.
-/// Each binds to the same uniform, in the draw for its component kind.
+/// Flag buffers by component type, one byte per component: bit 0 (value 1) is set for selected
+/// components, and bit 1 (value 2) for hidden ones. Each binds to the same uniform, in the draw
+/// for its component type.
 #[derive(Serialize, Tsify)]
-pub struct OverlaySelectionViews {
+pub struct OverlayFlagViews {
     verts: OverlayBufferView,
     edges: OverlayBufferView,
     faces: OverlayBufferView,
@@ -222,7 +225,7 @@ pub struct OverlayViews {
     edges: OverlayBufferView,
     /// Three vertex indices and a face index per triangle.
     triangles: OverlayBufferView,
-    selection: OverlaySelectionViews,
+    flags: OverlayFlagViews,
     /// Changes only when `fullRefresh` is set.
     component_keys: OverlayKeyViews,
 }
@@ -234,19 +237,10 @@ impl From<&OverlayBuffers> for OverlayViews {
             positions: OverlayBufferView::new(&buffers.positions, uniforms::POSITION_TEXTURE),
             edges: OverlayBufferView::new(&buffers.edges, uniforms::EDGE_TEXTURE),
             triangles: OverlayBufferView::new(&buffers.triangles, uniforms::TRIANGLE_TEXTURE),
-            selection: OverlaySelectionViews {
-                verts: OverlayBufferView::new(
-                    &buffers.selection.verts,
-                    uniforms::SELECTION_TEXTURE,
-                ),
-                edges: OverlayBufferView::new(
-                    &buffers.selection.edges,
-                    uniforms::SELECTION_TEXTURE,
-                ),
-                faces: OverlayBufferView::new(
-                    &buffers.selection.faces,
-                    uniforms::SELECTION_TEXTURE,
-                ),
+            flags: OverlayFlagViews {
+                verts: OverlayBufferView::new(&buffers.flags.verts, uniforms::FLAG_TEXTURE),
+                edges: OverlayBufferView::new(&buffers.flags.edges, uniforms::FLAG_TEXTURE),
+                faces: OverlayBufferView::new(&buffers.flags.faces, uniforms::FLAG_TEXTURE),
             },
             component_keys: OverlayKeyViews {
                 verts: OverlayKeyView::new(&buffers.component_keys.verts),
@@ -390,8 +384,8 @@ impl MeshEditor {
         Ok(true)
     }
 
-    /// Makes `components` selectable.
-    /// Applies the selection level to active meshes and deactivates incompatible tools.
+    /// Makes `components` interactable.
+    /// Applies the interactable components to active meshes and deactivates incompatible tools.
     /// Throws for bits outside `ComponentMask`.
     #[wasm_bindgen(js_name = setMode)]
     pub fn set_mode_from_components(
@@ -409,10 +403,10 @@ impl MeshEditor {
         self.mode().renderable_components.bits()
     }
 
-    /// The components that can be selected directly in the current mode.
-    #[wasm_bindgen(getter = selectableComponents, unchecked_return_type = "ComponentMask")]
-    pub fn selectable_components(&self) -> u8 {
-        self.mode().selection_level.bits()
+    /// The types of components that can currently be modified (i.e. selected, hidden, etc).
+    #[wasm_bindgen(getter = interactableComponents, unchecked_return_type = "ComponentMask")]
+    pub fn interactable_components(&self) -> u8 {
+        self.mode().interactable_components.bits()
     }
 
     /// The active tool's ID, or `undefined` if no tool is active.
@@ -421,7 +415,7 @@ impl MeshEditor {
         self.active_tool().map(ToolId::raw)
     }
 
-    /// Whether a registered tool, active or inactive, can be active with `components` selectable.
+    /// Whether a registered tool, active or inactive, can be active with `components` interactable.
     /// Does not change the active tool. Throws for an unknown tool or bits outside `ComponentMask`.
     #[wasm_bindgen(js_name = toolSupportsMode)]
     pub fn tool_supports_mode(

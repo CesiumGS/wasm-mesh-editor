@@ -30,7 +30,7 @@ fn seeded_meshes_are_active_without_recorded_changes() {
 }
 
 #[test]
-fn activation_applies_selection_level_and_records_once() {
+fn activation_applies_interactable_components_and_records_once() {
     let (mut meshes, [first, second]) = meshes();
     let mut active = ActiveMeshes::default();
 
@@ -38,16 +38,17 @@ fn activation_applies_selection_level_and_records_once() {
         .activate(&mut meshes, EditMode::EDGE, second)
         .unwrap();
     active.activate(&mut meshes, EditMode::EDGE, first).unwrap();
-    meshes[second]
-        .selection_mut()
-        .set_level(ComponentMask::FACE);
+    meshes[second].set_interactable_components(ComponentMask::FACE);
     active
         .activate(&mut meshes, EditMode::VERTEX, second)
         .unwrap();
 
     assert_eq!(active.keys(), &[second, first]);
-    assert_eq!(meshes[first].selection().level(), ComponentMask::EDGE);
-    assert_eq!(meshes[second].selection().level(), ComponentMask::FACE);
+    assert_eq!(meshes[first].interactable_components(), ComponentMask::EDGE);
+    assert_eq!(
+        meshes[second].interactable_components(),
+        ComponentMask::FACE
+    );
     assert_eq!(take_changes(&mut active), (vec![second, first], vec![]));
 }
 
