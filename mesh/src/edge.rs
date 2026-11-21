@@ -37,10 +37,10 @@ impl<'a> EdgeRef<'a> {
         self.topo.edge_loops(self.key)
     }
 
-    /// This edge's value of the named custom edge attribute, or `None` if the attribute doesn't
+    /// This edge's value of the named edge attribute, or `None` if the attribute doesn't
     /// exist or stores a different type.
     pub fn attribute<T: AttributeValue>(&self, name: &str) -> Option<T> {
-        let values = self.attrs.custom_attribute::<EdgeKey>(name)?.typed::<T>()?;
+        let values = self.attrs.values::<EdgeKey, T>(name).ok()?;
         values.get(self.key).copied()
     }
 }

@@ -566,7 +566,7 @@ fn boundary_cache_survives_no_ops_and_position_edits() {
     mesh.selection_mut().select(&[VertKey::null()]);
     assert_boundary_cache_initialized(&mesh, true);
 
-    mesh.attributes.positions[verts[0]] += Vec3::Z;
+    mesh.attributes.positions_mut()[verts[0]] += Vec3::Z;
     assert_boundary_cache_initialized(&mesh, true);
     assert_eq!(
         mesh.selection()
@@ -1209,7 +1209,7 @@ fn translation_normal_sets_include_every_corner_of_changed_faces() {
         .collect();
 
     for key in selected {
-        mesh.attributes.positions[key] += Vec3::Z;
+        mesh.attributes.positions_mut()[key] += Vec3::Z;
     }
     let changed: HashSet<_> = previous_normals
         .into_iter()
@@ -1531,7 +1531,7 @@ fn missing_keys_and_disabled_toggle_inputs_are_ignored() {
 
 /// Bounds recomputed from current positions: (selected, whole mesh).
 fn recomputed_bounds(mesh: &Mesh) -> (Option<Aabb>, Option<Aabb>) {
-    let positions = &mesh.attributes.positions;
+    let positions = &mesh.attributes.positions();
     let selected = Aabb::from_points(mesh.selection().verts().map(|key| positions[key]));
     let all = Aabb::from_points(mesh.topology.verts.keys().map(|key| positions[key]));
 
@@ -1719,7 +1719,7 @@ fn select_by_attribute_skips_verts_without_a_value() {
     let mut partial = slotmap::SecondaryMap::new();
     partial.insert(verts[0], 1.5f32);
     mesh.attributes
-        .add_custom::<VertKey>("_PARTIAL".into(), AttributeMap::F32(partial));
+        .add::<VertKey>("_PARTIAL".into(), AttributeMap::F32(partial));
 
     mesh.selection_mut()
         .select_by_attribute::<VertKey, _>("_PARTIAL", |value: f32| value == 1.5)

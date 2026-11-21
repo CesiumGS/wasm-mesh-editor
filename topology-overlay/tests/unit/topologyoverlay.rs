@@ -129,7 +129,7 @@ fn new_packs_buffers_with_keys_in_buffer_order() {
         assert_eq!(overlay.vertex_key_to_buffer_index[key], index as u32);
         assert_eq!(
             buffers.positions.data[index],
-            mesh.attributes().positions[key].extend(0.0).to_array()
+            mesh.attributes().positions()[key].extend(0.0).to_array()
         );
     }
 

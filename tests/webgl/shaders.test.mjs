@@ -1117,7 +1117,7 @@ test("integer vector attributes read back and compare for equality only", () => 
   editor.free();
 });
 
-test("meshAttributes lists built-in then custom attributes with their types", () => {
+test("meshAttributes lists attributes by domain with their types", () => {
   const { Vertex, Corner } = AttributeDomain;
   const { Float32, Int32 } = AttributeComponentType;
   const editor = new MeshEditor();
@@ -1133,9 +1133,9 @@ test("meshAttributes lists built-in then custom attributes with their types", ()
   const custom = integerVectorEditor();
   assert.deepEqual(
     custom.editor.meshAttributes(custom.key).map(({ name }) => name),
-    ["POSITION", "NORMAL", "_CELL", "_MASK"],
+    ["POSITION", "_CELL", "_MASK", "NORMAL"],
   );
-  assert.deepEqual(custom.editor.meshAttributes(custom.key)[2], {
+  assert.deepEqual(custom.editor.meshAttributes(custom.key)[1], {
     name: "_CELL",
     domain: Vertex,
     componentType: Int32,
