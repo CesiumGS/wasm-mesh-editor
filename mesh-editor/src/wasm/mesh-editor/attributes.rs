@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 
 use bytemuck::Pod;
 use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
-use js_sys::{BigUint64Array, Float32Array, Int32Array, Uint8Array, Uint32Array};
+use js_sys::{Float32Array, Int32Array, Uint8Array, Uint32Array};
 use mesh::{
     AttributeComponentType, AttributeDescriptor, AttributeDomain, AttributeError, AttributeKey,
     AttributeType, AttributeValue, EdgeKey, FaceKey, Mesh, SelectionKind, VertKey,
@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
-use super::{active_mesh, ffi, key_from_ffi};
+use super::{ComponentKeysJs, active_mesh, ffi, key_from_ffi};
 use crate::{MeshEditor, MeshKey, MeshNotFound};
 
 /// The result of calling a function that operates on the components specified by attribute value,
@@ -104,16 +104,14 @@ extern "C" {
     pub type AttributeValueJs;
 }
 
-/// The result of `queryByAttribute`. `keys` is empty unless `status` is `Ok`, and otherwise holds
-/// keys of the attribute's domain.
+/// The result of `queryByAttribute`. `keys` holds the matching components by type, like the
+/// `componentKeys` that functions such as `setSelection` take. Empty unless `status` is `Ok`.
 #[derive(Serialize, Tsify)]
 #[tsify(rename = "ByAttributeQuery")]
 pub struct ByAttributeQueryJs {
     #[tsify(type = "ByAttributeResult")]
     status: u8,
-    #[serde(with = "serde_wasm_bindgen::preserve")]
-    #[tsify(type = "BigUint64Array")]
-    keys: BigUint64Array,
+    keys: ComponentKeysJs,
 }
 
 /// One of a mesh's attributes, as listed by `meshAttributes`.
@@ -176,19 +174,20 @@ impl MeshEditor {
     ) -> Result<Ts<ByAttributeQueryJs>, JsError> {
         let mesh = self.mesh(mesh_key).ok_or(MeshNotFound { key: mesh_key })?;
 
+        let none = ComponentKeysJs::default;
         let (status, keys) = match descriptor_types(mesh, name) {
-            None => (ByAttributeResult::AttributeNotFound, Vec::new()),
+            None => (ByAttributeResult::AttributeNotFound, none()),
             Some((domain, value_type)) => with_attribute_types!(domain, value_type, K, T => {
                 match predicate::<T>(comparison, &value) {
                     Ok(predicate) => (ByAttributeResult::Ok, keys_where::<K, T>(mesh, name, predicate)),
-                    Err(status) => (status, Vec::new()),
+                    Err(status) => (status, none()),
                 }
-            }, corner => (ByAttributeResult::UnsupportedDomain, Vec::new())),
+            }, corner => (ByAttributeResult::UnsupportedDomain, none())),
         };
 
         Ok(ByAttributeQueryJs {
             status: status as u8,
-            keys: BigUint64Array::from(keys.as_slice()),
+            keys,
         }
         .into_ts()?)
     }
@@ -281,17 +280,27 @@ fn descriptor_types(mesh: &Mesh, name: &str) -> Option<(AttributeDomain, Attribu
     Some((descriptor.domain, descriptor.value_type))
 }
 
-/// The FFI keys whose `name` attribute satisfies `predicate`.
+/// The vertex, edge or face keys whose `name` attribute satisfies `predicate`.
 fn keys_where<K: AttributeKey, T: AttributeValue>(
     mesh: &Mesh,
     name: &str,
     predicate: impl Fn(T) -> bool,
-) -> Vec<u64> {
-    mesh.attributes()
+) -> ComponentKeysJs {
+    let keys = mesh
+        .attributes()
         .keys_where::<K, T, _>(name, predicate)
         .expect("the descriptor matches the attribute")
         .map(ffi)
-        .collect()
+        .collect();
+
+    let mut result = ComponentKeysJs::default();
+    match K::DOMAIN {
+        AttributeDomain::Vertex => result.verts = keys,
+        AttributeDomain::Edge => result.edges = keys,
+        AttributeDomain::Face => result.faces = keys,
+        AttributeDomain::Corner => unreachable!("JS has no corner keys"),
+    }
+    result
 }
 
 fn read_values<K: AttributeKey, T: AttributeValue + Pod>(

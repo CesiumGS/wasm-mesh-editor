@@ -1008,15 +1008,27 @@ test("queryByAttribute returns matching keys without selecting them", () => {
   ]) {
     const { status, keys } = editor.queryByAttribute(key, name, comparison, value);
     assert.equal(status, ByAttributeResult.Ok);
-    assert.ok(keys instanceof BigUint64Array);
-    assert.deepEqual(vertIndices(editor, key, keys), expected, name);
+    assert.ok(keys.verts instanceof BigUint64Array);
+    assert.deepEqual([keys.edges.length, keys.faces.length], [0, 0]);
+    assert.deepEqual(vertIndices(editor, key, keys.verts), expected, name);
   }
   assert.deepEqual(selectedVerts(editor, key), []);
 
   editor.setMeshInactive(key);
   const { keys } = editor.queryByAttribute(key, "_ID", Equal, 2);
-  assert.deepEqual(vertIndices(editor, key, keys), [3]);
+  assert.deepEqual(vertIndices(editor, key, keys.verts), [3]);
+
+  editor.setMeshActive(key);
+  editor.setSelection(key, keys);
+  assert.deepEqual(selectedVerts(editor, key), [3]);
   editor.free();
+});
+
+/** `ComponentKeys` with no keys. */
+const noKeys = () => ({
+  verts: new BigUint64Array(),
+  edges: new BigUint64Array(),
+  faces: new BigUint64Array(),
 });
 
 test("queryByAttribute reports failed lookups with no keys", () => {
@@ -1030,7 +1042,7 @@ test("queryByAttribute reports failed lookups with no keys", () => {
     ["_COLOR", Less, [1, 0, 0], ByAttributeResult.UnsupportedComparison],
   ]) {
     const result = editor.queryByAttribute(key, name, comparison, value);
-    assert.deepEqual(result, { status, keys: new BigUint64Array() }, name);
+    assert.deepEqual(result, { status, keys: noKeys() }, name);
   }
 
   editor.removeMesh(key).free();
@@ -1173,10 +1185,10 @@ test("selectByAttribute and queryByAttribute operate on edges and faces", () => 
   const { status, keys } = edges.editor.queryByAttribute(edges.key, "_CREASE", Equal, 1);
   assert.equal(status, ByAttributeResult.Ok);
   const crease = new Uint32Array(1);
-  edges.editor.attributeValues(edges.key, "_CREASE", keys, crease);
-  assert.deepEqual([keys.length, crease[0]], [1, 1]);
+  edges.editor.attributeValues(edges.key, "_CREASE", keys.edges, crease);
+  assert.deepEqual([keys.verts.length, keys.edges.length, crease[0]], [0, 1, 1]);
   const { keys: others } = edges.editor.queryByAttribute(edges.key, "_CREASE", Equal, 0);
-  assert.equal(others.length, 4);
+  assert.equal(others.edges.length, 4);
 
   assert.equal(
     edges.editor.selectByAttribute(edges.key, "_CORNER", Equal, 0),
@@ -1184,7 +1196,7 @@ test("selectByAttribute and queryByAttribute operate on edges and faces", () => 
   );
   assert.deepEqual(edges.editor.queryByAttribute(edges.key, "_CORNER", Equal, 0), {
     status: ByAttributeResult.UnsupportedDomain,
-    keys: new BigUint64Array(),
+    keys: noKeys(),
   });
   edges.editor.free();
 });
