@@ -7,6 +7,12 @@ rust-version.workspace = true
 
 [dependencies]
 bitflags.workspace = true
+bytemuck = { workspace = true, optional = true }
 event-emitter = { path = "../utils/event-emitter" }
 glam.workspace = true
 slotmap.workspace = true
+wasm-bindgen = { workspace = true, optional = true }
+
+[features]
+# Exposes `Mesh` to JS through wasm-bindgen. Enabled by `mesh-editor/wasm`.
+wasm = ["dep:wasm-bindgen", "dep:bytemuck", "glam/bytemuck"]
