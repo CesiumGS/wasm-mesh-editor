@@ -445,7 +445,7 @@ impl Attributes {
 
 const BUILT_IN: &str = "built-in attributes always exist with their type";
 
-/// Why an attribute couldn't be read as requested.
+/// Why an attribute couldn't be read or written as requested.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttributeError {
     /// No attribute with this name in the requested domain.
