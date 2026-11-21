@@ -269,6 +269,7 @@ fn triangle_mesh() -> Mesh {
         uvs: None,
         indices: vec![0, 1, 2],
         face_vertex_counts: None,
+        ..Default::default()
     })
     .unwrap()
 }
@@ -285,6 +286,7 @@ fn quad_mesh() -> Mesh {
         uvs: None,
         indices: vec![0, 1, 2, 3],
         face_vertex_counts: Some(vec![4]),
+        ..Default::default()
     })
     .unwrap()
 }
@@ -330,7 +332,7 @@ fn translate_tool_updates_selected_components_and_overlay_positions() {
         let original: Vec<_> = mesh
             .topology()
             .verts()
-            .map(|key| (key, mesh.attributes().positions[key]))
+            .map(|key| (key, mesh.attributes().positions()[key]))
             .collect();
         let mut editor = MeshEditor::new();
         let target = editor.add_mesh(mesh);
@@ -375,7 +377,7 @@ fn translate_tool_updates_selected_components_and_overlay_positions() {
         assert!(editor.active_tool_mut().unwrap().pointer_down(&start));
         assert!(editor.active_tool_mut().unwrap().pointer_move(&movement));
         assert_eq!(
-            editor.mesh(target).unwrap().attributes().positions[original[0].0],
+            editor.mesh(target).unwrap().attributes().positions()[original[0].0],
             original[0].1
         );
 
@@ -400,7 +402,7 @@ fn translate_tool_updates_selected_components_and_overlay_positions() {
                 *position
             };
             assert_eq!(
-                editor.mesh(target).unwrap().attributes().positions[*vertex],
+                editor.mesh(target).unwrap().attributes().positions()[*vertex],
                 expected
             );
         }
@@ -429,7 +431,7 @@ fn translate_tool_updates_selected_components_and_overlay_positions() {
                 *position
             };
             assert_eq!(
-                editor.mesh(target).unwrap().attributes().positions[*vertex],
+                editor.mesh(target).unwrap().attributes().positions()[*vertex],
                 expected
             );
         }
@@ -452,7 +454,7 @@ fn translate_tool_updates_selected_components_and_overlay_positions() {
         for (index, (vertex, _)) in original.iter().enumerate() {
             assert_eq!(
                 buffers.positions.data[index],
-                editor.mesh(target).unwrap().attributes().positions[*vertex]
+                editor.mesh(target).unwrap().attributes().positions()[*vertex]
                     .extend(0.0)
                     .to_array()
             );
@@ -508,7 +510,7 @@ fn translate_tool_cancels_before_editor_context_transitions() {
         editor.update(0.016, &mut result);
 
         assert_eq!(
-            editor.mesh(target).unwrap().attributes().positions[vertex],
+            editor.mesh(target).unwrap().attributes().positions()[vertex],
             2.0 * Vec3::X
         );
 
@@ -528,7 +530,7 @@ fn translate_tool_cancels_before_editor_context_transitions() {
 
         let mesh = removed.as_ref().or_else(|| editor.mesh(target)).unwrap();
         assert_eq!(
-            mesh.attributes().positions[vertex],
+            mesh.attributes().positions()[vertex],
             Vec3::ZERO,
             "{transition}"
         );
@@ -903,7 +905,7 @@ fn update_applies_active_tool_configuration_and_edits_in_the_same_frame() {
     let vertex = mesh.topology().verts().next().unwrap();
 
     assert_eq!(
-        mesh.attributes().positions[vertex].to_array(),
+        mesh.attributes().positions()[vertex].to_array(),
         [2.0, 0.0, 0.0]
     );
 
@@ -1157,7 +1159,7 @@ fn remove_mesh_returns_original_mesh_and_removes_overlay() {
     assert_eq!(mesh.topology().edge_count(), 3);
     assert_eq!(mesh.topology().face_count(), 1);
     assert_eq!(
-        mesh.attributes().positions[vertices[1]].to_array(),
+        mesh.attributes().positions()[vertices[1]].to_array(),
         [1.0, 0.0, 0.0]
     );
     assert_eq!(mesh.selection().level(), ComponentMask::VERTEX);

@@ -61,6 +61,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8babf46d4c1c9d92deac9f7be466f76dfc4482b6452fc5024b5e8daf6ffeb3ee"
 dependencies = [
  "bytemuck",
+ "serde",
 ]
 
 [[package]]
@@ -90,6 +91,7 @@ dependencies = [
 name = "mesh-editor"
 version = "0.1.0-alpha.0"
 dependencies = [
+ "bytemuck",
  "glam",
  "js-sys",
  "mesh",

@@ -194,7 +194,7 @@ impl<'a> ComponentRef<'a> {
     pub(crate) fn new(key: ComponentKey, topo: &'a Topology, attrs: &'a Attributes) -> Self {
         match key {
             ComponentKey::Vert(key) => Self::Vert(VertRef { topo, attrs, key }),
-            ComponentKey::Edge(key) => Self::Edge(EdgeRef { topo, key }),
+            ComponentKey::Edge(key) => Self::Edge(EdgeRef { topo, attrs, key }),
             ComponentKey::Face(key) => Self::Face(FaceRef { topo, attrs, key }),
         }
     }

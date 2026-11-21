@@ -17,15 +17,19 @@ crate-type = ["cdylib", "rlib"]
 [features]
 # Exposes the editor to JS through wasm-bindgen. Enabled when building with wasm-pack.
 wasm = [
+    "dep:bytemuck",
     "dep:wasm-bindgen",
     "dep:js-sys",
     "dep:serde",
     "dep:serde-wasm-bindgen",
     "dep:tsify",
+    "glam/bytemuck",
+    "glam/serde",
     "mesh/wasm",
 ]
 
 [dependencies]
+bytemuck = { workspace = true, optional = true }
 glam.workspace = true
 js-sys = { workspace = true, optional = true }
 mesh = { path = "../mesh" }
