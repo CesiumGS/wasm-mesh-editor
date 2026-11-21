@@ -5,8 +5,9 @@ mod selection;
 
 use std::ops::Range;
 
+use glam::Vec3;
 use mesh::{ComponentKey, EdgeKey, FaceKey, VertKey};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use slotmap::{Key, KeyData};
 use topology_overlay::shaders::uniforms;
 use topology_overlay::{OverlayBuffer, OverlayBuffers};
@@ -153,17 +154,17 @@ pub struct OverlayKeyViews {
 
 /// Component keys grouped by type, like `OverlayViews.componentKeys`.
 /// If a component type is not specified, it's treated as having no keys.
-#[derive(Deserialize, Tsify, Default)]
+#[derive(Serialize, Deserialize, Tsify, Default)]
 #[serde(default)]
 #[tsify(rename = "ComponentKeys")]
 pub struct ComponentKeysJs {
-    #[serde(deserialize_with = "big_uint64_array")]
+    #[serde(with = "big_uint64_array")]
     #[tsify(optional, type = "BigUint64Array")]
     verts: Vec<u64>,
-    #[serde(deserialize_with = "big_uint64_array")]
+    #[serde(with = "big_uint64_array")]
     #[tsify(optional, type = "BigUint64Array")]
     edges: Vec<u64>,
-    #[serde(deserialize_with = "big_uint64_array")]
+    #[serde(with = "big_uint64_array")]
     #[tsify(optional, type = "BigUint64Array")]
     faces: Vec<u64>,
 }
@@ -369,6 +370,24 @@ impl MeshEditor {
         Ok(true)
     }
 
+    /// Moves an active mesh's selected vertices by a local-space delta. Returns `false` and does
+    /// nothing if the mesh is inactive. Throws for an unknown mesh key.
+    #[wasm_bindgen(js_name = translateSelected)]
+    pub fn translate_selected(
+        &mut self,
+        #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
+        x: f32,
+        y: f32,
+        z: f32,
+    ) -> Result<bool, JsError> {
+        let Some(mesh) = active_mesh(self, mesh_key)? else {
+            return Ok(false);
+        };
+
+        mesh.translate_selected(Vec3::new(x, y, z));
+        Ok(true)
+    }
+
     /// Makes `components` selectable.
     /// Applies the selection level to active meshes and deactivates incompatible tools.
     /// Throws for bits outside `ComponentMask`.
@@ -459,7 +478,8 @@ impl MeshEditor {
         }
     }
 
-    /// Cancels the active tool's current interaction.
+    /// Cancels the active tool's current interaction. Selection or position edits made from JS
+    /// during the interaction can make the cancel restore the wrong components.
     #[wasm_bindgen(js_name = cancel)]
     pub fn cancel_tool(&mut self) {
         if let Some(mut tool) = self.active_tool_mut() {
@@ -480,8 +500,17 @@ fn active_mesh(
     Ok(editor.active_mesh_mut(mesh_key))
 }
 
-fn big_uint64_array<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u64>, D::Error> {
-    let array: js_sys::BigUint64Array = serde_wasm_bindgen::preserve::deserialize(deserializer)?;
+mod big_uint64_array {
+    use super::*;
 
-    Ok(array.to_vec())
+    pub fn serialize<S: Serializer>(keys: &[u64], serializer: S) -> Result<S::Ok, S::Error> {
+        serde_wasm_bindgen::preserve::serialize(&js_sys::BigUint64Array::from(keys), serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u64>, D::Error> {
+        let array: js_sys::BigUint64Array =
+            serde_wasm_bindgen::preserve::deserialize(deserializer)?;
+
+        Ok(array.to_vec())
+    }
 }

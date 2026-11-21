@@ -4,14 +4,33 @@
 //! mesh key. Unknown component keys are ignored.
 
 use mesh::{Selection, SelectionStep};
-use tsify::Ts;
+use slotmap::Key;
+use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
 use super::{ComponentKeysJs, active_mesh};
-use crate::{MeshEditor, MeshKey};
+use crate::{MeshEditor, MeshKey, MeshNotFound};
 
 #[wasm_bindgen]
 impl MeshEditor {
+    /// A mesh's selected components, in no particular order. Works on inactive meshes. Throws for
+    /// an unknown mesh key.
+    #[wasm_bindgen(js_name = selectedComponents)]
+    pub fn selected_components(
+        &self,
+        #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
+    ) -> Result<Ts<ComponentKeysJs>, JsError> {
+        let mesh = self.mesh(mesh_key).ok_or(MeshNotFound { key: mesh_key })?;
+        let selection = mesh.selection();
+
+        Ok(ComponentKeysJs {
+            verts: selection.verts().map(ffi).collect(),
+            edges: selection.edges().map(ffi).collect(),
+            faces: selection.faces().map(ffi).collect(),
+        }
+        .into_ts()?)
+    }
+
     /// Replaces an active mesh's selection with `componentKeys`.
     #[wasm_bindgen(js_name = setSelection)]
     pub fn set_selection(
@@ -98,4 +117,8 @@ fn edit_selection(
 
     edit(&mut mesh.selection_mut());
     Ok(true)
+}
+
+fn ffi(key: impl Key) -> u64 {
+    key.data().as_ffi()
 }
