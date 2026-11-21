@@ -3,9 +3,7 @@
 
 use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
 use js_sys::BigUint64Array;
-use mesh::{
-    AttributeDescriptor, AttributeLookupError, AttributeMap, AttributeValue, Mesh, VertKey,
-};
+use mesh::{AttributeDescriptor, AttributeError, AttributeMap, AttributeValue, Mesh, VertKey};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use slotmap::{Key, SecondaryMap};
@@ -184,7 +182,7 @@ impl MeshEditor {
     ) -> Result<Ts<VertsByAttributeQueryJs>, JsError> {
         let mesh = self.mesh(mesh_key).ok_or(MeshNotFound { key: mesh_key })?;
 
-        let (status, verts) = match mesh.attributes().vertex_attribute(name) {
+        let (status, verts) = match mesh.attributes().custom_attribute::<VertKey>(name) {
             None => (VertsByAttributeResult::AttributeNotFound, Vec::new()),
             Some(attribute) => {
                 with_predicate!(attribute, comparison, &value, predicate => {
@@ -216,7 +214,7 @@ impl MeshEditor {
         let mesh = self.mesh(mesh_key).ok_or(MeshNotFound { key: mesh_key })?;
         let (Some(vert), Some(attribute)) = (
             VertKey::try_from_ffi(vert_key),
-            mesh.attributes().vertex_attribute(name),
+            mesh.attributes().custom_attribute::<VertKey>(name),
         ) else {
             return Ok(JsValue::UNDEFINED);
         };
@@ -241,14 +239,14 @@ impl MeshEditor {
 }
 
 /// An operation on the vertices whose `name` attribute satisfies a predicate, like
-/// [`mesh::Selection::select_verts_by_attribute`].
+/// [`mesh::Selection::select_by_attribute`].
 pub(super) trait VertsByAttributeOperation {
     fn operate_on_verts_where<T: AttributeValue>(
         &self,
         mesh: &mut Mesh,
         name: &str,
         predicate: impl Fn(T) -> bool,
-    ) -> Result<(), AttributeLookupError>;
+    ) -> Result<(), AttributeError>;
 }
 
 /// Applies `operation` to the vertices whose `name` attribute compares to `value`, converted to the
@@ -260,7 +258,7 @@ pub(super) fn operate_on_verts_by_js_value(
     value: &JsValue,
     operation: &impl VertsByAttributeOperation,
 ) -> VertsByAttributeResult {
-    let Some(attribute) = mesh.attributes().vertex_attribute(name) else {
+    let Some(attribute) = mesh.attributes().custom_attribute::<VertKey>(name) else {
         return VertsByAttributeResult::AttributeNotFound;
     };
 
@@ -283,7 +281,10 @@ fn vert_keys_where<T: AttributeValue>(
         Err(result) => return (result, Vec::new()),
     };
 
-    match mesh.attributes().verts_where(name, predicate) {
+    match mesh
+        .attributes()
+        .keys_where::<VertKey, _, _>(name, predicate)
+    {
         Ok(verts) => (
             VertsByAttributeResult::Ok,
             verts.map(|vert| vert.data().as_ffi()).collect(),
@@ -292,11 +293,11 @@ fn vert_keys_where<T: AttributeValue>(
     }
 }
 
-fn lookup_status(result: Result<(), AttributeLookupError>) -> VertsByAttributeResult {
+fn lookup_status(result: Result<(), AttributeError>) -> VertsByAttributeResult {
     match result {
         Ok(()) => VertsByAttributeResult::Ok,
-        Err(AttributeLookupError::NotFound { .. }) => VertsByAttributeResult::AttributeNotFound,
-        Err(AttributeLookupError::WrongType { .. }) => VertsByAttributeResult::WrongType,
+        Err(AttributeError::NotFound { .. }) => VertsByAttributeResult::AttributeNotFound,
+        Err(AttributeError::WrongType { .. }) => VertsByAttributeResult::WrongType,
     }
 }
 

@@ -44,14 +44,22 @@ fn typed_matches(map: &AttributeMap<VertKey>) -> [bool; 12] {
 fn new_attributes_have_no_custom_attributes() {
     let attributes = Attributes::default();
 
-    assert_eq!(attributes.vertex_attributes().count(), 0);
-    assert_eq!(attributes.corner_attributes().count(), 0);
-    assert!(attributes.vertex_attribute("_FEATURE_ID_0").is_none());
-    assert!(attributes.corner_attribute("_FEATURE_ID_0").is_none());
+    assert_eq!(attributes.custom_attributes::<VertKey>().count(), 0);
+    assert_eq!(attributes.custom_attributes::<LoopKey>().count(), 0);
+    assert!(
+        attributes
+            .custom_attribute::<VertKey>("_FEATURE_ID_0")
+            .is_none()
+    );
+    assert!(
+        attributes
+            .custom_attribute::<LoopKey>("_FEATURE_ID_0")
+            .is_none()
+    );
 
     let attributes = Attributes::with_capacity(4, 4, 0);
-    assert_eq!(attributes.vertex_attributes().count(), 0);
-    assert_eq!(attributes.corner_attributes().count(), 0);
+    assert_eq!(attributes.custom_attributes::<VertKey>().count(), 0);
+    assert_eq!(attributes.custom_attributes::<LoopKey>().count(), 0);
 }
 
 #[test]
@@ -81,42 +89,42 @@ fn typed_returns_values_only_for_the_stored_type() {
 #[test]
 fn lookups_find_attributes_by_name_within_their_domain() {
     let mut attributes = Attributes::default();
-    attributes.add_vertex_attribute("_B".into(), AttributeMap::U32(SecondaryMap::new()));
-    attributes.add_corner_attribute("_C".into(), AttributeMap::Vec4(SecondaryMap::new()));
-    attributes.add_vertex_attribute("_A".into(), AttributeMap::F32(SecondaryMap::new()));
+    attributes.add_custom::<VertKey>("_B".into(), AttributeMap::U32(SecondaryMap::new()));
+    attributes.add_custom::<LoopKey>("_C".into(), AttributeMap::Vec4(SecondaryMap::new()));
+    attributes.add_custom::<VertKey>("_A".into(), AttributeMap::F32(SecondaryMap::new()));
 
     assert_eq!(
         attributes
-            .vertex_attributes()
+            .custom_attributes::<VertKey>()
             .map(|(name, _)| name)
             .collect::<Vec<_>>(),
         ["_B", "_A"]
     );
     assert_eq!(
         attributes
-            .corner_attributes()
+            .custom_attributes::<LoopKey>()
             .map(|(name, _)| name)
             .collect::<Vec<_>>(),
         ["_C"]
     );
 
     assert!(matches!(
-        attributes.vertex_attribute("_A"),
+        attributes.custom_attribute::<VertKey>("_A"),
         Some(AttributeMap::F32(_))
     ));
     assert!(matches!(
-        attributes.vertex_attribute("_B"),
+        attributes.custom_attribute::<VertKey>("_B"),
         Some(AttributeMap::U32(_))
     ));
     assert!(matches!(
-        attributes.corner_attribute("_C"),
+        attributes.custom_attribute::<LoopKey>("_C"),
         Some(AttributeMap::Vec4(_))
     ));
 
-    assert!(attributes.vertex_attribute("_C").is_none());
-    assert!(attributes.corner_attribute("_A").is_none());
-    assert!(attributes.vertex_attribute("_a").is_none());
-    assert!(attributes.vertex_attribute("_MISSING").is_none());
+    assert!(attributes.custom_attribute::<VertKey>("_C").is_none());
+    assert!(attributes.custom_attribute::<LoopKey>("_A").is_none());
+    assert!(attributes.custom_attribute::<VertKey>("_a").is_none());
+    assert!(attributes.custom_attribute::<VertKey>("_MISSING").is_none());
 }
 
 #[test]
@@ -124,8 +132,8 @@ fn lookups_find_attributes_by_name_within_their_domain() {
 #[should_panic(expected = "duplicate custom attribute")]
 fn names_are_unique_across_domains() {
     let mut attributes = Attributes::default();
-    attributes.add_vertex_attribute("_A".into(), AttributeMap::U32(SecondaryMap::new()));
-    attributes.add_corner_attribute("_A".into(), AttributeMap::U32(SecondaryMap::new()));
+    attributes.add_custom::<VertKey>("_A".into(), AttributeMap::U32(SecondaryMap::new()));
+    attributes.add_custom::<LoopKey>("_A".into(), AttributeMap::U32(SecondaryMap::new()));
 }
 
 #[test]
@@ -190,11 +198,11 @@ fn descriptors_list_built_in_then_custom_attributes() {
     );
 
     mesh.attributes
-        .add_corner_attribute("_COLOR".into(), AttributeMap::Vec4(SecondaryMap::new()));
+        .add_custom::<LoopKey>("_COLOR".into(), AttributeMap::Vec4(SecondaryMap::new()));
     mesh.attributes
-        .add_vertex_attribute("_B".into(), AttributeMap::U32(SecondaryMap::new()));
+        .add_custom::<VertKey>("_B".into(), AttributeMap::U32(SecondaryMap::new()));
     mesh.attributes
-        .add_vertex_attribute("_A".into(), AttributeMap::IVec2(SecondaryMap::new()));
+        .add_custom::<VertKey>("_A".into(), AttributeMap::IVec2(SecondaryMap::new()));
 
     assert_eq!(
         mesh.attributes.descriptors().collect::<Vec<_>>(),
@@ -240,9 +248,9 @@ fn vertex_views_read_typed_values() {
         ids.insert(vert, index as u32 + 10);
     }
     mesh.attributes
-        .add_vertex_attribute("_FEATURE_ID_0".into(), AttributeMap::U32(ids));
+        .add_custom::<VertKey>("_FEATURE_ID_0".into(), AttributeMap::U32(ids));
     mesh.attributes
-        .add_corner_attribute("_CORNER".into(), AttributeMap::U32(SecondaryMap::new()));
+        .add_custom::<LoopKey>("_CORNER".into(), AttributeMap::U32(SecondaryMap::new()));
 
     for (index, &vert) in verts.iter().take(3).enumerate() {
         let view = mesh.vert(vert).unwrap();
@@ -286,7 +294,7 @@ fn corner_values_can_differ_at_a_shared_vertex() {
         }
     }
     mesh.attributes
-        .add_corner_attribute("_COLOR".into(), AttributeMap::Vec4(colors));
+        .add_custom::<LoopKey>("_COLOR".into(), AttributeMap::Vec4(colors));
 
     let first = mesh.face(faces[0]).unwrap();
     let second = mesh.face(faces[1]).unwrap();
@@ -313,7 +321,7 @@ fn corner_values_can_differ_at_a_shared_vertex() {
 }
 
 #[test]
-fn verts_where_returns_verts_whose_value_satisfies_the_predicate() {
+fn keys_where_returns_keys_whose_value_satisfies_the_predicate() {
     let mut mesh = two_triangles();
     let (verts, _) = keys(&mesh);
     let ids: SecondaryMap<_, _> = verts
@@ -323,14 +331,14 @@ fn verts_where_returns_verts_whose_value_satisfies_the_predicate() {
         .map(|(index, &vert)| (vert, index as i32 - 1))
         .collect();
     mesh.attributes
-        .add_vertex_attribute("_ID".into(), AttributeMap::I32(ids));
+        .add_custom::<VertKey>("_ID".into(), AttributeMap::I32(ids));
     mesh.attributes
-        .add_corner_attribute("_CORNER".into(), AttributeMap::I32(SecondaryMap::new()));
+        .add_custom::<LoopKey>("_CORNER".into(), AttributeMap::I32(SecondaryMap::new()));
 
     let matching = |predicate: fn(i32) -> bool| {
         let mut matching: Vec<_> = mesh
             .attributes
-            .verts_where("_ID", predicate)
+            .keys_where::<VertKey, _, _>("_ID", predicate)
             .unwrap()
             .collect();
         matching.sort();
@@ -344,13 +352,99 @@ fn verts_where_returns_verts_whose_value_satisfies_the_predicate() {
     assert!(matching(|id| id > 1).is_empty());
 
     assert_eq!(
-        mesh.attributes.verts_where("_ID", |_: u32| true).err(),
-        Some(AttributeLookupError::WrongType { name: "_ID".into() })
+        mesh.attributes
+            .keys_where::<VertKey, _, _>("_ID", |_: u32| true)
+            .err(),
+        Some(AttributeError::WrongType { name: "_ID".into() })
     );
     for name in ["_MISSING", "_CORNER"] {
         assert_eq!(
-            mesh.attributes.verts_where(name, |_: i32| true).err(),
-            Some(AttributeLookupError::NotFound { name: name.into() })
+            mesh.attributes
+                .keys_where::<VertKey, _, _>(name, |_: i32| true)
+                .err(),
+            Some(AttributeError::NotFound { name: name.into() })
         );
     }
+}
+
+#[test]
+fn values_resolve_built_in_and_custom_attributes_by_domain_and_type() {
+    let mut mesh = two_triangles();
+    let (verts, _) = keys(&mesh);
+    let ids: SecondaryMap<_, _> = verts.iter().map(|&vert| (vert, 7_u32)).collect();
+    mesh.attributes
+        .add_custom::<VertKey>("_ID".into(), AttributeMap::U32(ids));
+    let attributes = &mesh.attributes;
+
+    let positions = attributes.values::<VertKey, Vec3>(Attributes::POSITION);
+    assert_eq!(positions, Ok(&attributes.positions));
+    let normals = attributes.values::<LoopKey, Vec3>(Attributes::NORMAL);
+    assert_eq!(normals, Ok(&attributes.normals));
+    assert_eq!(
+        attributes.values::<VertKey, u32>("_ID").unwrap()[verts[0]],
+        7
+    );
+
+    let not_found = |name: &str| Some(AttributeError::NotFound { name: name.into() });
+    let wrong_type = |name: &str| Some(AttributeError::WrongType { name: name.into() });
+    assert_eq!(
+        attributes
+            .values::<LoopKey, Vec3>(Attributes::POSITION)
+            .err(),
+        not_found("POSITION")
+    );
+    assert_eq!(
+        attributes
+            .values::<VertKey, Vec4>(Attributes::POSITION)
+            .err(),
+        wrong_type("POSITION")
+    );
+    // The mesh has no UVs.
+    assert_eq!(
+        attributes
+            .values::<LoopKey, Vec2>(Attributes::TEXCOORD_0)
+            .err(),
+        not_found("TEXCOORD_0")
+    );
+    assert_eq!(
+        attributes.values::<LoopKey, u32>("_ID").err(),
+        not_found("_ID")
+    );
+    assert_eq!(
+        attributes.values::<VertKey, i32>("_ID").err(),
+        wrong_type("_ID")
+    );
+}
+
+#[test]
+fn keys_where_filters_built_in_attributes() {
+    let mesh = two_triangles();
+    let (verts, _) = keys(&mesh);
+
+    let mut matching: Vec<_> = mesh
+        .attributes
+        .keys_where::<VertKey, _, _>(Attributes::POSITION, |position: Vec3| position.x > 0.5)
+        .unwrap()
+        .collect();
+    matching.sort();
+
+    assert_eq!(matching, [verts[1], verts[3]]);
+}
+
+#[test]
+fn descriptor_finds_built_in_and_custom_attributes() {
+    let mut mesh = two_triangles();
+    mesh.attributes
+        .add_custom::<LoopKey>("_COLOR".into(), AttributeMap::Vec4(SecondaryMap::new()));
+
+    let descriptor = mesh.attributes.descriptor(Attributes::POSITION).unwrap();
+    assert_eq!(descriptor.domain, AttributeDomain::Vertex);
+    assert_eq!(descriptor.value_type, Vec3::VALUE_TYPE);
+
+    let descriptor = mesh.attributes.descriptor("_COLOR").unwrap();
+    assert_eq!(descriptor.domain, AttributeDomain::Corner);
+    assert_eq!(descriptor.value_type, Vec4::VALUE_TYPE);
+
+    assert!(mesh.attributes.descriptor(Attributes::TEXCOORD_0).is_none());
+    assert!(mesh.attributes.descriptor("_MISSING").is_none());
 }

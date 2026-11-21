@@ -48,7 +48,7 @@ impl<'a> VertRef<'a> {
     /// This vertex's value of the named custom vertex attribute, or `None` if the attribute
     /// doesn't exist, stores a different type, or has no value here.
     pub fn attribute<T: AttributeValue>(&self, name: &str) -> Option<T> {
-        let values = self.attrs.vertex_attribute(name)?.typed::<T>()?;
+        let values = self.attrs.custom_attribute::<VertKey>(name)?.typed::<T>()?;
         values.get(self.key).copied()
     }
 }

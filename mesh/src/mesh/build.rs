@@ -322,7 +322,7 @@ fn add_custom_attributes(
 
     for (name, values) in vertex_attributes {
         let values = values.into_map(verts.iter().copied());
-        mesh.attributes.add_vertex_attribute(name, values);
+        mesh.attributes.add_custom(name, values);
     }
 
     if corner_attributes.is_empty() {
@@ -336,7 +336,7 @@ fn add_custom_attributes(
 
     for (name, values) in corner_attributes {
         let values = values.into_map(corners.iter().copied());
-        mesh.attributes.add_corner_attribute(name, values);
+        mesh.attributes.add_custom(name, values);
     }
 }
 

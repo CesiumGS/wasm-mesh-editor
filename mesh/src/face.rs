@@ -63,7 +63,7 @@ impl<'a> FaceRef<'a> {
     /// The value of the named custom corner attribute at this vertex's corner, or `None` if the
     /// vertex isn't in the face, or the attribute doesn't exist / stores a different type / or has no value here.
     pub fn corner_attribute<T: AttributeValue>(&self, name: &str, vertex: VertKey) -> Option<T> {
-        let values = self.attrs.corner_attribute(name)?.typed::<T>()?;
+        let values = self.attrs.custom_attribute::<LoopKey>(name)?.typed::<T>()?;
         let key = self
             .loops()
             .find(|&key| self.topo.loops[key].vert == vertex)?;

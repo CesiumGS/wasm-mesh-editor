@@ -1665,7 +1665,7 @@ fn select_by_attribute_also_selects_faces_whose_verts_all_match() {
 
     assert_eq!(
         mesh.selection_mut()
-            .select_verts_by_attribute("_FEATURE_ID", |id: u32| id == 7),
+            .select_by_attribute::<VertKey, _>("_FEATURE_ID", |id: u32| id == 7),
         Ok(())
     );
     assert_selection_event(&changes, &expected, &[]);
@@ -1677,7 +1677,7 @@ fn select_by_attribute_accepts_any_predicate() {
     let verts: Vec<_> = mesh.topology.verts().collect();
 
     mesh.selection_mut()
-        .select_verts_by_attribute("_FEATURE_ID", |id: u32| id > 7)
+        .select_by_attribute::<VertKey, _>("_FEATURE_ID", |id: u32| id > 7)
         .unwrap();
 
     assert_eq!(mesh.selection().verts().collect::<Vec<_>>(), [verts[3]]);
@@ -1690,7 +1690,7 @@ fn select_by_attribute_keeps_the_existing_selection() {
     mesh.selection_mut().select(&verts[3..]);
 
     mesh.selection_mut()
-        .select_verts_by_attribute("_FEATURE_ID", |id: u32| id == 7)
+        .select_by_attribute::<VertKey, _>("_FEATURE_ID", |id: u32| id == 7)
         .unwrap();
     assert!(verts.iter().all(|&vert| mesh.selection().contains(vert)));
 }
@@ -1704,7 +1704,7 @@ fn select_by_attribute_does_nothing_when_verts_arent_selectable() {
 
         assert_eq!(
             mesh.selection_mut()
-                .select_verts_by_attribute("_FEATURE_ID", |id: u32| id == 7),
+                .select_by_attribute::<VertKey, _>("_FEATURE_ID", |id: u32| id == 7),
             Ok(())
         );
         assert!(mesh.selection().is_empty());
@@ -1719,10 +1719,10 @@ fn select_by_attribute_skips_verts_without_a_value() {
     let mut partial = slotmap::SecondaryMap::new();
     partial.insert(verts[0], 1.5f32);
     mesh.attributes
-        .add_vertex_attribute("_PARTIAL".into(), AttributeMap::F32(partial));
+        .add_custom::<VertKey>("_PARTIAL".into(), AttributeMap::F32(partial));
 
     mesh.selection_mut()
-        .select_verts_by_attribute("_PARTIAL", |value: f32| value == 1.5)
+        .select_by_attribute::<VertKey, _>("_PARTIAL", |value: f32| value == 1.5)
         .unwrap();
     assert_eq!(mesh.selection().verts().collect::<Vec<_>>(), [verts[0]]);
 }
@@ -1731,20 +1731,20 @@ fn select_by_attribute_skips_verts_without_a_value() {
 fn select_by_attribute_with_unknown_name_or_type_selects_nothing() {
     let mut mesh = feature_triangles();
     let changes = mesh.subscribe();
-    let not_found = |name: &str| AttributeLookupError::NotFound { name: name.into() };
+    let not_found = |name: &str| AttributeError::NotFound { name: name.into() };
 
     // Corner attributes aren't vertex attributes, even with a matching name.
     for name in ["_MISSING", "_CORNER"] {
         assert_eq!(
             mesh.selection_mut()
-                .select_verts_by_attribute(name, |id: u32| id == 7),
+                .select_by_attribute::<VertKey, _>(name, |id: u32| id == 7),
             Err(not_found(name))
         );
     }
     assert_eq!(
         mesh.selection_mut()
-            .select_verts_by_attribute("_FEATURE_ID", |id: i32| id == 7),
-        Err(AttributeLookupError::WrongType {
+            .select_by_attribute::<VertKey, _>("_FEATURE_ID", |id: i32| id == 7),
+        Err(AttributeError::WrongType {
             name: "_FEATURE_ID".into()
         })
     );
@@ -1753,12 +1753,12 @@ fn select_by_attribute_with_unknown_name_or_type_selects_nothing() {
 }
 
 #[test]
-fn attribute_lookup_errors_describe_the_attribute() {
-    let not_found = AttributeLookupError::NotFound { name: "_A".into() };
-    let wrong_type = AttributeLookupError::WrongType { name: "_A".into() };
-    assert_eq!(not_found.to_string(), "custom attribute \"_A\" not found");
+fn attribute_errors_describe_the_attribute() {
+    let not_found = AttributeError::NotFound { name: "_A".into() };
+    let wrong_type = AttributeError::WrongType { name: "_A".into() };
+    assert_eq!(not_found.to_string(), "attribute \"_A\" not found");
     assert_eq!(
         wrong_type.to_string(),
-        "custom attribute \"_A\" stores a different value type"
+        "attribute \"_A\" stores a different value type"
     );
 }
