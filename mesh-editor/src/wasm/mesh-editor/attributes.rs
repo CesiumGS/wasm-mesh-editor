@@ -8,7 +8,7 @@ use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
 use js_sys::{Float32Array, Int32Array, Uint8Array, Uint32Array};
 use mesh::{
     AttributeComponentType, AttributeDescriptor, AttributeDomain, AttributeError, AttributeKey,
-    AttributeType, AttributeValue, EdgeKey, FaceKey, Mesh, SelectionKind, VertKey,
+    AttributeType, AttributeValue, EdgeKey, FaceKey, LoopKey, Mesh, SelectionKind, VertKey,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -18,26 +18,31 @@ use wasm_bindgen::prelude::*;
 use super::{ComponentKeysJs, active_mesh, ffi, key_from_ffi};
 use crate::{MeshEditor, MeshKey, MeshNotFound};
 
-/// The result of calling a function that operates on the components specified by attribute value,
-/// like `selectByAttribute` or `queryByAttribute`. Only `Ok` indicates success.
+/// The result of an attribute function, like `selectByAttribute` or `addAttribute`. Only `Ok`
+/// indicates success.
 #[wasm_bindgen]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ByAttributeResult {
-    /// The attribute was found and the operation applied to any matching components. That may be
-    /// none, if nothing matched or the components aren't selectable in the current mode.
+pub enum AttributeResult {
+    /// The call succeeded. By-attribute functions apply to any matching components, which may be
+    /// none if nothing matched or the components aren't selectable in the current mode.
     Ok = 0,
     /// The mesh has no attribute with that name.
     AttributeNotFound = 1,
-    /// The value doesn't fit the attribute's type, like `1.5` for an integer attribute or a
-    /// number for a vector attribute.
+    /// A value doesn't fit the attribute's type, like `1.5` for an integer attribute or a number
+    /// for a vector attribute, or a `defaultValue` that isn't a `Float32Array`, `Uint32Array` or
+    /// `Int32Array` of 1 to 4 values.
     WrongType = 2,
     /// The mesh isn't active, so it can't be edited.
     MeshInactive = 3,
-    /// The comparison doesn't apply to the attribute's type: vector attributes only support
-    /// `Equal` and `NotEqual`.
+    /// By-attribute functions: the comparison doesn't apply to the attribute's type, since vector
+    /// attributes only support `Equal` and `NotEqual`.
     UnsupportedComparison = 4,
     /// The operation doesn't apply to corner attributes, since JS has no corner keys.
     UnsupportedDomain = 5,
+    /// `addAttribute`: the name is already in use.
+    NameInUse = 6,
+    /// `addAttribute` with a reserved name, or `removeAttribute` on a built-in attribute.
+    Reserved = 7,
 }
 
 /// How functions that operate on components by attribute compare each component's attribute
@@ -109,7 +114,7 @@ extern "C" {
 #[derive(Serialize, Tsify)]
 #[tsify(rename = "ByAttributeQuery")]
 pub struct ByAttributeQueryJs {
-    #[tsify(type = "ByAttributeResult")]
+    #[tsify(type = "AttributeResult")]
     status: u8,
     keys: ComponentKeysJs,
 }
@@ -176,13 +181,13 @@ impl MeshEditor {
 
         let none = ComponentKeysJs::default;
         let (status, keys) = match descriptor_types(mesh, name) {
-            None => (ByAttributeResult::AttributeNotFound, none()),
+            None => (AttributeResult::AttributeNotFound, none()),
             Some((domain, value_type)) => with_attribute_types!(domain, value_type, K, T => {
                 match predicate::<T>(comparison, &value) {
-                    Ok(predicate) => (ByAttributeResult::Ok, keys_where::<K, T>(mesh, name, predicate)),
+                    Ok(predicate) => (AttributeResult::Ok, keys_where::<K, T>(mesh, name, predicate)),
                     Err(status) => (status, none()),
                 }
-            }, corner => (ByAttributeResult::UnsupportedDomain, none())),
+            }, corner => (AttributeResult::UnsupportedDomain, none())),
         };
 
         Ok(ByAttributeQueryJs {
@@ -242,6 +247,63 @@ impl MeshEditor {
     }
 }
 
+#[wasm_bindgen]
+impl MeshEditor {
+    /// Adds a custom attribute called `name` to an active mesh, giving every component of `domain`
+    /// `defaultValue`. The typed array's type sets the attribute's component type, and its length
+    /// (1 to 4) the component count. Write values with `setAttributeValues`. Only throws for an
+    /// unknown mesh key.
+    #[wasm_bindgen(js_name = addAttribute)]
+    pub fn add_attribute(
+        &mut self,
+        #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
+        name: &str,
+        domain: AttributeDomain,
+        #[wasm_bindgen(
+            js_name = defaultValue,
+            unchecked_param_type = "Float32Array | Uint32Array | Int32Array"
+        )]
+        default_value: JsValue,
+    ) -> Result<AttributeResult, JsError> {
+        let Some(mesh) = active_mesh(self, mesh_key)? else {
+            return Ok(AttributeResult::MeshInactive);
+        };
+        let Some((component_type, bytes, length @ 1..=4)) = typed_array(&default_value) else {
+            return Ok(AttributeResult::WrongType);
+        };
+        let value_type = AttributeType {
+            component_type,
+            component_count: length as u8,
+        };
+
+        Ok(with_value_type!(value_type, T => {
+            let mut default: T = bytemuck::Zeroable::zeroed();
+            bytes.copy_to(bytemuck::bytes_of_mut(&mut default));
+
+            status(match domain {
+                AttributeDomain::Vertex => mesh.add_attribute::<VertKey, T>(name, default),
+                AttributeDomain::Edge => mesh.add_attribute::<EdgeKey, T>(name, default),
+                AttributeDomain::Face => mesh.add_attribute::<FaceKey, T>(name, default),
+                AttributeDomain::Corner => mesh.add_attribute::<LoopKey, T>(name, default),
+            })
+        }))
+    }
+
+    /// Removes a custom attribute from an active mesh. Only throws for an unknown mesh key.
+    #[wasm_bindgen(js_name = removeAttribute)]
+    pub fn remove_attribute(
+        &mut self,
+        #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
+        name: &str,
+    ) -> Result<AttributeResult, JsError> {
+        let Some(mesh) = active_mesh(self, mesh_key)? else {
+            return Ok(AttributeResult::MeshInactive);
+        };
+
+        Ok(status(mesh.remove_attribute(name)))
+    }
+}
+
 /// An operation on the components whose `name` attribute satisfies a predicate, like
 /// [`mesh::Selection::select_by_attribute`].
 pub(super) trait ByAttributeOperation {
@@ -261,17 +323,17 @@ pub(super) fn apply_by_js_value(
     comparison: AttributeComparison,
     value: &JsValue,
     operation: &impl ByAttributeOperation,
-) -> ByAttributeResult {
+) -> AttributeResult {
     let Some((domain, value_type)) = descriptor_types(mesh, name) else {
-        return ByAttributeResult::AttributeNotFound;
+        return AttributeResult::AttributeNotFound;
     };
 
     with_attribute_types!(domain, value_type, K, T => {
         match predicate::<T>(comparison, value) {
-            Ok(predicate) => lookup_status(operation.apply::<K, T>(mesh, name, predicate)),
+            Ok(predicate) => status(operation.apply::<K, T>(mesh, name, predicate)),
             Err(status) => status,
         }
-    }, corner => ByAttributeResult::UnsupportedDomain)
+    }, corner => AttributeResult::UnsupportedDomain)
 }
 
 /// The domain and value type of the attribute called `name`, if there is one.
@@ -357,28 +419,14 @@ fn typed_array_bytes(
     count: usize,
     argument: &str,
 ) -> Result<Uint8Array, JsError> {
-    let (class, view) = match value_type.component_type {
-        AttributeComponentType::Float32 => (
-            "a Float32Array",
-            array
-                .dyn_ref::<Float32Array>()
-                .map(|array| (array.buffer(), array.byte_offset(), array.length())),
-        ),
-        AttributeComponentType::Uint32 => (
-            "a Uint32Array",
-            array
-                .dyn_ref::<Uint32Array>()
-                .map(|array| (array.buffer(), array.byte_offset(), array.length())),
-        ),
-        AttributeComponentType::Int32 => (
-            "an Int32Array",
-            array
-                .dyn_ref::<Int32Array>()
-                .map(|array| (array.buffer(), array.byte_offset(), array.length())),
-        ),
+    let class = match value_type.component_type {
+        AttributeComponentType::Float32 => "a Float32Array",
+        AttributeComponentType::Uint32 => "a Uint32Array",
+        AttributeComponentType::Int32 => "an Int32Array",
     };
-    let (buffer, offset, length) =
-        view.ok_or_else(|| JsError::new(&format!("{argument} is not {class}")))?;
+    let (_, bytes, length) = typed_array(array)
+        .filter(|&(component_type, ..)| component_type == value_type.component_type)
+        .ok_or_else(|| JsError::new(&format!("{argument} is not {class}")))?;
 
     let expected = count * usize::from(value_type.component_count);
     if length as usize != expected {
@@ -387,19 +435,36 @@ fn typed_array_bytes(
         )));
     }
 
-    // Every component type is 4 bytes.
-    Ok(Uint8Array::new_with_byte_offset_and_length(
-        &buffer,
-        offset,
-        length * 4,
-    ))
+    Ok(bytes)
 }
 
-fn lookup_status(result: Result<(), AttributeError>) -> ByAttributeResult {
+/// The component type, a byte view and the length of `array`, if it's a `Float32Array`,
+/// `Uint32Array` or `Int32Array`.
+fn typed_array(array: &JsValue) -> Option<(AttributeComponentType, Uint8Array, u32)> {
+    use AttributeComponentType::{Float32, Int32, Uint32};
+
+    let (component_type, buffer, offset, length) =
+        if let Some(array) = array.dyn_ref::<Float32Array>() {
+            (Float32, array.buffer(), array.byte_offset(), array.length())
+        } else if let Some(array) = array.dyn_ref::<Uint32Array>() {
+            (Uint32, array.buffer(), array.byte_offset(), array.length())
+        } else {
+            let array = array.dyn_ref::<Int32Array>()?;
+            (Int32, array.buffer(), array.byte_offset(), array.length())
+        };
+
+    // Every component type is 4 bytes.
+    let bytes = Uint8Array::new_with_byte_offset_and_length(&buffer, offset, length * 4);
+    Some((component_type, bytes, length))
+}
+
+fn status(result: Result<(), AttributeError>) -> AttributeResult {
     match result {
-        Ok(()) => ByAttributeResult::Ok,
-        Err(AttributeError::NotFound { .. }) => ByAttributeResult::AttributeNotFound,
-        Err(AttributeError::WrongType { .. }) => ByAttributeResult::WrongType,
+        Ok(()) => AttributeResult::Ok,
+        Err(AttributeError::NotFound { .. }) => AttributeResult::AttributeNotFound,
+        Err(AttributeError::WrongType { .. }) => AttributeResult::WrongType,
+        Err(AttributeError::AlreadyExists { .. }) => AttributeResult::NameInUse,
+        Err(AttributeError::Reserved { .. }) => AttributeResult::Reserved,
     }
 }
 
@@ -408,17 +473,17 @@ fn lookup_status(result: Result<(), AttributeError>) -> ByAttributeResult {
 fn predicate<T: AttributeValue + Pod + PartialEq>(
     comparison: AttributeComparison,
     value: &JsValue,
-) -> Result<impl Fn(T) -> bool, ByAttributeResult> {
+) -> Result<impl Fn(T) -> bool, AttributeResult> {
     let is_vector = T::VALUE_TYPE.component_count > 1;
     let is_equality = matches!(
         comparison,
         AttributeComparison::Equal | AttributeComparison::NotEqual
     );
     if is_vector && !is_equality {
-        return Err(ByAttributeResult::UnsupportedComparison);
+        return Err(AttributeResult::UnsupportedComparison);
     }
 
-    let value = value_from_js::<T>(value).ok_or(ByAttributeResult::WrongType)?;
+    let value = value_from_js::<T>(value).ok_or(AttributeResult::WrongType)?;
 
     Ok(move |other: T| {
         let order = || scalar_order(other, value);

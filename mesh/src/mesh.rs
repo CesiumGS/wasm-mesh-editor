@@ -8,6 +8,7 @@ use std::sync::mpsc::Receiver;
 
 use event_emitter::{Event, EventEmitter};
 use glam::{DVec3, Vec3};
+use slotmap::SecondaryMap;
 
 use crate::geometry::corner_angle;
 use crate::selection::{SelectionBoundary, SelectionState};
@@ -134,6 +135,42 @@ impl Mesh {
         let verts = Rc::clone(&selection.verts);
         self.emit_position_change(verts);
         self.emit_normal_change(loops);
+    }
+
+    /// Adds a custom attribute called `name` keyed by `K`, giving every `K` component `default`.
+    ///
+    /// # Errors
+    /// If `name` is reserved or already used.
+    pub fn add_attribute<K: AttributeKey, T: AttributeValue>(
+        &mut self,
+        name: &str,
+        default: T,
+    ) -> Result<(), AttributeError> {
+        if Attributes::RESERVED_NAMES.contains(&name) {
+            return Err(AttributeError::Reserved { name: name.into() });
+        }
+        if self.attributes.descriptor(name).is_some() {
+            return Err(AttributeError::AlreadyExists { name: name.into() });
+        }
+
+        let values: SecondaryMap<K, T> =
+            K::keys(&self.topology).map(|key| (key, default)).collect();
+        self.attributes.add(name.into(), T::wrap_map(values));
+        Ok(())
+    }
+
+    /// Removes the custom attribute called `name`, in any domain.
+    ///
+    /// # Errors
+    /// If there's no attribute called `name`, or it's built-in.
+    pub fn remove_attribute(&mut self, name: &str) -> Result<(), AttributeError> {
+        if Attributes::RESERVED_NAMES.contains(&name) {
+            return Err(AttributeError::Reserved { name: name.into() });
+        }
+        if !self.attributes.remove(name) {
+            return Err(AttributeError::NotFound { name: name.into() });
+        }
+        Ok(())
     }
 
     /// Writes `values` to the attribute called `name`, built-in or custom, ignoring keys that

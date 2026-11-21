@@ -5,7 +5,7 @@ use std::fmt;
 use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
 use slotmap::{Key, SecondaryMap};
 
-use crate::{EdgeKey, FaceKey, LoopKey, VertKey};
+use crate::{EdgeKey, FaceKey, LoopKey, Topology, VertKey};
 
 /// Named attributes, in one list per key type. Each list starts with its built-in attributes:
 /// positions (`POSITION`) for vertices, and normals (`NORMAL`) then UVs (`TEXCOORD_0`, if the mesh
@@ -213,7 +213,7 @@ pub trait AttributeValue: Copy + 'static + sealed::Sealed {
 mod sealed {
     use slotmap::{Key, SecondaryMap};
 
-    use super::{AttributeBuffer, AttributeMap, Attributes};
+    use super::{AttributeBuffer, AttributeMap, Attributes, Topology};
 
     pub trait Sealed: Sized {
         /// The matching variant's values, or `None` for any other variant.
@@ -232,6 +232,9 @@ mod sealed {
         fn list(attributes: &Attributes) -> &Vec<(String, AttributeMap<Self>)>;
 
         fn list_mut(attributes: &mut Attributes) -> &mut Vec<(String, AttributeMap<Self>)>;
+
+        /// Every component of this key type.
+        fn keys(topology: &Topology) -> impl Iterator<Item = Self> + '_;
     }
 }
 
@@ -434,6 +437,14 @@ impl Attributes {
         K::list_mut(self).push((name, values));
     }
 
+    /// Removes the attribute called `name`, in any domain. `false` if there isn't one.
+    pub(crate) fn remove(&mut self, name: &str) -> bool {
+        remove_named(&mut self.vertex, name)
+            || remove_named(&mut self.edge, name)
+            || remove_named(&mut self.face, name)
+            || remove_named(&mut self.corner, name)
+    }
+
     fn descriptors_of<K: AttributeKey>(&self) -> impl Iterator<Item = AttributeDescriptor<'_>> {
         self.iter::<K>().map(|(name, values)| AttributeDescriptor {
             name,
@@ -443,15 +454,25 @@ impl Attributes {
     }
 }
 
+fn remove_named<K: Key>(list: &mut Vec<(String, AttributeMap<K>)>, name: &str) -> bool {
+    let count = list.len();
+    list.retain(|(attribute, _)| attribute != name);
+    list.len() != count
+}
+
 const BUILT_IN: &str = "built-in attributes always exist with their type";
 
-/// Why an attribute couldn't be read or written as requested.
+/// Why an attribute couldn't be read, written, added or removed as requested.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttributeError {
     /// No attribute with this name in the requested domain.
     NotFound { name: String },
     /// The attribute stores a different value type than the one requested.
     WrongType { name: String },
+    /// An attribute with this name already exists.
+    AlreadyExists { name: String },
+    /// The name is one of [`Attributes::RESERVED_NAMES`], so it can't be added or removed.
+    Reserved { name: String },
 }
 
 impl fmt::Display for AttributeError {
@@ -464,16 +485,21 @@ impl fmt::Display for AttributeError {
                     "attribute {name:?} stores a different value type"
                 )
             }
+            Self::AlreadyExists { name } => write!(formatter, "attribute {name:?} already exists"),
+            Self::Reserved { name } => {
+                write!(formatter, "attribute name {name:?} is reserved")
+            }
         }
     }
 }
 
 impl std::error::Error for AttributeError {}
 
-/// Implements [`AttributeKey`] for each `key type => domain, field`, where `field` is the
-/// [`Attributes`] list holding the key type's attributes. See macro use below.
+/// Implements [`AttributeKey`] for each `key type => domain, field, keys`, where `field` is the
+/// [`Attributes`] list holding the key type's attributes and `keys` the [`Topology`] method listing
+/// its components. See macro use below.
 macro_rules! impl_attribute_key {
-    ($($key:ty => $domain:ident, $field:ident);* $(;)?) => {$(
+    ($($key:ty => $domain:ident, $field:ident, $keys:ident);* $(;)?) => {$(
         impl sealed::SealedKey for $key {
             fn list(attributes: &Attributes) -> &Vec<(String, AttributeMap<Self>)> {
                 &attributes.$field
@@ -481,6 +507,10 @@ macro_rules! impl_attribute_key {
 
             fn list_mut(attributes: &mut Attributes) -> &mut Vec<(String, AttributeMap<Self>)> {
                 &mut attributes.$field
+            }
+
+            fn keys(topology: &Topology) -> impl Iterator<Item = Self> + '_ {
+                topology.$keys()
             }
         }
 
@@ -491,10 +521,10 @@ macro_rules! impl_attribute_key {
 }
 
 impl_attribute_key!(
-    VertKey => Vertex, vertex;
-    EdgeKey => Edge, edge;
-    FaceKey => Face, face;
-    LoopKey => Corner, corner;
+    VertKey => Vertex, vertex, verts;
+    EdgeKey => Edge, edge, edges;
+    FaceKey => Face, face, faces;
+    LoopKey => Corner, corner, loops;
 );
 
 #[cfg(test)]

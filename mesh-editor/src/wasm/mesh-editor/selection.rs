@@ -10,7 +10,7 @@ use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
 use super::attributes::{
-    AttributeComparison, ByAttributeOperation, ByAttributeResult, apply_by_js_value,
+    AttributeComparison, AttributeResult, ByAttributeOperation, apply_by_js_value,
 };
 use super::{ComponentKeysJs, active_mesh, ffi};
 use crate::{MeshEditor, MeshKey, MeshNotFound};
@@ -135,9 +135,9 @@ impl MeshEditor {
         name: &str,
         comparison: AttributeComparison,
         #[wasm_bindgen(unchecked_param_type = "number | ArrayLike<number>")] value: JsValue,
-    ) -> Result<ByAttributeResult, JsError> {
+    ) -> Result<AttributeResult, JsError> {
         let Some(mesh) = active_mesh(self, mesh_key)? else {
-            return Ok(ByAttributeResult::MeshInactive);
+            return Ok(AttributeResult::MeshInactive);
         };
 
         Ok(apply_by_js_value(mesh, name, comparison, &value, &Select))

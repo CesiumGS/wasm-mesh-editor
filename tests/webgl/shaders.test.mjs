@@ -19,7 +19,7 @@ import init, {
   SelectionStep,
   TranslateTool,
   UpdateResult,
-  ByAttributeResult,
+  AttributeResult,
   topologyOverlayShaders,
 } from "../../mesh-editor/pkg/mesh-editor.js";
 
@@ -944,7 +944,7 @@ test("selectByAttribute compares scalar attributes", () => {
 
     assert.equal(
       editor.selectByAttribute(key, "_ID", comparison, value),
-      ByAttributeResult.Ok,
+      AttributeResult.Ok,
     );
     assert.deepEqual(selectedVerts(editor, key), expected, AttributeComparison[comparison]);
     editor.free();
@@ -953,10 +953,10 @@ test("selectByAttribute compares scalar attributes", () => {
 
 test("selectByAttribute compares vector attributes for equality only", () => {
   for (const [comparison, result, expected] of [
-    [AttributeComparison.Equal, ByAttributeResult.Ok, [1, 2]],
-    [AttributeComparison.NotEqual, ByAttributeResult.Ok, [0, 3]],
-    [AttributeComparison.Less, ByAttributeResult.UnsupportedComparison, []],
-    [AttributeComparison.GreaterOrEqual, ByAttributeResult.UnsupportedComparison, []],
+    [AttributeComparison.Equal, AttributeResult.Ok, [1, 2]],
+    [AttributeComparison.NotEqual, AttributeResult.Ok, [0, 3]],
+    [AttributeComparison.Less, AttributeResult.UnsupportedComparison, []],
+    [AttributeComparison.GreaterOrEqual, AttributeResult.UnsupportedComparison, []],
   ]) {
     const { editor, key } = attributeEditor();
 
@@ -971,10 +971,10 @@ test("selectByAttribute reports lookups that select nothing", () => {
   const { Equal } = AttributeComparison;
 
   for (const [name, value, result] of [
-    ["_MISSING", 0, ByAttributeResult.AttributeNotFound],
-    ["_ID", 1.5, ByAttributeResult.WrongType],
-    ["_COLOR", 1, ByAttributeResult.WrongType],
-    ["_COLOR", [1, 0], ByAttributeResult.WrongType],
+    ["_MISSING", 0, AttributeResult.AttributeNotFound],
+    ["_ID", 1.5, AttributeResult.WrongType],
+    ["_COLOR", 1, AttributeResult.WrongType],
+    ["_COLOR", [1, 0], AttributeResult.WrongType],
   ]) {
     assert.equal(editor.selectByAttribute(key, name, Equal, value), result, name);
   }
@@ -983,7 +983,7 @@ test("selectByAttribute reports lookups that select nothing", () => {
   editor.setMeshInactive(key);
   assert.equal(
     editor.selectByAttribute(key, "_ID", Equal, 0),
-    ByAttributeResult.MeshInactive,
+    AttributeResult.MeshInactive,
   );
 
   editor.removeMesh(key).free();
@@ -1007,7 +1007,7 @@ test("queryByAttribute returns matching keys without selecting them", () => {
     ["_COLOR", Equal, [1, 0, 0], [1, 2]],
   ]) {
     const { status, keys } = editor.queryByAttribute(key, name, comparison, value);
-    assert.equal(status, ByAttributeResult.Ok);
+    assert.equal(status, AttributeResult.Ok);
     assert.ok(keys.verts instanceof BigUint64Array);
     assert.deepEqual([keys.edges.length, keys.faces.length], [0, 0]);
     assert.deepEqual(vertIndices(editor, key, keys.verts), expected, name);
@@ -1066,10 +1066,10 @@ test("queryByAttribute reports failed lookups with no keys", () => {
   const { Equal, Less } = AttributeComparison;
 
   for (const [name, comparison, value, status] of [
-    ["_MISSING", Equal, 0, ByAttributeResult.AttributeNotFound],
-    ["_ID", Equal, 1.5, ByAttributeResult.WrongType],
-    ["_COLOR", Equal, [1, 0], ByAttributeResult.WrongType],
-    ["_COLOR", Less, [1, 0, 0], ByAttributeResult.UnsupportedComparison],
+    ["_MISSING", Equal, 0, AttributeResult.AttributeNotFound],
+    ["_ID", Equal, 1.5, AttributeResult.WrongType],
+    ["_COLOR", Equal, [1, 0], AttributeResult.WrongType],
+    ["_COLOR", Less, [1, 0, 0], AttributeResult.UnsupportedComparison],
   ]) {
     const result = editor.queryByAttribute(key, name, comparison, value);
     assert.deepEqual(result, { status, keys: noKeys() }, name);
@@ -1202,18 +1202,93 @@ function edgeAndFaceEditor(mode) {
   return { editor, key };
 }
 
+test("addAttribute adds a writable attribute with a default value", () => {
+  const { editor, key } = attributeEditor();
+  const { Ok } = AttributeResult;
+  const mask = (1 << ComponentType.Vertex) | (1 << ComponentType.Edge);
+  const { verts, edges } = editor.componentKeys(key, mask);
+
+  assert.equal(
+    editor.addAttribute(key, "_WEIGHT", AttributeDomain.Vertex, new Float32Array([0.5])),
+    Ok,
+  );
+  assert.equal(
+    editor.addAttribute(key, "_CELL", AttributeDomain.Edge, new Int32Array([-1, 2])),
+    Ok,
+  );
+  assert.equal(
+    editor.addAttribute(key, "_SEAM", AttributeDomain.Corner, new Uint32Array([0])),
+    Ok,
+  );
+
+  const weights = new Float32Array(verts.length);
+  editor.attributeValues(key, "_WEIGHT", verts, weights);
+  assert.deepEqual([...weights], [0.5, 0.5, 0.5, 0.5]);
+  const cells = new Int32Array(edges.length * 2);
+  editor.attributeValues(key, "_CELL", edges, cells);
+  assert.deepEqual([...cells.slice(0, 4)], [-1, 2, -1, 2]);
+
+  editor.setAttributeValues(key, "_WEIGHT", verts.subarray(1, 2), new Float32Array([2]));
+  editor.attributeValues(key, "_WEIGHT", verts, weights);
+  assert.deepEqual([...weights], [0.5, 2, 0.5, 0.5]);
+
+  const added = editor
+    .meshAttributes(key)
+    .map(({ name, domain, componentCount }) => [name, domain, componentCount])
+    .filter(([name]) => ["_WEIGHT", "_CELL", "_SEAM"].includes(name));
+  assert.deepEqual(
+    added,
+    [
+      ["_WEIGHT", AttributeDomain.Vertex, 1],
+      ["_CELL", AttributeDomain.Edge, 2],
+      ["_SEAM", AttributeDomain.Corner, 1],
+    ],
+  );
+  editor.free();
+});
+
+test("addAttribute and removeAttribute report failures", () => {
+  const { editor, key } = attributeEditor();
+  const { Vertex } = AttributeDomain;
+  const { AttributeNotFound, MeshInactive, NameInUse, Ok, Reserved, WrongType } = AttributeResult;
+
+  for (const [name, defaultValue, result] of [
+    ["_ID", new Int32Array([0]), NameInUse],
+    ["POSITION", new Float32Array(3), Reserved],
+    ["_NEW", new Float32Array(5), WrongType],
+    ["_NEW", new Float32Array(0), WrongType],
+    ["_NEW", new Float64Array([1]), WrongType],
+    ["_NEW", [1], WrongType],
+  ]) {
+    assert.equal(editor.addAttribute(key, name, Vertex, defaultValue), result, name);
+  }
+
+  assert.equal(editor.removeAttribute(key, "_ID"), Ok);
+  assert.equal(editor.removeAttribute(key, "_ID"), AttributeNotFound);
+  assert.equal(editor.removeAttribute(key, "NORMAL"), Reserved);
+  assert.equal(editor.addAttribute(key, "_ID", Vertex, new Float32Array([1])), Ok);
+
+  editor.setMeshInactive(key);
+  assert.equal(editor.addAttribute(key, "_X", Vertex, new Float32Array([1])), MeshInactive);
+  assert.equal(editor.removeAttribute(key, "_ID"), MeshInactive);
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.removeAttribute(key, "_ID"), /is not registered/);
+  editor.free();
+});
+
 test("selectByAttribute and queryByAttribute operate on edges and faces", () => {
   const { Equal } = AttributeComparison;
 
   const faces = edgeAndFaceEditor(ComponentType.Face);
-  assert.equal(faces.editor.selectByAttribute(faces.key, "_FEATURE", Equal, 4), ByAttributeResult.Ok);
+  assert.equal(faces.editor.selectByAttribute(faces.key, "_FEATURE", Equal, 4), AttributeResult.Ok);
   const faceKeys = readKeys(faces.editor.overlayViews(faces.key).componentKeys.faces);
   assert.deepEqual(faces.editor.selectedComponents(faces.key).faces, BigUint64Array.of(faceKeys[1]));
   faces.editor.free();
 
   const edges = edgeAndFaceEditor(ComponentType.Edge);
   const { status, keys } = edges.editor.queryByAttribute(edges.key, "_CREASE", Equal, 1);
-  assert.equal(status, ByAttributeResult.Ok);
+  assert.equal(status, AttributeResult.Ok);
   const crease = new Uint32Array(1);
   edges.editor.attributeValues(edges.key, "_CREASE", keys.edges, crease);
   assert.deepEqual([keys.verts.length, keys.edges.length, crease[0]], [0, 1, 1]);
@@ -1222,10 +1297,10 @@ test("selectByAttribute and queryByAttribute operate on edges and faces", () => 
 
   assert.equal(
     edges.editor.selectByAttribute(edges.key, "_CORNER", Equal, 0),
-    ByAttributeResult.UnsupportedDomain,
+    AttributeResult.UnsupportedDomain,
   );
   assert.deepEqual(edges.editor.queryByAttribute(edges.key, "_CORNER", Equal, 0), {
-    status: ByAttributeResult.UnsupportedDomain,
+    status: AttributeResult.UnsupportedDomain,
     keys: noKeys(),
   });
   edges.editor.free();
@@ -1268,14 +1343,14 @@ test("integer vector attributes read back and compare for equality only", () => 
   const { Equal, NotEqual, Less } = AttributeComparison;
 
   for (const [name, comparison, value, result, expected] of [
-    ["_CELL", Equal, [1, -1], ByAttributeResult.Ok, [1, 2]],
-    ["_CELL", NotEqual, [1, -1], ByAttributeResult.Ok, [0, 3]],
-    ["_MASK", Equal, new Uint32Array([1, 2, 3, 4]), ByAttributeResult.Ok, [0, 3]],
-    ["_CELL", Less, [1, -1], ByAttributeResult.UnsupportedComparison, []],
-    ["_CELL", Equal, [1, -1, 0], ByAttributeResult.WrongType, []],
-    ["_CELL", Equal, [1.5, -1], ByAttributeResult.WrongType, []],
-    ["_CELL", Equal, 1, ByAttributeResult.WrongType, []],
-    ["_MASK", Equal, [-1, 2, 3, 4], ByAttributeResult.WrongType, []],
+    ["_CELL", Equal, [1, -1], AttributeResult.Ok, [1, 2]],
+    ["_CELL", NotEqual, [1, -1], AttributeResult.Ok, [0, 3]],
+    ["_MASK", Equal, new Uint32Array([1, 2, 3, 4]), AttributeResult.Ok, [0, 3]],
+    ["_CELL", Less, [1, -1], AttributeResult.UnsupportedComparison, []],
+    ["_CELL", Equal, [1, -1, 0], AttributeResult.WrongType, []],
+    ["_CELL", Equal, [1.5, -1], AttributeResult.WrongType, []],
+    ["_CELL", Equal, 1, AttributeResult.WrongType, []],
+    ["_MASK", Equal, [-1, 2, 3, 4], AttributeResult.WrongType, []],
   ]) {
     const { editor, key } = integerVectorEditor();
 

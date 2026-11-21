@@ -2494,3 +2494,69 @@ fn set_attribute_values_emits_normal_and_uv_changes() {
     assert_eq!(mesh.attributes.normals()[loops[0]], Vec3::Y);
     assert_eq!(mesh.attributes.uvs().unwrap()[loops[1]], Vec2::ZERO);
 }
+
+#[test]
+fn add_attribute_gives_every_component_the_default() {
+    let mut mesh = Mesh::from_buffers(quad_and_triangle_buffers()).unwrap();
+
+    assert_eq!(mesh.add_attribute::<EdgeKey, u32>("_EDGE", 7), Ok(()));
+    assert_eq!(
+        mesh.add_attribute::<LoopKey, Vec2>("_UV", Vec2::ONE),
+        Ok(())
+    );
+
+    let edges = mesh.attributes().values::<EdgeKey, u32>("_EDGE").unwrap();
+    assert_eq!(edges.len(), mesh.topology().edge_count());
+    assert!(edges.values().all(|&value| value == 7));
+    let corners = mesh.attributes().values::<LoopKey, Vec2>("_UV").unwrap();
+    assert_eq!(corners.len(), mesh.topology().loop_count());
+
+    let edge = mesh.topology().edges().next().unwrap();
+    mesh.set_attribute_values("_EDGE", &[(edge, 9_u32)])
+        .unwrap();
+    assert_eq!(mesh.edge(edge).unwrap().attribute::<u32>("_EDGE"), Some(9));
+}
+
+#[test]
+fn add_attribute_rejects_reserved_and_used_names() {
+    let mut options = two_triangle_buffers();
+    options.vertex_attributes = vec![f32_attribute("_A", 4)];
+    let mut mesh = Mesh::from_buffers(options).unwrap();
+
+    for name in Attributes::RESERVED_NAMES {
+        assert_eq!(
+            mesh.add_attribute::<FaceKey, f32>(name, 0.0),
+            Err(AttributeError::Reserved { name: name.into() })
+        );
+    }
+    assert_eq!(
+        mesh.add_attribute::<FaceKey, u32>("_A", 0),
+        Err(AttributeError::AlreadyExists { name: "_A".into() })
+    );
+    assert_eq!(mesh.attributes().descriptors().count(), 3);
+}
+
+#[test]
+fn remove_attribute_removes_custom_attributes_in_any_domain() {
+    let mut options = two_triangle_buffers();
+    options.vertex_attributes = vec![f32_attribute("_A", 4)];
+    let mut mesh = Mesh::from_buffers(options).unwrap();
+    mesh.add_attribute::<FaceKey, u32>("_F", 1).unwrap();
+
+    assert_eq!(mesh.remove_attribute("_A"), Ok(()));
+    assert_eq!(mesh.remove_attribute("_F"), Ok(()));
+    assert_eq!(
+        mesh.remove_attribute("_A"),
+        Err(AttributeError::NotFound { name: "_A".into() })
+    );
+    for name in Attributes::RESERVED_NAMES {
+        assert_eq!(
+            mesh.remove_attribute(name),
+            Err(AttributeError::Reserved { name: name.into() })
+        );
+    }
+    let names: Vec<_> = mesh.attributes().descriptors().map(|d| d.name).collect();
+    assert_eq!(names, ["POSITION", "NORMAL"]);
+
+    assert_eq!(mesh.add_attribute::<VertKey, f32>("_A", 2.0), Ok(()));
+}
