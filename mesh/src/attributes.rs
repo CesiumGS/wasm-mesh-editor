@@ -1,5 +1,6 @@
 //! Struct-of-Arrays geometry attribute storage.
 
+use std::any::Any;
 use std::fmt;
 
 use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
@@ -13,7 +14,7 @@ pub struct Attributes {
     pub positions: SecondaryMap<VertKey, Vec3>,
     pub normals: SecondaryMap<LoopKey, Vec3>,
     pub uvs: SecondaryMap<LoopKey, Vec2>,
-    /// Custom attributes in insertion order. Names must be unique across both domains.
+    /// Custom attributes in insertion order. Names must be unique across all domains.
     vertex_custom: Vec<(String, AttributeMap<VertKey>)>,
     corner_custom: Vec<(String, AttributeMap<LoopKey>)>,
 }
@@ -26,6 +27,11 @@ pub enum AttributeDomain {
     Vertex = 0,
     /// One value per face corner. Input buffers list them in `indices` order.
     Corner = 1,
+}
+
+/// A key type that attributes can be keyed by: [`VertKey`] or [`LoopKey`]. Sealed.
+pub trait AttributeKey: Key + 'static + sealed::SealedKey {
+    const DOMAIN: AttributeDomain;
 }
 
 /// The scalar type of each component of an attribute's values.
@@ -53,7 +59,7 @@ pub struct AttributeDescriptor<'a> {
     pub value_type: AttributeType,
 }
 
-/// The values of one custom attribute, keyed by vertex ([`VertKey`]) or face corner ([`LoopKey`]).
+/// The values of one custom attribute, keyed by an [`AttributeKey`].
 /// The variant is the value type; match on it when the type isn't known in advance,
 /// or use [`Self::typed`] when it is.
 pub enum AttributeMap<K: Key> {
@@ -166,7 +172,7 @@ pub trait AttributeValue: Copy + 'static + sealed::Sealed {
 mod sealed {
     use slotmap::{Key, SecondaryMap};
 
-    use super::AttributeMap;
+    use super::{AttributeMap, Attributes};
 
     pub trait Sealed: Sized {
         /// The matching variant's values, or `None` for any other variant.
@@ -175,8 +181,16 @@ mod sealed {
         /// Wraps the values in the matching variant.
         fn wrap_map<K: Key>(values: SecondaryMap<K, Self>) -> AttributeMap<K>;
     }
+
+    pub trait SealedKey: Key {
+        fn custom(attributes: &Attributes) -> &Vec<(String, AttributeMap<Self>)>;
+
+        fn custom_mut(attributes: &mut Attributes) -> &mut Vec<(String, AttributeMap<Self>)>;
+    }
 }
 
+/// Implements [`AttributeValue`] for each `type => AttributeMap variant (component type, component
+/// count)`.
 macro_rules! impl_attribute_value {
     ($($type:ty => $variant:ident ($component_type:ident, $component_count:literal)),* $(,)?) => {$(
         impl sealed::Sealed for $type {
@@ -217,9 +231,13 @@ impl_attribute_value!(
 );
 
 impl Attributes {
+    pub const POSITION: &str = "POSITION";
+    pub const NORMAL: &str = "NORMAL";
+    pub const TEXCOORD_0: &str = "TEXCOORD_0";
+
     /// Names custom attributes can't use, matched exactly: the glTF names of the built-in
     /// positions, normals and UVs.
-    pub const RESERVED_NAMES: [&str; 3] = ["POSITION", "NORMAL", "TEXCOORD_0"];
+    pub const RESERVED_NAMES: [&str; 3] = [Self::POSITION, Self::NORMAL, Self::TEXCOORD_0];
 
     /// Creates empty attribute maps with space for vertex positions and loop attributes.
     /// Use zero UV capacity when UVs are absent.
@@ -249,11 +267,11 @@ impl Attributes {
         ];
 
         let vertex_custom = self
-            .vertex_attributes()
+            .custom_attributes::<VertKey>()
             .map(|(name, values)| (name, AttributeDomain::Vertex, values.value_type()));
 
         let corner_custom = self
-            .corner_attributes()
+            .custom_attributes::<LoopKey>()
             .map(|(name, values)| (name, AttributeDomain::Corner, values.value_type()));
 
         built_in
@@ -268,96 +286,123 @@ impl Attributes {
             })
     }
 
-    /// Custom vertex attributes and their names, in insertion order.
-    pub fn vertex_attributes(&self) -> impl Iterator<Item = (&str, &AttributeMap<VertKey>)> {
-        self.vertex_custom
+    /// The attribute called `name`, built-in or custom, or `None` if there isn't one.
+    pub fn descriptor(&self, name: &str) -> Option<AttributeDescriptor<'_>> {
+        self.descriptors()
+            .find(|descriptor| descriptor.name == name)
+    }
+
+    /// Custom attributes keyed by `K` and their names, in insertion order.
+    pub fn custom_attributes<K: AttributeKey>(
+        &self,
+    ) -> impl Iterator<Item = (&str, &AttributeMap<K>)> {
+        K::custom(self)
             .iter()
             .map(|(name, values)| (name.as_str(), values))
     }
 
-    /// Custom corner attributes and their names, in insertion order.
-    pub fn corner_attributes(&self) -> impl Iterator<Item = (&str, &AttributeMap<LoopKey>)> {
-        self.corner_custom
-            .iter()
-            .map(|(name, values)| (name.as_str(), values))
+    /// The named custom attribute keyed by `K`, or `None` if there isn't one.
+    pub fn custom_attribute<K: AttributeKey>(&self, name: &str) -> Option<&AttributeMap<K>> {
+        find_custom(K::custom(self), name)
     }
 
-    /// The named custom vertex attribute, or `None` if there isn't one.
-    pub fn vertex_attribute(&self, name: &str) -> Option<&AttributeMap<VertKey>> {
-        find_custom(&self.vertex_custom, name)
-    }
-
-    /// The named custom corner attribute, or `None` if there isn't one.
-    pub fn corner_attribute(&self, name: &str) -> Option<&AttributeMap<LoopKey>> {
-        find_custom(&self.corner_custom, name)
-    }
-
-    /// Vertices whose custom attribute (`name`) satisfies `predicate`.
+    /// The values of the attribute called `name`, built-in or custom.
     ///
     /// # Errors
-    /// If there's no vertex attribute called `name`, or it holds a different type than `T`.
-    pub fn verts_where<T: AttributeValue, P: Fn(T) -> bool>(
+    /// If there's no attribute called `name` keyed by `K`, or it holds a different type than `T`.
+    pub fn values<K: AttributeKey, T: AttributeValue>(
+        &self,
+        name: &str,
+    ) -> Result<&SecondaryMap<K, T>, AttributeError> {
+        self.descriptor(name)
+            .filter(|descriptor| descriptor.domain == K::DOMAIN)
+            .ok_or_else(|| AttributeError::NotFound { name: name.into() })?;
+
+        let values = match name {
+            Self::POSITION => (&self.positions as &dyn Any).downcast_ref(),
+            Self::NORMAL => (&self.normals as &dyn Any).downcast_ref(),
+            Self::TEXCOORD_0 => (&self.uvs as &dyn Any).downcast_ref(),
+            _ => self.custom_attribute(name).and_then(AttributeMap::typed),
+        };
+
+        values.ok_or_else(|| AttributeError::WrongType { name: name.into() })
+    }
+
+    /// Keys whose `name` attribute value satisfies `predicate`.
+    ///
+    /// # Errors
+    /// Like [`Self::values`].
+    pub fn keys_where<K: AttributeKey, T: AttributeValue, P: Fn(T) -> bool>(
         &self,
         name: &str,
         predicate: P,
-    ) -> Result<impl Iterator<Item = VertKey> + use<'_, T, P>, AttributeLookupError> {
-        let values = self
-            .vertex_attribute(name)
-            .ok_or_else(|| AttributeLookupError::NotFound { name: name.into() })?
-            .typed::<T>()
-            .ok_or_else(|| AttributeLookupError::WrongType { name: name.into() })?;
-
-        Ok(values
+    ) -> Result<impl Iterator<Item = K> + use<'_, K, T, P>, AttributeError> {
+        Ok(self
+            .values::<K, T>(name)?
             .iter()
-            .filter(move |&(_, &vert_value)| predicate(vert_value))
-            .map(|(vert, _)| vert))
+            .filter(move |&(_, &value)| predicate(value))
+            .map(|(key, _)| key))
     }
 
-    /// Adds a custom vertex attribute. The name must not be used by any custom attribute.
-    pub(crate) fn add_vertex_attribute(&mut self, name: String, values: AttributeMap<VertKey>) {
+    /// Adds a custom attribute. The name must not be used by any attribute.
+    pub(crate) fn add_custom<K: AttributeKey>(&mut self, name: String, values: AttributeMap<K>) {
         debug_assert!(
-            !self.has_custom(&name),
+            self.descriptor(&name).is_none(),
             "duplicate custom attribute {name:?}"
         );
-        self.vertex_custom.push((name, values));
-    }
-
-    /// Adds a custom corner attribute. The name must not be used by any custom attribute.
-    pub(crate) fn add_corner_attribute(&mut self, name: String, values: AttributeMap<LoopKey>) {
-        debug_assert!(
-            !self.has_custom(&name),
-            "duplicate custom attribute {name:?}"
-        );
-        self.corner_custom.push((name, values));
-    }
-
-    fn has_custom(&self, name: &str) -> bool {
-        self.vertex_attribute(name).is_some() || self.corner_attribute(name).is_some()
+        K::custom_mut(self).push((name, values));
     }
 }
 
-/// Why a custom attribute couldn't be read as requested.
+/// Why an attribute couldn't be read as requested.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AttributeLookupError {
-    /// No custom attribute with this name in the requested domain.
+pub enum AttributeError {
+    /// No attribute with this name in the requested domain.
     NotFound { name: String },
     /// The attribute stores a different value type than the one requested.
     WrongType { name: String },
 }
 
-impl fmt::Display for AttributeLookupError {
+impl fmt::Display for AttributeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound { name } => write!(formatter, "custom attribute {name:?} not found"),
-            Self::WrongType { name } => write!(
-                formatter,
-                "custom attribute {name:?} stores a different value type"
-            ),
+            Self::NotFound { name } => write!(formatter, "attribute {name:?} not found"),
+            Self::WrongType { name } => {
+                write!(
+                    formatter,
+                    "attribute {name:?} stores a different value type"
+                )
+            }
         }
     }
 }
 
-impl std::error::Error for AttributeLookupError {}
+impl std::error::Error for AttributeError {}
+
+/// Implements [`AttributeKey`] for each `key type => domain, field`, where `field` is the
+/// [`Attributes`] list holding the key type's custom attributes. See macro use below.
+macro_rules! impl_attribute_key {
+    ($($key:ty => $domain:ident, $field:ident);* $(;)?) => {$(
+        impl sealed::SealedKey for $key {
+            fn custom(attributes: &Attributes) -> &Vec<(String, AttributeMap<Self>)> {
+                &attributes.$field
+            }
+
+            fn custom_mut(attributes: &mut Attributes) -> &mut Vec<(String, AttributeMap<Self>)> {
+                &mut attributes.$field
+            }
+        }
+
+        impl AttributeKey for $key {
+            const DOMAIN: AttributeDomain = AttributeDomain::$domain;
+        }
+    )*};
+}
+
+impl_attribute_key!(
+    VertKey => Vertex, vertex_custom;
+    LoopKey => Corner, corner_custom;
+);
 
 /// Meshes typically have few custom attributes, so a linear scan is as fast as hashing.
 fn find_custom<'a, K: Key>(

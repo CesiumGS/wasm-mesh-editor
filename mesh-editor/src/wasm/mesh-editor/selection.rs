@@ -3,7 +3,7 @@
 //! Each edit returns `false` and does nothing if the mesh is inactive, and throws for an unknown
 //! mesh key. Unknown component keys are ignored.
 
-use mesh::{AttributeLookupError, AttributeValue, Mesh, Selection, SelectionStep};
+use mesh::{AttributeError, AttributeValue, Mesh, Selection, SelectionStep, VertKey};
 use slotmap::Key;
 use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
@@ -158,8 +158,8 @@ impl VertsByAttributeOperation for Select {
         mesh: &mut Mesh,
         name: &str,
         predicate: impl Fn(T) -> bool,
-    ) -> Result<(), AttributeLookupError> {
+    ) -> Result<(), AttributeError> {
         mesh.selection_mut()
-            .select_verts_by_attribute(name, predicate)
+            .select_by_attribute::<VertKey, _>(name, predicate)
     }
 }

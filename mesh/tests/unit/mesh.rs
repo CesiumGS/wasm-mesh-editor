@@ -2023,11 +2023,11 @@ fn builds_custom_attributes_in_input_order() {
 
     let attributes = mesh.attributes();
     let vertex_names: Vec<_> = attributes
-        .vertex_attributes()
+        .custom_attributes::<VertKey>()
         .map(|(name, _)| name)
         .collect();
     let corner_names: Vec<_> = attributes
-        .corner_attributes()
+        .custom_attributes::<LoopKey>()
         .map(|(name, _)| name)
         .collect();
     assert_eq!(vertex_names, ["_B", "_A"]);
