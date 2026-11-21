@@ -1031,6 +1031,36 @@ const noKeys = () => ({
   faces: new BigUint64Array(),
 });
 
+test("componentKeys lists the requested types' keys in overlay order", () => {
+  const { editor, key } = edgeAndFaceEditor(ComponentType.Vertex);
+  const result = new UpdateResult();
+  editor.update(0, result);
+  result.free();
+
+  const all = (1 << ComponentType.Vertex) | (1 << ComponentType.Edge) | (1 << ComponentType.Face);
+  const keys = editor.componentKeys(key, all);
+  const overlay = editor.overlayViews(key).componentKeys;
+  assert.deepEqual([...keys.verts], readKeys(overlay.verts));
+  assert.deepEqual([...keys.edges], readKeys(overlay.edges));
+  assert.deepEqual([...keys.faces], readKeys(overlay.faces));
+  assert.deepEqual([keys.verts.length, keys.edges.length, keys.faces.length], [4, 5, 2]);
+
+  const edges = editor.componentKeys(key, 1 << ComponentType.Edge);
+  assert.deepEqual([edges.verts.length, edges.edges.length, edges.faces.length], [0, 5, 0]);
+  assert.deepEqual(editor.componentKeys(key, 0), noKeys());
+  assert.throws(() => editor.componentKeys(key, 8), /invalid component mask 8/);
+
+  const positions = new Float32Array(keys.verts.length * 3);
+  editor.attributeValues(key, "POSITION", keys.verts, positions);
+  assert.deepEqual([...positions.slice(0, 3)], [-0.5, -0.5, 0]);
+
+  editor.setMeshInactive(key);
+  assert.equal(editor.componentKeys(key, 1 << ComponentType.Face).faces.length, 2);
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.componentKeys(key, all), /is not registered/);
+  editor.free();
+});
+
 test("queryByAttribute reports failed lookups with no keys", () => {
   const { editor, key } = attributeEditor();
   const { Equal, Less } = AttributeComparison;

@@ -8,7 +8,7 @@ mod selection;
 use std::ops::Range;
 
 use glam::Vec3;
-use mesh::{ComponentKey, EdgeKey, FaceKey, VertKey};
+use mesh::{ComponentKey, ComponentMask, EdgeKey, FaceKey, VertKey};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use slotmap::{Key, KeyData};
 use topology_overlay::shaders::uniforms;
@@ -18,6 +18,7 @@ use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi, VectorIntoWasmAbi};
 use wasm_bindgen::describe::{WasmDescribe, WasmDescribeVector};
 use wasm_bindgen::prelude::*;
 
+use super::edit_mode::component_mask_from_js;
 use super::tool::input::{self, PointerInputJs};
 use crate::{
     EditMode, MeshEditor, MeshKey, MeshNotFound, ToolActivationError, ToolId, UpdateResult,
@@ -344,6 +345,28 @@ impl MeshEditor {
         Ok(OverlayViews::new(overlay.buffers(), overlay.full_refresh()).into_ts()?)
     }
 
+    /// All of a mesh's keys of the types in `components`, in topology order; other types have no
+    /// keys. `OverlayViews.componentKeys` matches this order after `update`. Works on inactive
+    /// meshes. Throws for an unknown mesh key or bits outside `ComponentMask`.
+    #[wasm_bindgen(js_name = componentKeys)]
+    pub fn component_keys(
+        &self,
+        #[wasm_bindgen(js_name = meshKey)] mesh_key: MeshKey,
+        #[wasm_bindgen(unchecked_param_type = "ComponentMask")] components: u32,
+    ) -> Result<Ts<ComponentKeysJs>, JsError> {
+        let mesh = self.mesh(mesh_key).ok_or(MeshNotFound { key: mesh_key })?;
+        let components = component_mask_from_js(components)?;
+        let topology = mesh.topology();
+        let has = |mask| components.contains(mask);
+
+        Ok(ComponentKeysJs {
+            verts: ffi_keys_if(has(ComponentMask::VERTEX), topology.verts()),
+            edges: ffi_keys_if(has(ComponentMask::EDGE), topology.edges()),
+            faces: ffi_keys_if(has(ComponentMask::FACE), topology.faces()),
+        }
+        .into_ts()?)
+    }
+
     /// Writes a mesh's local-space bounds to `result` as `[minX, minY, minZ, maxX, maxY, maxZ]`.
     /// Returns `false` and leaves `result` unchanged for a mesh with no vertices.
     /// Throws for an unknown mesh key or a `result` whose length isn't 6.
@@ -492,6 +515,15 @@ impl MeshEditor {
 
 fn ffi(key: impl Key) -> u64 {
     key.data().as_ffi()
+}
+
+/// The FFI values of `keys` if `included`, or none.
+fn ffi_keys_if<K: Key>(included: bool, keys: impl Iterator<Item = K>) -> Vec<u64> {
+    if included {
+        keys.map(ffi).collect()
+    } else {
+        Vec::new()
+    }
 }
 
 /// The `K` key whose FFI value is `id`, or `None` if no slot map could have issued it.
