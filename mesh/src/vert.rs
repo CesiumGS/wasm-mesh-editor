@@ -42,13 +42,13 @@ impl<'a> VertRef<'a> {
     }
 
     pub fn position(&self) -> Vec3 {
-        self.attrs.positions[self.key]
+        self.attrs.positions()[self.key]
     }
 
-    /// This vertex's value of the named custom vertex attribute, or `None` if the attribute
+    /// This vertex's value of the named vertex attribute, or `None` if the attribute
     /// doesn't exist, stores a different type, or has no value here.
     pub fn attribute<T: AttributeValue>(&self, name: &str) -> Option<T> {
-        let values = self.attrs.custom_attribute::<VertKey>(name)?.typed::<T>()?;
+        let values = self.attrs.values::<VertKey, T>(name).ok()?;
         values.get(self.key).copied()
     }
 }

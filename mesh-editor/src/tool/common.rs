@@ -42,9 +42,10 @@ pub(super) fn selection_centroid(
     for &key in context.active_meshes() {
         let mesh = context.mesh(key).expect("active mesh must exist");
         let selection = mesh.selection();
+        let mesh_positions = mesh.attributes().positions();
         let positions = selection
             .verts()
-            .map(|vertex| mesh.attributes().positions[vertex].as_dvec3());
+            .map(|vertex| mesh_positions[vertex].as_dvec3());
         let (local_centroid, vertex_count) = centroid(positions)?;
 
         if vertex_count == 0 {

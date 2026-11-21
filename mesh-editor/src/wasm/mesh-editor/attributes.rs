@@ -152,9 +152,10 @@ impl From<AttributeDescriptor<'_>> for MeshAttributeJs {
 
 #[wasm_bindgen]
 impl MeshEditor {
-    /// The mesh's attributes: `POSITION` and `NORMAL`, then `TEXCOORD_0` if the mesh has UVs,
-    /// then custom vertex attributes and custom corner attributes, each in the order they were
-    /// added. Throws for an unknown mesh key.
+    /// The mesh's attributes by domain: vertex, edge, face, then corner attributes. Each domain
+    /// lists its built-in attributes first (`POSITION`, or `NORMAL` then `TEXCOORD_0` if the mesh
+    /// has UVs), then custom attributes in the order they were added. Throws for an unknown mesh
+    /// key.
     #[wasm_bindgen(js_name = meshAttributes, unchecked_return_type = "MeshAttribute[]")]
     pub fn mesh_attributes(
         &self,
@@ -182,7 +183,7 @@ impl MeshEditor {
     ) -> Result<Ts<VertsByAttributeQueryJs>, JsError> {
         let mesh = self.mesh(mesh_key).ok_or(MeshNotFound { key: mesh_key })?;
 
-        let (status, verts) = match mesh.attributes().custom_attribute::<VertKey>(name) {
+        let (status, verts) = match mesh.attributes().get::<VertKey>(name) {
             None => (VertsByAttributeResult::AttributeNotFound, Vec::new()),
             Some(attribute) => {
                 with_predicate!(attribute, comparison, &value, predicate => {
@@ -214,7 +215,7 @@ impl MeshEditor {
         let mesh = self.mesh(mesh_key).ok_or(MeshNotFound { key: mesh_key })?;
         let (Some(vert), Some(attribute)) = (
             VertKey::try_from_ffi(vert_key),
-            mesh.attributes().custom_attribute::<VertKey>(name),
+            mesh.attributes().get::<VertKey>(name),
         ) else {
             return Ok(JsValue::UNDEFINED);
         };
@@ -258,7 +259,7 @@ pub(super) fn operate_on_verts_by_js_value(
     value: &JsValue,
     operation: &impl VertsByAttributeOperation,
 ) -> VertsByAttributeResult {
-    let Some(attribute) = mesh.attributes().custom_attribute::<VertKey>(name) else {
+    let Some(attribute) = mesh.attributes().get::<VertKey>(name) else {
         return VertsByAttributeResult::AttributeNotFound;
     };
 

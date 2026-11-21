@@ -47,7 +47,7 @@ fn first_position(context: &ToolContext<'_>, key: MeshKey) -> Vec3 {
     let mesh = context.mesh(key).unwrap();
     let vertex = mesh.topology().verts().next().unwrap();
 
-    mesh.attributes().positions[vertex]
+    mesh.attributes().positions()[vertex]
 }
 
 #[test]
@@ -464,7 +464,7 @@ fn only_active_meshes_with_selected_vertices_participate() {
     assert_eq!(first_position(&context, key), 2.0 * Vec3::X);
     assert_eq!(first_position(&context, empty), Vec3::Y);
     let vertex = meshes[inactive].topology().verts().next().unwrap();
-    assert_eq!(meshes[inactive].attributes().positions[vertex], Vec3::X);
+    assert_eq!(meshes[inactive].attributes().positions()[vertex], Vec3::X);
 }
 
 #[test]
@@ -540,7 +540,7 @@ fn full_scene_transforms_only_resolve_active_selected_meshes() {
     tool.cancel(&mut context);
     assert_eq!(first_position(&context, active), Vec3::ZERO);
     let vertex = meshes[inactive].topology().verts().next().unwrap();
-    assert_eq!(meshes[inactive].attributes().positions[vertex], Vec3::X);
+    assert_eq!(meshes[inactive].attributes().positions()[vertex], Vec3::X);
 }
 
 #[test]

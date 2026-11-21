@@ -1,6 +1,5 @@
 //! Struct-of-Arrays geometry attribute storage.
 
-use std::any::Any;
 use std::fmt;
 
 use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
@@ -8,17 +7,21 @@ use slotmap::{Key, SecondaryMap};
 
 use crate::{EdgeKey, FaceKey, LoopKey, VertKey};
 
-/// Vertex positions, face-corner normals and UVs, and named custom attributes, keyed by their handles.
-#[derive(Default)]
+/// Named attributes, in one list per key type. Each list starts with its built-in attributes:
+/// positions (`POSITION`) for vertices, and normals (`NORMAL`) then UVs (`TEXCOORD_0`, if the mesh
+/// has them) for corners. Custom attributes follow in insertion order. Names are unique across all
+/// lists.
 pub struct Attributes {
-    pub positions: SecondaryMap<VertKey, Vec3>,
-    pub normals: SecondaryMap<LoopKey, Vec3>,
-    pub uvs: SecondaryMap<LoopKey, Vec2>,
-    /// Custom attributes in insertion order. Names must be unique across all domains.
-    vertex_custom: Vec<(String, AttributeMap<VertKey>)>,
-    edge_custom: Vec<(String, AttributeMap<EdgeKey>)>,
-    face_custom: Vec<(String, AttributeMap<FaceKey>)>,
-    corner_custom: Vec<(String, AttributeMap<LoopKey>)>,
+    vertex: Vec<(String, AttributeMap<VertKey>)>,
+    edge: Vec<(String, AttributeMap<EdgeKey>)>,
+    face: Vec<(String, AttributeMap<FaceKey>)>,
+    corner: Vec<(String, AttributeMap<LoopKey>)>,
+}
+
+impl Default for Attributes {
+    fn default() -> Self {
+        Self::with_capacity(0, 0, None)
+    }
 }
 
 /// Whether an attribute has one value per vertex, edge, face or face corner.
@@ -67,7 +70,7 @@ pub struct AttributeDescriptor<'a> {
     pub value_type: AttributeType,
 }
 
-/// The values of one custom attribute, keyed by an [`AttributeKey`].
+/// The values of one attribute, keyed by an [`AttributeKey`].
 /// The variant is the value type; match on it when the type isn't known in advance,
 /// or use [`Self::typed`] when it is.
 pub enum AttributeMap<K: Key> {
@@ -89,6 +92,10 @@ impl<K: Key> AttributeMap<K> {
     /// The values as `T`, or `None` if this attribute stores a different type.
     pub fn typed<T: AttributeValue>(&self) -> Option<&SecondaryMap<K, T>> {
         T::from_map(self)
+    }
+
+    pub(crate) fn typed_mut<T: AttributeValue>(&mut self) -> Option<&mut SecondaryMap<K, T>> {
+        T::from_map_mut(self)
     }
 }
 
@@ -186,10 +193,7 @@ fn zip_map_with_default<K: Key, T: AttributeValue>(
     all_keys: impl IntoIterator<Item = K>,
 ) -> AttributeMap<K> {
     // First write default value for all keys in `all_keys`
-    let default = match_variants!(AttributeBuffer, default, default => {
-        (default as &dyn Any).downcast_ref::<Vec<T>>()
-    })
-    .expect("default must match the values' type")[0];
+    let default = T::from_buffer(default).expect("default must match the values' type")[0];
 
     // Then overwrite with the provided values for the keys in `keys`
     let mut map: SecondaryMap<K, T> = all_keys.into_iter().map(|key| (key, default)).collect();
@@ -209,20 +213,25 @@ pub trait AttributeValue: Copy + 'static + sealed::Sealed {
 mod sealed {
     use slotmap::{Key, SecondaryMap};
 
-    use super::{AttributeMap, Attributes};
+    use super::{AttributeBuffer, AttributeMap, Attributes};
 
     pub trait Sealed: Sized {
         /// The matching variant's values, or `None` for any other variant.
         fn from_map<K: Key>(map: &AttributeMap<K>) -> Option<&SecondaryMap<K, Self>>;
+
+        fn from_map_mut<K: Key>(map: &mut AttributeMap<K>) -> Option<&mut SecondaryMap<K, Self>>;
+
+        /// The matching variant's values, or `None` for any other variant.
+        fn from_buffer(buffer: &AttributeBuffer) -> Option<&[Self]>;
 
         /// Wraps the values in the matching variant.
         fn wrap_map<K: Key>(values: SecondaryMap<K, Self>) -> AttributeMap<K>;
     }
 
     pub trait SealedKey: Key {
-        fn custom(attributes: &Attributes) -> &Vec<(String, AttributeMap<Self>)>;
+        fn list(attributes: &Attributes) -> &Vec<(String, AttributeMap<Self>)>;
 
-        fn custom_mut(attributes: &mut Attributes) -> &mut Vec<(String, AttributeMap<Self>)>;
+        fn list_mut(attributes: &mut Attributes) -> &mut Vec<(String, AttributeMap<Self>)>;
     }
 }
 
@@ -234,6 +243,22 @@ macro_rules! impl_attribute_value {
             fn from_map<K: Key>(map: &AttributeMap<K>) -> Option<&SecondaryMap<K, Self>> {
                 match map {
                     AttributeMap::$variant(values) => Some(values),
+                    _ => None,
+                }
+            }
+
+            fn from_map_mut<K: Key>(
+                map: &mut AttributeMap<K>,
+            ) -> Option<&mut SecondaryMap<K, Self>> {
+                match map {
+                    AttributeMap::$variant(values) => Some(values),
+                    _ => None,
+                }
+            }
+
+            fn from_buffer(buffer: &AttributeBuffer) -> Option<&[Self]> {
+                match buffer {
+                    AttributeBuffer::$variant(values) => Some(values),
                     _ => None,
                 }
             }
@@ -276,86 +301,86 @@ impl Attributes {
     /// positions, normals and UVs.
     pub const RESERVED_NAMES: [&str; 3] = [Self::POSITION, Self::NORMAL, Self::TEXCOORD_0];
 
-    /// Creates empty attribute maps with space for vertex positions and loop attributes.
-    /// Use zero UV capacity when UVs are absent.
+    /// Creates empty built-in attributes with space for `position_capacity` positions and
+    /// `normal_capacity` normals, and UVs with space for `uv_capacity` values if it's `Some`.
     pub fn with_capacity(
         position_capacity: usize,
         normal_capacity: usize,
-        uv_capacity: usize,
+        uv_capacity: Option<usize>,
     ) -> Self {
+        let normals = SecondaryMap::with_capacity(normal_capacity);
+        let mut corner = vec![(Self::NORMAL.into(), AttributeMap::Vec3(normals))];
+        if let Some(capacity) = uv_capacity {
+            let uvs = SecondaryMap::with_capacity(capacity);
+            corner.push((Self::TEXCOORD_0.into(), AttributeMap::Vec2(uvs)));
+        }
+
+        let positions = SecondaryMap::with_capacity(position_capacity);
         Self {
-            positions: SecondaryMap::with_capacity(position_capacity),
-            normals: SecondaryMap::with_capacity(normal_capacity),
-            uvs: SecondaryMap::with_capacity(uv_capacity),
-            vertex_custom: Vec::new(),
-            edge_custom: Vec::new(),
-            face_custom: Vec::new(),
-            corner_custom: Vec::new(),
+            vertex: vec![(Self::POSITION.into(), AttributeMap::Vec3(positions))],
+            edge: Vec::new(),
+            face: Vec::new(),
+            corner,
         }
     }
 
-    /// Every attribute of the mesh: positions and normals, then UVs if present, using the glTF
-    /// names in [`Self::RESERVED_NAMES`], then custom vertex, edge, face and corner attributes,
-    /// each in insertion order.
-    pub fn descriptors(&self) -> impl Iterator<Item = AttributeDescriptor<'_>> {
-        let [position, normal, uv] = Self::RESERVED_NAMES;
-        let built_in = [
-            Some((position, AttributeDomain::Vertex, Vec3::VALUE_TYPE)),
-            Some((normal, AttributeDomain::Corner, Vec3::VALUE_TYPE)),
-            (!self.uvs.is_empty()).then_some((uv, AttributeDomain::Corner, Vec2::VALUE_TYPE)),
-        ];
-
-        let vertex_custom = self
-            .custom_attributes::<VertKey>()
-            .map(|(name, values)| (name, AttributeDomain::Vertex, values.value_type()));
-
-        let edge_custom = self
-            .custom_attributes::<EdgeKey>()
-            .map(|(name, values)| (name, AttributeDomain::Edge, values.value_type()));
-
-        let face_custom = self
-            .custom_attributes::<FaceKey>()
-            .map(|(name, values)| (name, AttributeDomain::Face, values.value_type()));
-
-        let corner_custom = self
-            .custom_attributes::<LoopKey>()
-            .map(|(name, values)| (name, AttributeDomain::Corner, values.value_type()));
-
-        built_in
-            .into_iter()
-            .flatten()
-            .chain(vertex_custom)
-            .chain(edge_custom)
-            .chain(face_custom)
-            .chain(corner_custom)
-            .map(|(name, domain, value_type)| AttributeDescriptor {
-                name,
-                domain,
-                value_type,
-            })
+    pub fn positions(&self) -> &SecondaryMap<VertKey, Vec3> {
+        self.values(Self::POSITION).expect(BUILT_IN)
     }
 
-    /// The attribute called `name`, built-in or custom, or `None` if there isn't one.
+    pub fn normals(&self) -> &SecondaryMap<LoopKey, Vec3> {
+        self.values(Self::NORMAL).expect(BUILT_IN)
+    }
+
+    /// `None` if the mesh has no UVs.
+    pub fn uvs(&self) -> Option<&SecondaryMap<LoopKey, Vec2>> {
+        self.values(Self::TEXCOORD_0).ok()
+    }
+
+    pub(crate) fn positions_mut(&mut self) -> &mut SecondaryMap<VertKey, Vec3> {
+        self.values_mut(Self::POSITION).expect(BUILT_IN)
+    }
+
+    pub(crate) fn normals_mut(&mut self) -> &mut SecondaryMap<LoopKey, Vec3> {
+        self.values_mut(Self::NORMAL).expect(BUILT_IN)
+    }
+
+    pub(crate) fn uvs_mut(&mut self) -> Option<&mut SecondaryMap<LoopKey, Vec2>> {
+        self.values_mut(Self::TEXCOORD_0).ok()
+    }
+
+    /// Every attribute of the mesh, by domain: vertex, edge, face, then corner attributes, each in
+    /// list order.
+    pub fn descriptors(&self) -> impl Iterator<Item = AttributeDescriptor<'_>> {
+        self.descriptors_of::<VertKey>()
+            .chain(self.descriptors_of::<EdgeKey>())
+            .chain(self.descriptors_of::<FaceKey>())
+            .chain(self.descriptors_of::<LoopKey>())
+    }
+
+    /// The attribute called `name`, or `None` if there isn't one.
     pub fn descriptor(&self, name: &str) -> Option<AttributeDescriptor<'_>> {
         self.descriptors()
             .find(|descriptor| descriptor.name == name)
     }
 
-    /// Custom attributes keyed by `K` and their names, in insertion order.
-    pub fn custom_attributes<K: AttributeKey>(
-        &self,
-    ) -> impl Iterator<Item = (&str, &AttributeMap<K>)> {
-        K::custom(self)
+    /// Attributes keyed by `K` and their names, in list order.
+    pub fn iter<K: AttributeKey>(&self) -> impl Iterator<Item = (&str, &AttributeMap<K>)> {
+        K::list(self)
             .iter()
             .map(|(name, values)| (name.as_str(), values))
     }
 
-    /// The named custom attribute keyed by `K`, or `None` if there isn't one.
-    pub fn custom_attribute<K: AttributeKey>(&self, name: &str) -> Option<&AttributeMap<K>> {
-        find_custom(K::custom(self), name)
+    /// The named attribute keyed by `K`, or `None` if there isn't one.
+    pub fn get<K: AttributeKey>(&self, name: &str) -> Option<&AttributeMap<K>> {
+        // Meshes typically have few attributes, so a linear scan is as fast as hashing.
+        K::list(self)
+            .iter()
+            .find(|(attribute, _)| attribute == name)
+            .map(|(_, values)| values)
     }
 
-    /// The values of the attribute called `name`, built-in or custom.
+    /// The values of the attribute called `name`.
     ///
     /// # Errors
     /// If there's no attribute called `name` keyed by `K`, or it holds a different type than `T`.
@@ -363,18 +388,25 @@ impl Attributes {
         &self,
         name: &str,
     ) -> Result<&SecondaryMap<K, T>, AttributeError> {
-        self.descriptor(name)
-            .filter(|descriptor| descriptor.domain == K::DOMAIN)
-            .ok_or_else(|| AttributeError::NotFound { name: name.into() })?;
+        self.get::<K>(name)
+            .ok_or_else(|| AttributeError::NotFound { name: name.into() })?
+            .typed()
+            .ok_or_else(|| AttributeError::WrongType { name: name.into() })
+    }
 
-        let values = match name {
-            Self::POSITION => (&self.positions as &dyn Any).downcast_ref(),
-            Self::NORMAL => (&self.normals as &dyn Any).downcast_ref(),
-            Self::TEXCOORD_0 => (&self.uvs as &dyn Any).downcast_ref(),
-            _ => self.custom_attribute(name).and_then(AttributeMap::typed),
-        };
-
-        values.ok_or_else(|| AttributeError::WrongType { name: name.into() })
+    /// Like [`Self::values`]. Crate-only, since writes have side effects; see the edits on
+    /// [`crate::Mesh`].
+    pub(crate) fn values_mut<K: AttributeKey, T: AttributeValue>(
+        &mut self,
+        name: &str,
+    ) -> Result<&mut SecondaryMap<K, T>, AttributeError> {
+        K::list_mut(self)
+            .iter_mut()
+            .find(|(attribute, _)| attribute == name)
+            .ok_or_else(|| AttributeError::NotFound { name: name.into() })?
+            .1
+            .typed_mut()
+            .ok_or_else(|| AttributeError::WrongType { name: name.into() })
     }
 
     /// Keys whose `name` attribute value satisfies `predicate`.
@@ -393,15 +425,25 @@ impl Attributes {
             .map(|(key, _)| key))
     }
 
-    /// Adds a custom attribute. The name must not be used by any attribute.
-    pub(crate) fn add_custom<K: AttributeKey>(&mut self, name: String, values: AttributeMap<K>) {
+    /// Adds an attribute. The name must not be used by any attribute.
+    pub(crate) fn add<K: AttributeKey>(&mut self, name: String, values: AttributeMap<K>) {
         debug_assert!(
             self.descriptor(&name).is_none(),
-            "duplicate custom attribute {name:?}"
+            "duplicate attribute {name:?}"
         );
-        K::custom_mut(self).push((name, values));
+        K::list_mut(self).push((name, values));
+    }
+
+    fn descriptors_of<K: AttributeKey>(&self) -> impl Iterator<Item = AttributeDescriptor<'_>> {
+        self.iter::<K>().map(|(name, values)| AttributeDescriptor {
+            name,
+            domain: K::DOMAIN,
+            value_type: values.value_type(),
+        })
     }
 }
+
+const BUILT_IN: &str = "built-in attributes always exist with their type";
 
 /// Why an attribute couldn't be read as requested.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -429,15 +471,15 @@ impl fmt::Display for AttributeError {
 impl std::error::Error for AttributeError {}
 
 /// Implements [`AttributeKey`] for each `key type => domain, field`, where `field` is the
-/// [`Attributes`] list holding the key type's custom attributes. See macro use below.
+/// [`Attributes`] list holding the key type's attributes. See macro use below.
 macro_rules! impl_attribute_key {
     ($($key:ty => $domain:ident, $field:ident);* $(;)?) => {$(
         impl sealed::SealedKey for $key {
-            fn custom(attributes: &Attributes) -> &Vec<(String, AttributeMap<Self>)> {
+            fn list(attributes: &Attributes) -> &Vec<(String, AttributeMap<Self>)> {
                 &attributes.$field
             }
 
-            fn custom_mut(attributes: &mut Attributes) -> &mut Vec<(String, AttributeMap<Self>)> {
+            fn list_mut(attributes: &mut Attributes) -> &mut Vec<(String, AttributeMap<Self>)> {
                 &mut attributes.$field
             }
         }
@@ -449,22 +491,11 @@ macro_rules! impl_attribute_key {
 }
 
 impl_attribute_key!(
-    VertKey => Vertex, vertex_custom;
-    EdgeKey => Edge, edge_custom;
-    FaceKey => Face, face_custom;
-    LoopKey => Corner, corner_custom;
+    VertKey => Vertex, vertex;
+    EdgeKey => Edge, edge;
+    FaceKey => Face, face;
+    LoopKey => Corner, corner;
 );
-
-/// Meshes typically have few custom attributes, so a linear scan is as fast as hashing.
-fn find_custom<'a, K: Key>(
-    attributes: &'a [(String, AttributeMap<K>)],
-    name: &str,
-) -> Option<&'a AttributeMap<K>> {
-    attributes
-        .iter()
-        .find(|(attribute, _)| attribute == name)
-        .map(|(_, values)| values)
-}
 
 #[cfg(test)]
 #[path = "../tests/unit/attributes.rs"]

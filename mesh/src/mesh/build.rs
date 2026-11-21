@@ -374,7 +374,7 @@ pub(super) fn from_buffers(mut buffers: MeshBuffers) -> Result<Mesh, MeshBuildEr
 
     let vertex_count = buffers.positions.len();
     let loop_count = buffers.indices.len();
-    let uv_count = if buffers.uvs.is_some() { loop_count } else { 0 };
+    let uv_count = buffers.uvs.is_some().then_some(loop_count);
     let mut mesh = Mesh {
         topology: Topology::with_capacity(vertex_count, loop_count),
         attributes: Attributes::with_capacity(vertex_count, loop_count, uv_count),
@@ -383,12 +383,13 @@ pub(super) fn from_buffers(mut buffers: MeshBuffers) -> Result<Mesh, MeshBuildEr
         face_normals: Default::default(),
     };
 
+    let positions = mesh.attributes.positions_mut();
     let verts: Vec<_> = buffers
         .positions
         .iter()
         .map(|&position| {
             let vert = mesh.topology.verts.insert(Vert { edge: None });
-            mesh.attributes.positions.insert(vert, position);
+            positions.insert(vert, position);
             vert
         })
         .collect();
@@ -424,12 +425,12 @@ fn add_custom_attributes(
 
     for (name, values) in vertex_attributes {
         let values = values.into_map(verts.iter().copied());
-        mesh.attributes.add_custom(name, values);
+        mesh.attributes.add(name, values);
     }
 
     for (name, values) in face_attributes {
         let values = values.into_map(faces.iter().copied());
-        mesh.attributes.add_custom(name, values);
+        mesh.attributes.add(name, values);
     }
 
     let listed_edges: Vec<_> = edge_indices
@@ -448,7 +449,7 @@ fn add_custom_attributes(
             &default,
             edges.values().copied(),
         );
-        mesh.attributes.add_custom(name, values);
+        mesh.attributes.add(name, values);
     }
 
     if corner_attributes.is_empty() {
@@ -462,7 +463,7 @@ fn add_custom_attributes(
 
     for (name, values) in corner_attributes {
         let values = values.into_map(corners.iter().copied());
-        mesh.attributes.add_custom(name, values);
+        mesh.attributes.add(name, values);
     }
 }
 
@@ -491,12 +492,12 @@ fn import_face(
     for &index in indices {
         if let Some(normals) = &buffers.normals {
             mesh.attributes
-                .normals
+                .normals_mut()
                 .insert(loop_key, normals[index as usize]);
         }
 
-        if let Some(uvs) = &buffers.uvs {
-            mesh.attributes.uvs.insert(loop_key, uvs[index as usize]);
+        if let Some((uvs, values)) = buffers.uvs.as_ref().zip(mesh.attributes.uvs_mut()) {
+            values.insert(loop_key, uvs[index as usize]);
         }
         loop_key = mesh.topology.loops[loop_key].next;
     }
@@ -512,9 +513,10 @@ fn import_face(
     }
     .normal();
 
+    let normals = mesh.attributes.normals_mut();
     let mut current = mesh.topology.faces[face].loop_;
     for _ in 0..indices.len() {
-        mesh.attributes.normals.insert(current, normal);
+        normals.insert(current, normal);
         current = mesh.topology.loops[current].next;
     }
 

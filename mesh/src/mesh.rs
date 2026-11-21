@@ -119,8 +119,9 @@ impl Mesh {
             ..
         } = self;
 
+        let positions = attributes.positions_mut();
         for &key in selection.verts.iter() {
-            attributes.positions[key] += delta;
+            positions[key] += delta;
         }
 
         selection.translate_bounds(delta);
@@ -226,8 +227,9 @@ impl Mesh {
             }
             .normal();
 
+            let normals = attributes.normals_mut();
             for loop_key in topology.face_loops(key) {
-                attributes.normals.insert(loop_key, normal);
+                normals.insert(loop_key, normal);
             }
         }
     }
@@ -245,7 +247,8 @@ impl Mesh {
         let mut loops = Vec::new();
 
         for key in vertices {
-            let origin = attributes.positions[key].as_dvec3();
+            let positions = attributes.positions();
+            let origin = positions[key].as_dvec3();
             let mut normal = DVec3::ZERO;
 
             for loop_key in topology.vert_loops(key) {
@@ -267,16 +270,17 @@ impl Mesh {
 
                 let previous_vertex = topology.loops[corner.prev].vert;
                 let next_vertex = topology.loops[corner.next].vert;
-                let previous = attributes.positions[previous_vertex].as_dvec3() - origin;
-                let next = attributes.positions[next_vertex].as_dvec3() - origin;
+                let previous = positions[previous_vertex].as_dvec3() - origin;
+                let next = positions[next_vertex].as_dvec3() - origin;
 
                 normal += face_normal * corner_angle(previous, next, face_normal);
             }
 
             let normal = normal.normalize_or_zero().as_vec3();
 
+            let normals = attributes.normals_mut();
             for loop_key in topology.vert_loops(key) {
-                attributes.normals.insert(loop_key, normal);
+                normals.insert(loop_key, normal);
                 loops.push(loop_key);
             }
         }

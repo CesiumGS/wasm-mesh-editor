@@ -2,11 +2,11 @@ use std::collections::HashSet;
 use std::sync::mpsc::TryRecvError;
 
 use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec4};
-use slotmap::Key;
+use slotmap::{Key, SecondaryMap};
 
 use crate::{
-    AttributeBuffer, AttributeValue, ComponentMask, EdgeAttributeBuffer, SelectionChange,
-    TopologyChange,
+    AttributeBuffer, AttributeMap, AttributeValue, ComponentMask, EdgeAttributeBuffer,
+    SelectionChange, TopologyChange,
 };
 
 use super::*;
@@ -106,7 +106,7 @@ fn assert_connectivity(mesh: &Mesh) {
             topo.vert_neighbors(vert_key).collect::<HashSet<_>>(),
             expected_neighbors
         );
-        assert!(mesh.attributes.positions.contains_key(vert_key));
+        assert!(mesh.attributes.positions().contains_key(vert_key));
 
         let expected_loops: HashSet<_> = topo
             .loops
@@ -126,7 +126,7 @@ fn assert_connectivity(mesh: &Mesh) {
             .map(|loop_| loop_.face)
             .collect();
         let vertex = mesh.vert(vert_key).unwrap();
-        assert_eq!(vertex.position(), mesh.attributes.positions[vert_key]);
+        assert_eq!(vertex.position(), mesh.attributes.positions()[vert_key]);
         assert_eq!(
             vertex.edges().collect::<Vec<_>>(),
             topo.vert_edges(vert_key).collect::<Vec<_>>()
@@ -202,7 +202,7 @@ fn assert_connectivity(mesh: &Mesh) {
             let edge = &topo.edges[loop_.edge];
             assert!(edge.verts.contains(&loop_.vert));
             assert!(edge.verts.contains(&next.vert));
-            assert!(mesh.attributes.normals.contains_key(current));
+            assert!(mesh.attributes.normals().contains_key(current));
             current = loop_.next;
         }
         assert_eq!(current, face.loop_);
@@ -241,9 +241,9 @@ fn new_and_default_create_empty_meshes_at_vertex_level() {
         assert!(mesh.topology.edges.is_empty());
         assert!(mesh.topology.loops.is_empty());
         assert!(mesh.topology.faces.is_empty());
-        assert!(mesh.attributes.positions.is_empty());
-        assert!(mesh.attributes.normals.is_empty());
-        assert!(mesh.attributes.uvs.is_empty());
+        assert!(mesh.attributes.positions().is_empty());
+        assert!(mesh.attributes.normals().is_empty());
+        assert!(mesh.attributes.uvs().is_none());
         assert!(mesh.selection.verts.is_empty());
         assert!(mesh.selection.edges.is_empty());
         assert!(mesh.selection.faces.is_empty());
@@ -380,17 +380,17 @@ fn attribute_changes_identify_values_in_typed_storage() {
         match change {
             AttributeChange::Position(keys) => {
                 for &key in keys.iter() {
-                    assert_eq!(attributes.positions.get(key), Some(&Vec3::ZERO));
+                    assert_eq!(attributes.positions().get(key), Some(&Vec3::ZERO));
                 }
             }
             AttributeChange::Normal(keys) => {
                 for &key in keys.iter() {
-                    assert_eq!(attributes.normals.get(key), Some(&Vec3::Z));
+                    assert_eq!(attributes.normals().get(key), Some(&Vec3::Z));
                 }
             }
             AttributeChange::Uv(keys) => {
                 for &key in keys.iter() {
-                    assert_eq!(attributes.uvs.get(key), Some(&Vec2::ONE));
+                    assert_eq!(attributes.uvs().unwrap().get(key), Some(&Vec2::ONE));
                 }
             }
         }
@@ -588,7 +588,9 @@ fn component_accessors_reject_missing_and_removed_keys() {
 
 #[test]
 fn capacity_constructors_reserve_without_populating() {
-    for (vertex_capacity, loop_capacity, uv_capacity) in [(0, 0, 0), (5, 13, 0), (7, 19, 19)] {
+    for (vertex_capacity, loop_capacity, uv_capacity) in
+        [(0, 0, None), (5, 13, None), (7, 19, Some(19))]
+    {
         let topology = Topology::with_capacity(vertex_capacity, loop_capacity);
         assert!(topology.verts.is_empty());
         assert!(topology.edges.is_empty());
@@ -598,15 +600,14 @@ fn capacity_constructors_reserve_without_populating() {
         assert!(topology.loops.capacity() >= loop_capacity);
 
         let attributes = Attributes::with_capacity(vertex_capacity, loop_capacity, uv_capacity);
-        assert!(attributes.positions.is_empty());
-        assert!(attributes.normals.is_empty());
-        assert!(attributes.uvs.is_empty());
-        assert!(attributes.positions.capacity() >= vertex_capacity);
-        assert!(attributes.normals.capacity() >= loop_capacity);
-        assert!(attributes.uvs.capacity() >= uv_capacity);
-        if uv_capacity == 0 {
-            assert_eq!(attributes.uvs.capacity(), 0);
-        }
+        assert!(attributes.positions().is_empty());
+        assert!(attributes.normals().is_empty());
+        assert!(attributes.positions().capacity() >= vertex_capacity);
+        assert!(attributes.normals().capacity() >= loop_capacity);
+        let uvs = attributes
+            .uvs()
+            .map(|uvs| (uvs.len(), uvs.capacity() >= uv_capacity.unwrap()));
+        assert_eq!(uvs, uv_capacity.map(|_| (0, true)));
     }
 }
 
@@ -623,11 +624,11 @@ fn builds_triangle_cycles_positions_and_flat_normals() {
     let mut current = face.loop_;
     for position in positions {
         let loop_ = &mesh.topology.loops[current];
-        assert_eq!(mesh.attributes.positions[loop_.vert], position);
-        assert_eq!(mesh.attributes.normals[current], Vec3::Z);
+        assert_eq!(mesh.attributes.positions()[loop_.vert], position);
+        assert_eq!(mesh.attributes.normals()[current], Vec3::Z);
         current = loop_.next;
     }
-    assert!(mesh.attributes.uvs.is_empty());
+    assert!(mesh.attributes.uvs().is_none());
     assert!(mesh.selection.verts.is_empty());
     assert!(mesh.selection.edges.is_empty());
     assert!(mesh.selection.faces.is_empty());
@@ -763,21 +764,21 @@ fn topology_traversal_allows_attribute_writes() {
     let face = topology.faces.keys().next().unwrap();
 
     for vertex in topology.face_verts(face) {
-        attributes.positions[vertex] += Vec3::Z;
+        attributes.positions_mut()[vertex] += Vec3::Z;
         for neighbor in topology.vert_neighbors(vertex) {
             for corner in topology.vert_loops(neighbor) {
-                attributes.normals.insert(corner, Vec3::X);
+                attributes.normals_mut().insert(corner, Vec3::X);
             }
         }
     }
     for edge in topology.face_edges(face) {
         for corner in topology.edge_loops(edge) {
-            attributes.normals.insert(corner, Vec3::Y);
+            attributes.normals_mut().insert(corner, Vec3::Y);
         }
     }
     for corner in topology.face_loops(face) {
-        assert_eq!(attributes.normals[corner], Vec3::Y);
-        assert_eq!(attributes.positions[topology.loops[corner].vert].z, 1.0);
+        assert_eq!(attributes.normals()[corner], Vec3::Y);
+        assert_eq!(attributes.positions()[topology.loops[corner].vert].z, 1.0);
     }
     assert_eq!(mesh.face(face).unwrap().normal(), Vec3::Z);
 }
@@ -792,7 +793,7 @@ fn generates_distinct_flat_normals_across_a_shared_edge() {
         assert_eq!(mesh.face(face_key).unwrap().normal(), expected);
         for (key, loop_) in &mesh.topology.loops {
             if loop_.face == face_key {
-                assert_eq!(mesh.attributes.normals[key], expected);
+                assert_eq!(mesh.attributes.normals()[key], expected);
             }
         }
     }
@@ -833,7 +834,7 @@ fn builds_mixed_polygons_in_input_order() {
         for index in indices {
             let loop_ = &mesh.topology.loops[current];
             assert_eq!(loop_.vert, verts[index as usize]);
-            assert_eq!(mesh.attributes.normals[current], Vec3::Z);
+            assert_eq!(mesh.attributes.normals()[current], Vec3::Z);
             current = loop_.next;
         }
     }
@@ -852,13 +853,13 @@ fn face_normals_follow_position_edits_without_overwriting_shading_normals() {
     assert_eq!(mesh.face(faces[0]).unwrap().normal(), Vec3::Z);
     assert_eq!(mesh.face(faces[1]).unwrap().normal(), Vec3::Y);
 
-    mesh.attributes.positions[edited_vertex] = Vec3::Z;
+    mesh.attributes.positions_mut()[edited_vertex] = Vec3::Z;
 
     assert_eq!(mesh.face(faces[0]).unwrap().normal(), -Vec3::Y);
     assert_eq!(mesh.face(faces[1]).unwrap().normal(), Vec3::Y);
     assert!(
         mesh.attributes
-            .normals
+            .normals()
             .values()
             .all(|&normal| normal == Vec3::X)
     );
@@ -939,7 +940,7 @@ fn translate_selected_updates_only_moved_positions_and_mixed_face_normals() {
     mesh.selection_mut().set_level(ComponentMask::FACE);
     mesh.selection_mut().select(&[faces[0]]);
     let selected: HashSet<_> = mesh.selection().selected().collect();
-    let positions = mesh.attributes.positions.clone();
+    let positions = mesh.attributes.positions().clone();
     assert_eq!(
         mesh.selection().boundary().mixed_faces(),
         &HashSet::from([faces[1]])
@@ -962,7 +963,7 @@ fn translate_selected_updates_only_moved_positions_and_mixed_face_normals() {
                 } else {
                     Vec3::ZERO
                 };
-            assert_eq!(mesh.attributes.positions[key], expected);
+            assert_eq!(mesh.attributes.positions()[key], expected);
         }
         for (key, corner) in &mesh.topology.loops {
             let expected = if corner.face == faces[1] {
@@ -970,7 +971,7 @@ fn translate_selected_updates_only_moved_positions_and_mixed_face_normals() {
             } else {
                 Vec3::X
             };
-            assert!(mesh.attributes.normals[key].abs_diff_eq(expected, 1.0e-6));
+            assert!(mesh.attributes.normals()[key].abs_diff_eq(expected, 1.0e-6));
         }
         assert!(std::ptr::eq(
             cached_faces,
@@ -981,7 +982,13 @@ fn translate_selected_updates_only_moved_positions_and_mixed_face_normals() {
             selected
         );
         assert_eq!(mesh.selection().level(), ComponentMask::FACE);
-        assert!(mesh.attributes.uvs.values().all(|&uv| uv == Vec2::ONE));
+        assert!(
+            mesh.attributes
+                .uvs()
+                .unwrap()
+                .values()
+                .all(|&uv| uv == Vec2::ONE)
+        );
         assert!(mesh.face_normals.is_empty());
         assert_connectivity(&mesh);
     }
@@ -1005,7 +1012,7 @@ fn translate_selected_updates_mixed_faces_without_selected_faces() {
         }
         assert_eq!(mesh.selection().faces().count(), 0);
         let selected: HashSet<_> = mesh.selection().verts().collect();
-        let positions = mesh.attributes.positions.clone();
+        let positions = mesh.attributes.positions().clone();
 
         mesh.translate_selected(Vec3::Z);
 
@@ -1016,11 +1023,11 @@ fn translate_selected_updates_mixed_faces_without_selected_faces() {
                 } else {
                     Vec3::ZERO
                 };
-            assert_eq!(mesh.attributes.positions[key], expected);
+            assert_eq!(mesh.attributes.positions()[key], expected);
         }
         assert!(
             mesh.attributes
-                .normals
+                .normals()
                 .values()
                 .all(|&normal| normal.abs_diff_eq(expected_normal, 1.0e-6))
         );
@@ -1036,7 +1043,7 @@ fn translate_selected_preserves_normals_for_noops_and_rigid_faces() {
         let mut mesh = Mesh::from_buffers(options).unwrap();
         let vertices: Vec<_> = mesh.topology.verts.keys().collect();
         mesh.selection_mut().select(&vertices[..selected_count]);
-        let positions = mesh.attributes.positions.clone();
+        let positions = mesh.attributes.positions().clone();
         let changes = mesh.subscribe();
 
         mesh.translate_selected(delta);
@@ -1052,11 +1059,11 @@ fn translate_selected_preserves_normals_for_noops_and_rigid_faces() {
                 } else {
                     Vec3::ZERO
                 };
-            assert_eq!(mesh.attributes.positions[key], expected);
+            assert_eq!(mesh.attributes.positions()[key], expected);
         }
         assert!(
             mesh.attributes
-                .normals
+                .normals()
                 .values()
                 .all(|&normal| normal == Vec3::X)
         );
@@ -1065,8 +1072,8 @@ fn translate_selected_preserves_normals_for_noops_and_rigid_faces() {
 
     let mut empty = Mesh::new();
     empty.translate_selected(Vec3::ONE);
-    assert!(empty.attributes.positions.is_empty());
-    assert!(empty.attributes.normals.is_empty());
+    assert!(empty.attributes.positions().is_empty());
+    assert!(empty.attributes.normals().is_empty());
 }
 
 #[test]
@@ -1079,8 +1086,8 @@ fn translate_selected_moves_wire_and_isolated_vertices() {
     let vertices: Vec<_> = mesh.topology.verts.keys().collect();
     mesh.topology.insert_edge([vertices[3], vertices[4]]);
     mesh.selection_mut().select(&[vertices[3], vertices[5]]);
-    let positions = mesh.attributes.positions.clone();
-    let normals = mesh.attributes.normals.clone();
+    let positions = mesh.attributes.positions().clone();
+    let normals = mesh.attributes.normals().clone();
     let changes = mesh.subscribe();
 
     mesh.translate_selected(Vec3::ONE);
@@ -1094,12 +1101,12 @@ fn translate_selected_moves_wire_and_isolated_vertices() {
             } else {
                 Vec3::ZERO
             };
-        assert_eq!(mesh.attributes.positions[key], expected);
+        assert_eq!(mesh.attributes.positions()[key], expected);
     }
-    assert_eq!(mesh.attributes.normals.len(), normals.len());
+    assert_eq!(mesh.attributes.normals().len(), normals.len());
     assert!(
         mesh.attributes
-            .normals
+            .normals()
             .iter()
             .all(|(key, &normal)| normal == normals[key])
     );
@@ -1113,19 +1120,19 @@ fn translate_selected_updates_normals_when_faces_collapse_and_recover() {
     mesh.selection_mut().select(&[vertex]);
 
     mesh.translate_selected(-Vec3::Y);
-    assert_eq!(mesh.attributes.positions[vertex], Vec3::ZERO);
+    assert_eq!(mesh.attributes.positions()[vertex], Vec3::ZERO);
     assert!(
         mesh.attributes
-            .normals
+            .normals()
             .values()
             .all(|&normal| normal == Vec3::ZERO)
     );
 
     mesh.translate_selected(Vec3::Y);
-    assert_eq!(mesh.attributes.positions[vertex], Vec3::Y);
+    assert_eq!(mesh.attributes.positions()[vertex], Vec3::Y);
     assert!(
         mesh.attributes
-            .normals
+            .normals()
             .values()
             .all(|&normal| normal == Vec3::Z)
     );
@@ -1142,11 +1149,11 @@ fn recompute_flat_normals_updates_only_requested_faces() {
     let mut mesh = Mesh::from_buffers(options).unwrap();
     let faces: Vec<_> = mesh.topology.faces.keys().collect();
     let edited_vertex = mesh.topology.verts.keys().nth(2).unwrap();
-    mesh.attributes.positions[edited_vertex] = Vec3::Z;
+    mesh.attributes.positions_mut()[edited_vertex] = Vec3::Z;
     mesh.selection_mut().select(&[edited_vertex]);
     let positions: Vec<_> = mesh
         .attributes
-        .positions
+        .positions()
         .iter()
         .map(|(key, &value)| (key, value))
         .collect();
@@ -1154,7 +1161,7 @@ fn recompute_flat_normals_updates_only_requested_faces() {
     Mesh::recompute_flat_normals(&mesh.topology, &mut mesh.attributes, []);
     assert!(
         mesh.attributes
-            .normals
+            .normals()
             .values()
             .all(|&normal| normal == Vec3::X)
     );
@@ -1165,15 +1172,21 @@ fn recompute_flat_normals_updates_only_requested_faces() {
         } else {
             Vec3::X
         };
-        assert_eq!(mesh.attributes.normals[key], expected);
+        assert_eq!(mesh.attributes.normals()[key], expected);
     }
     assert_eq!(
         mesh.selection().verts().collect::<Vec<_>>(),
         vec![edited_vertex]
     );
-    assert!(mesh.attributes.uvs.values().all(|&uv| uv == Vec2::ONE));
+    assert!(
+        mesh.attributes
+            .uvs()
+            .unwrap()
+            .values()
+            .all(|&uv| uv == Vec2::ONE)
+    );
     for (key, position) in positions {
-        assert_eq!(mesh.attributes.positions[key], position);
+        assert_eq!(mesh.attributes.positions()[key], position);
     }
     assert_connectivity(&mesh);
 }
@@ -1197,7 +1210,7 @@ fn recompute_smooth_normals_weights_all_incident_faces_by_corner_angle() {
     mesh.selection_mut().select(&[face]);
     let positions: Vec<_> = mesh
         .attributes
-        .positions
+        .positions()
         .iter()
         .map(|(key, &value)| (key, value))
         .collect();
@@ -1211,7 +1224,7 @@ fn recompute_smooth_normals_weights_all_incident_faces_by_corner_angle() {
     );
     assert!(
         mesh.attributes
-            .normals
+            .normals()
             .values()
             .all(|&normal| normal == Vec3::X)
     );
@@ -1227,19 +1240,25 @@ fn recompute_smooth_normals_weights_all_incident_faces_by_corner_angle() {
         } else {
             Vec3::X
         };
-        assert!(mesh.attributes.normals[key].abs_diff_eq(expected, 1.0e-6));
+        assert!(mesh.attributes.normals()[key].abs_diff_eq(expected, 1.0e-6));
     }
     assert_eq!(
         mesh.selection().selected().collect::<HashSet<_>>(),
         selected
     );
-    assert!(mesh.attributes.uvs.values().all(|&uv| uv == Vec2::ONE));
+    assert!(
+        mesh.attributes
+            .uvs()
+            .unwrap()
+            .values()
+            .all(|&uv| uv == Vec2::ONE)
+    );
     for (key, position) in positions {
-        assert_eq!(mesh.attributes.positions[key], position);
+        assert_eq!(mesh.attributes.positions()[key], position);
     }
 
     let edited_vertex = mesh.topology.verts.keys().nth(2).unwrap();
-    mesh.attributes.positions[edited_vertex] = Vec3::Y;
+    mesh.attributes.positions_mut()[edited_vertex] = Vec3::Y;
     Mesh::recompute_smooth_normals(
         &mesh.topology,
         &mut mesh.attributes,
@@ -1247,7 +1266,9 @@ fn recompute_smooth_normals_weights_all_incident_faces_by_corner_angle() {
         [vertex],
     );
     for key in mesh.vert(vertex).unwrap().loops() {
-        assert!(mesh.attributes.normals[key].abs_diff_eq((Vec3::Y + Vec3::Z).normalize(), 1.0e-6));
+        assert!(
+            mesh.attributes.normals()[key].abs_diff_eq((Vec3::Y + Vec3::Z).normalize(), 1.0e-6)
+        );
     }
     assert_connectivity(&mesh);
 }
@@ -1268,7 +1289,7 @@ fn recompute_selected_normals_only_update_selected_components() {
     assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
     assert!(
         mesh.attributes
-            .normals
+            .normals()
             .values()
             .all(|&normal| normal == Vec3::X)
     );
@@ -1288,12 +1309,12 @@ fn recompute_selected_normals_only_update_selected_components() {
         } else {
             Vec3::X
         };
-        assert_eq!(mesh.attributes.normals[key], expected);
+        assert_eq!(mesh.attributes.normals()[key], expected);
     }
 
     mesh.selection_mut().set_level(ComponentMask::VERTEX);
     mesh.selection_mut().set(&[vertex, VertKey::null()]);
-    let previous_normals = mesh.attributes.normals.clone();
+    let previous_normals = mesh.attributes.normals().clone();
     let changes = mesh.subscribe();
     mesh.shade_smooth();
     assert_normal_event(
@@ -1307,7 +1328,7 @@ fn recompute_selected_normals_only_update_selected_components() {
         } else {
             previous_normals[key]
         };
-        assert!(mesh.attributes.normals[key].abs_diff_eq(expected, 1.0e-6));
+        assert!(mesh.attributes.normals()[key].abs_diff_eq(expected, 1.0e-6));
     }
     assert_eq!(mesh.selection().verts().collect::<Vec<_>>(), vec![vertex]);
 }
@@ -1326,13 +1347,13 @@ fn recompute_selected_normals_reuse_face_normal_capacity_after_warmup() {
     assert_eq!(mesh.face_normals.len(), 1);
 
     for height in [1.0, 2.0, 3.0] {
-        mesh.attributes.positions[vertices[2]] = Vec3::new(0.0, 1.0, height);
+        mesh.attributes.positions_mut()[vertices[2]] = Vec3::new(0.0, 1.0, height);
         let expected = Vec3::new(0.0, -height, 1.0).normalize();
         mesh.shade_flat();
         mesh.shade_smooth();
         assert!(
             mesh.attributes
-                .normals
+                .normals()
                 .values()
                 .all(|&normal| normal.abs_diff_eq(expected, 1.0e-6))
         );
@@ -1341,13 +1362,13 @@ fn recompute_selected_normals_reuse_face_normal_capacity_after_warmup() {
     }
 
     mesh.selection_mut().clear();
-    mesh.attributes.positions[vertices[2]] = Vec3::Y;
-    let previous_normals = mesh.attributes.normals.clone();
+    mesh.attributes.positions_mut()[vertices[2]] = Vec3::Y;
+    let previous_normals = mesh.attributes.normals().clone();
     mesh.shade_flat();
     mesh.shade_smooth();
     assert!(
         mesh.attributes
-            .normals
+            .normals()
             .iter()
             .all(|(key, &normal)| normal == previous_normals[key])
     );
@@ -1378,7 +1399,7 @@ fn recompute_normals_handle_extreme_scales_and_collapsed_faces() {
         Mesh::recompute_flat_normals(&mesh.topology, &mut mesh.attributes, faces.iter().copied());
         assert!(
             mesh.attributes
-                .normals
+                .normals()
                 .values()
                 .all(|&normal| normal == -Vec3::Z)
         );
@@ -1390,12 +1411,12 @@ fn recompute_normals_handle_extreme_scales_and_collapsed_faces() {
         );
         assert!(
             mesh.attributes
-                .normals
+                .normals()
                 .values()
                 .all(|&normal| normal == -Vec3::Z)
         );
 
-        for position in mesh.attributes.positions.values_mut() {
+        for position in mesh.attributes.positions_mut().values_mut() {
             *position = Vec3::ZERO;
         }
         Mesh::recompute_smooth_normals(
@@ -1406,17 +1427,17 @@ fn recompute_normals_handle_extreme_scales_and_collapsed_faces() {
         );
         assert!(
             mesh.attributes
-                .normals
+                .normals()
                 .values()
                 .all(|&normal| normal == Vec3::ZERO)
         );
-        for normal in mesh.attributes.normals.values_mut() {
+        for normal in mesh.attributes.normals_mut().values_mut() {
             *normal = Vec3::X;
         }
         Mesh::recompute_flat_normals(&mesh.topology, &mut mesh.attributes, faces.iter().copied());
         assert!(
             mesh.attributes
-                .normals
+                .normals()
                 .values()
                 .all(|&normal| normal == Vec3::ZERO)
         );
@@ -1442,7 +1463,7 @@ fn recompute_smooth_normals_handle_degenerate_faces_wires_and_isolated_vertices(
     );
     assert!(
         mesh.attributes
-            .normals
+            .normals()
             .values()
             .all(|&normal| normal == Vec3::X)
     );
@@ -1453,14 +1474,14 @@ fn recompute_smooth_normals_handle_degenerate_faces_wires_and_isolated_vertices(
         &mut mesh.face_normals,
         vertices.iter().copied(),
     );
-    assert_eq!(mesh.attributes.normals.len(), 6);
+    assert_eq!(mesh.attributes.normals().len(), 6);
     for (key, corner) in &mesh.topology.loops {
         let expected = if corner.vert == vertices[3] {
             Vec3::ZERO
         } else {
             Vec3::Z
         };
-        assert_eq!(mesh.attributes.normals[key], expected);
+        assert_eq!(mesh.attributes.normals()[key], expected);
     }
 }
 
@@ -1478,7 +1499,7 @@ fn recompute_smooth_normals_return_zero_when_faces_cancel() {
     );
     assert!(
         mesh.attributes
-            .normals
+            .normals()
             .values()
             .all(|&normal| normal == Vec3::ZERO)
     );
@@ -1520,7 +1541,7 @@ fn recompute_smooth_normals_use_interior_angles_of_concave_polygons() {
         );
         let expected = Vec3::new(0.0, -1.0, 3.0).normalize() * if reversed { -1.0 } else { 1.0 };
         for key in mesh.vert(vertex).unwrap().loops() {
-            assert!(mesh.attributes.normals[key].abs_diff_eq(expected, 1.0e-6));
+            assert!(mesh.attributes.normals()[key].abs_diff_eq(expected, 1.0e-6));
         }
     }
 }
@@ -1550,7 +1571,7 @@ fn recompute_smooth_normals_are_unchanged_by_splitting_a_planar_face() {
         );
         for key in mesh.vert(vertex).unwrap().loops() {
             assert!(
-                mesh.attributes.normals[key].abs_diff_eq((Vec3::Y + Vec3::Z).normalize(), 1.0e-6)
+                mesh.attributes.normals()[key].abs_diff_eq((Vec3::Y + Vec3::Z).normalize(), 1.0e-6)
             );
         }
     }
@@ -1568,12 +1589,12 @@ fn copies_normalized_vertex_attributes_to_every_referencing_loop() {
     options.uvs = Some(uvs.clone());
     let mesh = Mesh::from_buffers(options).unwrap();
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
-    assert_eq!(mesh.attributes.normals.len(), 6);
-    assert_eq!(mesh.attributes.uvs.len(), 6);
+    assert_eq!(mesh.attributes.normals().len(), 6);
+    assert_eq!(mesh.attributes.uvs().unwrap().len(), 6);
     for (key, loop_) in &mesh.topology.loops {
         let index = verts.iter().position(|&vert| vert == loop_.vert).unwrap();
-        assert_eq!(mesh.attributes.normals[key], expected_normals[index]);
-        assert_eq!(mesh.attributes.uvs[key], uvs[index]);
+        assert_eq!(mesh.attributes.normals()[key], expected_normals[index]);
+        assert_eq!(mesh.attributes.uvs().unwrap()[key], uvs[index]);
     }
     for (face_key, indices) in mesh.topology().faces().zip([[2, 0, 1], [1, 0, 3]]) {
         let face = mesh.face(face_key).unwrap();
@@ -1620,9 +1641,21 @@ fn face_corner_attributes_preserve_seams_and_missing_uvs() {
         mesh.topology.loops[first_corners[1]].vert,
         mesh.topology.loops[second_corner].vert
     );
-    mesh.attributes.uvs.insert(first_corners[0], Vec2::ZERO);
-    mesh.attributes.uvs.insert(first_corners[2], Vec2::X);
-    mesh.attributes.uvs.insert(second_corner, Vec2::ONE);
+    let uvs = AttributeMap::Vec2(SecondaryMap::new());
+    mesh.attributes
+        .add::<LoopKey>(Attributes::TEXCOORD_0.into(), uvs);
+    mesh.attributes
+        .uvs_mut()
+        .unwrap()
+        .insert(first_corners[0], Vec2::ZERO);
+    mesh.attributes
+        .uvs_mut()
+        .unwrap()
+        .insert(first_corners[2], Vec2::X);
+    mesh.attributes
+        .uvs_mut()
+        .unwrap()
+        .insert(second_corner, Vec2::ONE);
 
     assert_eq!(
         mesh.face(faces[0])
@@ -1682,7 +1715,7 @@ fn normalizes_supplied_normals_across_finite_scales() {
         let verts: Vec<_> = mesh.topology.verts.keys().collect();
         for (key, loop_) in &mesh.topology.loops {
             let index = verts.iter().position(|&vert| vert == loop_.vert).unwrap();
-            let normal = mesh.attributes.normals[key];
+            let normal = mesh.attributes.normals()[key];
             assert!(normal.is_finite());
             assert!(normal.abs_diff_eq(expected[index], 1.0e-6));
         }
@@ -1726,12 +1759,12 @@ fn preserves_unwelded_vertices_and_isolated_positions() {
     ]);
     let mesh = Mesh::from_buffers(options).unwrap();
     assert_eq!(mesh.topology.verts.len(), 7);
-    assert_eq!(mesh.attributes.positions.len(), 7);
+    assert_eq!(mesh.attributes.positions().len(), 7);
     assert_eq!(mesh.topology.edges.len(), 6);
     let verts: Vec<_> = mesh.topology.verts.keys().collect();
     assert_eq!(
-        mesh.attributes.positions[verts[0]],
-        mesh.attributes.positions[verts[3]]
+        mesh.attributes.positions()[verts[0]],
+        mesh.attributes.positions()[verts[3]]
     );
     assert_ne!(verts[0], verts[3]);
     assert!(mesh.topology.verts[verts[6]].edge.is_none());
@@ -1741,8 +1774,8 @@ fn preserves_unwelded_vertices_and_isolated_positions() {
         .values()
         .map(|face| face.loop_)
         .collect();
-    assert_eq!(mesh.attributes.uvs[loops[0]], Vec2::ZERO);
-    assert_eq!(mesh.attributes.uvs[loops[1]], Vec2::ONE);
+    assert_eq!(mesh.attributes.uvs().unwrap()[loops[0]], Vec2::ZERO);
+    assert_eq!(mesh.attributes.uvs().unwrap()[loops[1]], Vec2::ONE);
     assert_connectivity(&mesh);
 }
 
@@ -1763,8 +1796,8 @@ fn builds_empty_meshes_and_point_clouds() {
             assert!(mesh.topology.edges.is_empty());
             assert!(mesh.topology.loops.is_empty());
             assert!(mesh.topology.faces.is_empty());
-            assert!(mesh.attributes.normals.is_empty());
-            assert!(mesh.attributes.uvs.is_empty());
+            assert!(mesh.attributes.normals().is_empty());
+            assert!(mesh.attributes.uvs().is_none());
             assert_connectivity(&mesh);
         }
     }
@@ -1784,7 +1817,7 @@ fn flat_normals_handle_degeneracy_scale_and_reversed_winding() {
         }
         assert!(
             mesh.attributes
-                .normals
+                .normals()
                 .values()
                 .all(|&normal| normal == Vec3::ZERO)
         );
@@ -1800,7 +1833,7 @@ fn flat_normals_handle_degeneracy_scale_and_reversed_winding() {
         }
         assert!(
             mesh.attributes
-                .normals
+                .normals()
                 .values()
                 .all(|&normal| normal == -Vec3::Z)
         );
@@ -2034,16 +2067,10 @@ fn builds_custom_attributes_in_input_order() {
     let mesh = Mesh::from_buffers(options).unwrap();
 
     let attributes = mesh.attributes();
-    let vertex_names: Vec<_> = attributes
-        .custom_attributes::<VertKey>()
-        .map(|(name, _)| name)
-        .collect();
-    let corner_names: Vec<_> = attributes
-        .custom_attributes::<LoopKey>()
-        .map(|(name, _)| name)
-        .collect();
-    assert_eq!(vertex_names, ["_B", "_A"]);
-    assert_eq!(corner_names, ["_D", "_C"]);
+    let vertex_names: Vec<_> = attributes.iter::<VertKey>().map(|(name, _)| name).collect();
+    let corner_names: Vec<_> = attributes.iter::<LoopKey>().map(|(name, _)| name).collect();
+    assert_eq!(vertex_names, ["POSITION", "_B", "_A"]);
+    assert_eq!(corner_names, ["NORMAL", "_D", "_C"]);
 }
 
 #[test]
@@ -2278,8 +2305,8 @@ fn builds_custom_attributes_with_built_in_normals_and_uvs() {
     options.corner_attributes = vec![("_W".into(), AttributeBuffer::F32(vec![0.25; 6]))];
     let mesh = Mesh::from_buffers(options).unwrap();
 
-    assert_eq!(mesh.attributes().normals.len(), 6);
-    assert_eq!(mesh.attributes().uvs.len(), 6);
+    assert_eq!(mesh.attributes().normals().len(), 6);
+    assert_eq!(mesh.attributes().uvs().unwrap().len(), 6);
     assert_eq!(vertex_values(&mesh, "_ID"), vec![Some(7u32); 4]);
     assert_eq!(corner_values(&mesh, "_W"), vec![Some(0.25f32); 6]);
 }

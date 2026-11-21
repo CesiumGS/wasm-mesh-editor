@@ -66,21 +66,22 @@ impl SelectionState {
 
     /// `None` for an empty selection.
     pub(crate) fn selected_bounds(&self, attrs: &Attributes) -> Option<Aabb> {
-        *self
-            .bounds
-            .selected
-            .get_or_init(|| Aabb::from_points(self.verts.iter().map(|&key| attrs.positions[key])))
+        *self.bounds.selected.get_or_init(|| {
+            let positions = attrs.positions();
+            Aabb::from_points(self.verts.iter().map(|&key| positions[key]))
+        })
     }
 
     /// The bounds for the entire mesh -- combining the bounds of the selected components and unselected components. `None` for an empty mesh.
     pub(crate) fn mesh_bounds(&self, topo: &Topology, attrs: &Attributes) -> Option<Aabb> {
         let selected = self.selected_bounds(attrs);
         let unselected = *self.bounds.unselected.get_or_init(|| {
+            let positions = attrs.positions();
             Aabb::from_points(
                 topo.verts
                     .keys()
                     .filter(|key| !self.verts.contains(key))
-                    .map(|key| attrs.positions[key]),
+                    .map(|key| positions[key]),
             )
         });
 
