@@ -6,7 +6,7 @@ use std::fmt;
 use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
 use slotmap::{Key, SecondaryMap};
 
-use crate::{LoopKey, VertKey};
+use crate::{EdgeKey, FaceKey, LoopKey, VertKey};
 
 /// Vertex positions, face-corner normals and UVs, and named custom attributes, keyed by their handles.
 #[derive(Default)]
@@ -16,10 +16,12 @@ pub struct Attributes {
     pub uvs: SecondaryMap<LoopKey, Vec2>,
     /// Custom attributes in insertion order. Names must be unique across all domains.
     vertex_custom: Vec<(String, AttributeMap<VertKey>)>,
+    edge_custom: Vec<(String, AttributeMap<EdgeKey>)>,
+    face_custom: Vec<(String, AttributeMap<FaceKey>)>,
     corner_custom: Vec<(String, AttributeMap<LoopKey>)>,
 }
 
-/// Whether an attribute has one value per vertex or one per face corner.
+/// Whether an attribute has one value per vertex, edge, face or face corner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub enum AttributeDomain {
@@ -27,9 +29,15 @@ pub enum AttributeDomain {
     Vertex = 0,
     /// One value per face corner. Input buffers list them in `indices` order.
     Corner = 1,
+    /// One value per edge. Input buffers list them in `edge_indices` order, and unlisted edges get
+    /// the attribute's default.
+    Edge = 2,
+    /// One value per face. Input buffers list them in face order.
+    Face = 3,
 }
 
-/// A key type that attributes can be keyed by: [`VertKey`] or [`LoopKey`]. Sealed.
+/// A key type that attributes can be keyed by: [`VertKey`], [`EdgeKey`], [`FaceKey`] or
+/// [`LoopKey`]. Sealed.
 pub trait AttributeKey: Key + 'static + sealed::SealedKey {
     const DOMAIN: AttributeDomain;
 }
@@ -147,6 +155,17 @@ impl AttributeBuffer {
     pub(crate) fn into_map<K: Key>(self, keys: impl IntoIterator<Item = K>) -> AttributeMap<K> {
         match_variants!(Self, self, values => zip_map(keys, values))
     }
+
+    /// Like [`Self::into_map`], also giving every key in `all_keys` that `keys` doesn't list
+    /// `default`'s single value. `default` must hold one value of the same type.
+    pub(crate) fn into_map_with_default<K: Key>(
+        self,
+        keys: impl IntoIterator<Item = K>,
+        default: &AttributeBuffer,
+        all_keys: impl IntoIterator<Item = K>,
+    ) -> AttributeMap<K> {
+        match_variants!(Self, self, values => zip_map_with_default(keys, values, default, all_keys))
+    }
 }
 
 fn zip_map<K: Key, T: AttributeValue>(
@@ -157,6 +176,24 @@ fn zip_map<K: Key, T: AttributeValue>(
     let mut map = SecondaryMap::with_capacity(count);
     map.extend(keys.into_iter().zip(values));
     debug_assert_eq!(map.len(), count, "expected one distinct key per value");
+    T::wrap_map(map)
+}
+
+fn zip_map_with_default<K: Key, T: AttributeValue>(
+    keys: impl IntoIterator<Item = K>,
+    values: Vec<T>,
+    default: &AttributeBuffer,
+    all_keys: impl IntoIterator<Item = K>,
+) -> AttributeMap<K> {
+    // First write default value for all keys in `all_keys`
+    let default = match_variants!(AttributeBuffer, default, default => {
+        (default as &dyn Any).downcast_ref::<Vec<T>>()
+    })
+    .expect("default must match the values' type")[0];
+
+    // Then overwrite with the provided values for the keys in `keys`
+    let mut map: SecondaryMap<K, T> = all_keys.into_iter().map(|key| (key, default)).collect();
+    map.extend(keys.into_iter().zip(values));
     T::wrap_map(map)
 }
 
@@ -251,13 +288,15 @@ impl Attributes {
             normals: SecondaryMap::with_capacity(normal_capacity),
             uvs: SecondaryMap::with_capacity(uv_capacity),
             vertex_custom: Vec::new(),
+            edge_custom: Vec::new(),
+            face_custom: Vec::new(),
             corner_custom: Vec::new(),
         }
     }
 
-    /// Every attribute of the mesh: positions and normals, then UVs if present, using the
-    /// glTF names in [`Self::RESERVED_NAMES`], then custom vertex attributes and custom corner
-    /// attributes, each in insertion order.
+    /// Every attribute of the mesh: positions and normals, then UVs if present, using the glTF
+    /// names in [`Self::RESERVED_NAMES`], then custom vertex, edge, face and corner attributes,
+    /// each in insertion order.
     pub fn descriptors(&self) -> impl Iterator<Item = AttributeDescriptor<'_>> {
         let [position, normal, uv] = Self::RESERVED_NAMES;
         let built_in = [
@@ -270,6 +309,14 @@ impl Attributes {
             .custom_attributes::<VertKey>()
             .map(|(name, values)| (name, AttributeDomain::Vertex, values.value_type()));
 
+        let edge_custom = self
+            .custom_attributes::<EdgeKey>()
+            .map(|(name, values)| (name, AttributeDomain::Edge, values.value_type()));
+
+        let face_custom = self
+            .custom_attributes::<FaceKey>()
+            .map(|(name, values)| (name, AttributeDomain::Face, values.value_type()));
+
         let corner_custom = self
             .custom_attributes::<LoopKey>()
             .map(|(name, values)| (name, AttributeDomain::Corner, values.value_type()));
@@ -278,6 +325,8 @@ impl Attributes {
             .into_iter()
             .flatten()
             .chain(vertex_custom)
+            .chain(edge_custom)
+            .chain(face_custom)
             .chain(corner_custom)
             .map(|(name, domain, value_type)| AttributeDescriptor {
                 name,
@@ -401,6 +450,8 @@ macro_rules! impl_attribute_key {
 
 impl_attribute_key!(
     VertKey => Vertex, vertex_custom;
+    EdgeKey => Edge, edge_custom;
+    FaceKey => Face, face_custom;
     LoopKey => Corner, corner_custom;
 );
 

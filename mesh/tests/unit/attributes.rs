@@ -1,4 +1,4 @@
-use crate::{FaceKey, Mesh, MeshBuffers};
+use crate::{EdgeKey, FaceKey, Mesh, MeshBuffers};
 
 use super::*;
 
@@ -186,7 +186,7 @@ fn descriptor(
 #[test]
 fn descriptors_list_built_in_then_custom_attributes() {
     use AttributeComponentType::{Float32, Int32, Uint32};
-    use AttributeDomain::{Corner, Vertex};
+    use AttributeDomain::{Corner, Edge, Face, Vertex};
 
     let mut mesh = two_triangles();
     assert_eq!(
@@ -203,6 +203,10 @@ fn descriptors_list_built_in_then_custom_attributes() {
         .add_custom::<VertKey>("_B".into(), AttributeMap::U32(SecondaryMap::new()));
     mesh.attributes
         .add_custom::<VertKey>("_A".into(), AttributeMap::IVec2(SecondaryMap::new()));
+    mesh.attributes
+        .add_custom::<FaceKey>("_FACE".into(), AttributeMap::U32(SecondaryMap::new()));
+    mesh.attributes
+        .add_custom::<EdgeKey>("_EDGE".into(), AttributeMap::F32(SecondaryMap::new()));
 
     assert_eq!(
         mesh.attributes.descriptors().collect::<Vec<_>>(),
@@ -211,6 +215,8 @@ fn descriptors_list_built_in_then_custom_attributes() {
             descriptor("NORMAL", Corner, Float32, 3),
             descriptor("_B", Vertex, Uint32, 1),
             descriptor("_A", Vertex, Int32, 2),
+            descriptor("_EDGE", Edge, Float32, 1),
+            descriptor("_FACE", Face, Uint32, 1),
             descriptor("_COLOR", Corner, Float32, 4),
         ]
     );

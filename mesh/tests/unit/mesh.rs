@@ -4,7 +4,10 @@ use std::sync::mpsc::TryRecvError;
 use glam::{IVec2, IVec3, IVec4, UVec2, UVec3, UVec4, Vec2, Vec4};
 use slotmap::Key;
 
-use crate::{AttributeBuffer, AttributeValue, ComponentMask, SelectionChange, TopologyChange};
+use crate::{
+    AttributeBuffer, AttributeValue, ComponentMask, EdgeAttributeBuffer, SelectionChange,
+    TopologyChange,
+};
 
 use super::*;
 
@@ -1966,6 +1969,15 @@ fn validate_rejects_duplicate_custom_attribute_names() {
     options.vertex_attributes = vec![f32_attribute("_A", 4)];
     options.corner_attributes = vec![f32_attribute("_A", 6)];
     assert_eq!(options.validate(), expected);
+
+    let mut options = two_triangle_buffers();
+    options.face_attributes = vec![f32_attribute("_A", 2)];
+    options.edge_attributes = vec![edge_attribute(
+        "_A",
+        AttributeBuffer::F32(vec![]),
+        AttributeBuffer::F32(vec![0.0]),
+    )];
+    assert_eq!(options.validate(), expected);
 }
 
 #[test]
@@ -2077,6 +2089,184 @@ fn corner_attributes_share_corner_order() {
 
     assert_eq!(corner_values(&mesh, "_ID"), all_some(&ids));
     assert_eq!(corner_values(&mesh, "_COLOR"), all_some(&colors));
+}
+
+/// The value of a custom edge attribute on the edge between vertices `a` and `b`, by input index.
+fn edge_value<T: AttributeValue>(mesh: &Mesh, name: &str, a: usize, b: usize) -> Option<T> {
+    let verts: Vec<_> = mesh.topology().verts().collect();
+    let edge = mesh
+        .topology()
+        .edges()
+        .find(|&edge| {
+            let mut ends = mesh.edge(edge).unwrap().verts();
+            ends.sort();
+            let mut expected = [verts[a], verts[b]];
+            expected.sort();
+            ends == expected
+        })
+        .unwrap();
+    mesh.edge(edge).unwrap().attribute(name)
+}
+
+fn edge_attribute(
+    name: &str,
+    values: AttributeBuffer,
+    default: AttributeBuffer,
+) -> EdgeAttributeBuffer {
+    EdgeAttributeBuffer {
+        name: name.into(),
+        values,
+        default,
+    }
+}
+
+#[test]
+fn builds_edge_attributes_with_defaults_for_unlisted_edges() {
+    let mut options = quad_and_triangle_buffers();
+    options.edge_indices = vec![1, 0, 2, 3, 4, 2];
+    options.edge_attributes = vec![
+        edge_attribute(
+            "_ID",
+            AttributeBuffer::U32(vec![10, 20, 30]),
+            AttributeBuffer::U32(vec![0]),
+        ),
+        edge_attribute(
+            "_UV",
+            AttributeBuffer::Vec2(vec![Vec2::X, Vec2::Y, Vec2::ONE]),
+            AttributeBuffer::Vec2(vec![Vec2::NEG_ONE]),
+        ),
+    ];
+    let mesh = Mesh::from_buffers(options).unwrap();
+
+    assert_eq!(edge_value(&mesh, "_ID", 0, 1), Some(10u32));
+    assert_eq!(edge_value(&mesh, "_ID", 2, 3), Some(20u32));
+    assert_eq!(edge_value(&mesh, "_ID", 2, 4), Some(30u32));
+    assert_eq!(edge_value(&mesh, "_UV", 2, 4), Some(Vec2::ONE));
+    for (a, b) in [(1, 2), (3, 0), (4, 3)] {
+        assert_eq!(edge_value(&mesh, "_ID", a, b), Some(0u32));
+        assert_eq!(edge_value(&mesh, "_UV", a, b), Some(Vec2::NEG_ONE));
+    }
+    assert_eq!(edge_value::<i32>(&mesh, "_ID", 0, 1), None);
+    assert_eq!(edge_value::<u32>(&mesh, "_MISSING", 0, 1), None);
+}
+
+#[test]
+fn builds_edge_attributes_for_every_edge_without_edge_indices() {
+    let mut options = two_triangle_buffers();
+    options.edge_attributes = vec![edge_attribute(
+        "_ID",
+        AttributeBuffer::U32(vec![]),
+        AttributeBuffer::U32(vec![7]),
+    )];
+    let mesh = Mesh::from_buffers(options).unwrap();
+
+    let values = mesh.attributes().values::<EdgeKey, u32>("_ID").unwrap();
+    assert_eq!(values.len(), mesh.topology().edge_count());
+    assert!(values.values().all(|&value| value == 7));
+}
+
+#[test]
+fn validate_edge_indices() {
+    let validate = |edge_indices: Vec<u32>| {
+        let mut options = quad_and_triangle_buffers();
+        options.edge_indices = edge_indices;
+        options.validate()
+    };
+
+    assert_eq!(validate(vec![0, 1, 2, 3, 2, 4]), Ok(()));
+    assert_eq!(
+        validate(vec![0, 1, 2]),
+        Err(MeshBuildError::IncompleteEdge { index_count: 3 })
+    );
+    // The quad's diagonal, and an index out of bounds.
+    assert_eq!(
+        validate(vec![0, 1, 0, 2]),
+        Err(MeshBuildError::NotAnEdge { edge: 1 })
+    );
+    assert_eq!(
+        validate(vec![0, 9]),
+        Err(MeshBuildError::NotAnEdge { edge: 0 })
+    );
+    assert_eq!(
+        validate(vec![0, 1, 2, 3, 1, 0]),
+        Err(MeshBuildError::RepeatedEdge { edge: 2 })
+    );
+}
+
+#[test]
+fn validate_edge_attribute_lengths_and_defaults() {
+    let validate = |values: AttributeBuffer, default: AttributeBuffer| {
+        let mut options = quad_and_triangle_buffers();
+        options.edge_indices = vec![0, 1, 2, 3];
+        options.edge_attributes = vec![edge_attribute("_E", values, default)];
+        options.validate()
+    };
+    let invalid_default = Err(MeshBuildError::InvalidDefault { name: "_E".into() });
+
+    assert_eq!(
+        validate(
+            AttributeBuffer::U32(vec![1, 2]),
+            AttributeBuffer::U32(vec![0])
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        validate(AttributeBuffer::U32(vec![1]), AttributeBuffer::U32(vec![0])),
+        Err(MeshBuildError::CustomAttributeLengthMismatch {
+            name: "_E".into(),
+            expected: 2,
+            actual: 1,
+        })
+    );
+    assert_eq!(
+        validate(
+            AttributeBuffer::U32(vec![1, 2]),
+            AttributeBuffer::U32(vec![])
+        ),
+        invalid_default
+    );
+    assert_eq!(
+        validate(
+            AttributeBuffer::U32(vec![1, 2]),
+            AttributeBuffer::U32(vec![0, 0])
+        ),
+        invalid_default
+    );
+    assert_eq!(
+        validate(
+            AttributeBuffer::U32(vec![1, 2]),
+            AttributeBuffer::I32(vec![0])
+        ),
+        invalid_default
+    );
+}
+
+#[test]
+fn builds_face_attributes_in_face_order() {
+    let mut options = quad_and_triangle_buffers();
+    options.face_attributes = vec![("_FACE".into(), AttributeBuffer::U32(vec![5, 6]))];
+    let mesh = Mesh::from_buffers(options).unwrap();
+
+    let values: Vec<_> = mesh
+        .topology()
+        .faces()
+        .map(|face| mesh.face(face).unwrap().attribute::<u32>("_FACE"))
+        .collect();
+    assert_eq!(values, [Some(5), Some(6)]);
+}
+
+#[test]
+fn validate_face_attribute_lengths() {
+    let mut options = quad_and_triangle_buffers();
+    options.face_attributes = vec![f32_attribute("_FACE", 3)];
+    assert_eq!(
+        options.validate(),
+        Err(MeshBuildError::CustomAttributeLengthMismatch {
+            name: "_FACE".into(),
+            expected: 2,
+            actual: 3,
+        })
+    );
 }
 
 #[test]
