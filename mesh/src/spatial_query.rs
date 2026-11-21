@@ -76,9 +76,10 @@ impl<'a, I: SpatialIndex<FaceKey>> SpatialQuery<'a, I> {
 
 /// Each face's bounding box, for building a [`SpatialIndex`] over a mesh's faces.
 pub(crate) fn face_bounds(mesh: &Mesh) -> impl Iterator<Item = (Aabb, FaceKey)> + '_ {
+    let positions = mesh.attributes.positions();
     mesh.topology.faces().map(|face| {
         let verts = mesh.topology.face_verts(face);
-        let bounds = Aabb::from_points(verts.map(|key| mesh.attributes.positions[key]));
+        let bounds = Aabb::from_points(verts.map(|key| positions[key]));
         (bounds.unwrap(), face)
     })
 }

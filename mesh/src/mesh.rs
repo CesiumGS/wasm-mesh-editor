@@ -245,6 +245,7 @@ impl Mesh {
                 );
 
                 self.selection.invalidate_bounds();
+                self.spatial_index.take();
                 self.emit_position_change(Rc::new(verts));
                 self.emit_normal_change(Rc::new(loops));
             }

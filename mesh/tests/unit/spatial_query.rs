@@ -1,7 +1,7 @@
 use geometry::closest_point_on_triangle;
 use glam::Vec3;
 
-use crate::MeshBuffers;
+use crate::{Attributes, MeshBuffers};
 
 use super::*;
 
@@ -132,7 +132,7 @@ fn grid(size: u32) -> Mesh {
 #[test]
 fn closest_point_matches_brute_force() {
     let mesh = grid(20);
-    let positions = &mesh.attributes.positions;
+    let positions = mesh.attributes.positions();
 
     for index in 0..200 {
         let t = index as f64;
@@ -179,6 +179,35 @@ fn closest_point_follows_translated_vertices() {
 
     mesh.selection_mut().select(&v[3..]);
     mesh.translate_selected(Vec3::new(-10.0, 0.0, 1.5));
+
+    let closest = mesh.spatial_query().closest_point(point).unwrap();
+    assert_eq!(closest.verts, [v[3], v[4], v[5]]);
+    assert_eq!(closest.position, DVec3::new(0.25, 0.25, 1.5));
+}
+
+#[test]
+fn closest_point_follows_written_positions() {
+    let (mut mesh, v) = build_mesh(
+        &[
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [11.0, 0.0, 0.0],
+            [10.0, 1.0, 0.0],
+        ],
+        &[3, 3],
+    );
+    let point = DVec3::new(0.25, 0.25, 2.0);
+    assert_eq!(
+        mesh.spatial_query().closest_point(point).unwrap().verts,
+        [v[0], v[1], v[2]]
+    );
+
+    let moved = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)].map(|(x, y)| Vec3::new(x, y, 1.5));
+    let values: Vec<_> = v[3..].iter().copied().zip(moved).collect();
+    mesh.set_attribute_values(Attributes::POSITION, &values)
+        .unwrap();
 
     let closest = mesh.spatial_query().closest_point(point).unwrap();
     assert_eq!(closest.verts, [v[3], v[4], v[5]]);
