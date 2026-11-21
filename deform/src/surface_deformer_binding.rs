@@ -38,7 +38,7 @@ impl SurfaceDeformerBinding {
         deformable_to_deformer: DMat4,
     ) -> Option<Self> {
         let deformer_query = deformer.spatial_query();
-        let positions = &deformer.attributes().positions;
+        let positions = deformer.attributes().positions();
         let mut max_normal_distance = 0.0_f64;
         let mut max_overshoot = 0.0_f64;
 

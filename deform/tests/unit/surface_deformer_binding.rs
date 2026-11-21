@@ -23,7 +23,7 @@ fn deformer() -> (Mesh, Vec<VertKey>) {
 fn reconstruct(mesh: &Mesh, point: &BoundPoint) -> DVec3 {
     let [p0, p1, p2] = point
         .deformer_verts
-        .map(|key| mesh.attributes().positions[key].as_dvec3());
+        .map(|key| mesh.attributes().positions()[key].as_dvec3());
     let normal = (p1 - p0).cross(p2 - p0).normalize();
     let [a, b, c] = point.frame_coords.to_array();
     p0 + a * (p1 - p0) + b * (p2 - p0) + c * normal
@@ -100,7 +100,7 @@ fn deformed_points_stay_within_the_expanded_deformer_bounds() {
 
     // Stretches, shears, and flattens the deformer.
     let moved = |key: VertKey| {
-        let p = mesh.attributes().positions[key].as_dvec3();
+        let p = mesh.attributes().positions()[key].as_dvec3();
         DVec3::new(5.0 * p.x + p.y, 0.5 * p.y, 0.1 * p.z - p.x)
     };
     let corners: Vec<_> = verts.iter().map(|&key| moved(key)).collect();
