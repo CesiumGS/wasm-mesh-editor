@@ -25,10 +25,14 @@ const _: () = {
 impl EditMode {
     /// Converts a JS `ComponentMask`, rejecting unknown bits.
     pub(super) fn from_js_components(components: u32) -> Result<Self, JsError> {
-        u8::try_from(components)
-            .ok()
-            .and_then(ComponentMask::from_bits)
-            .map(Self::from_components)
-            .ok_or_else(|| JsError::new(&format!("invalid component mask {components}")))
+        component_mask_from_js(components).map(Self::from_components)
     }
+}
+
+/// Converts a JS `ComponentMask`, rejecting unknown bits.
+pub(super) fn component_mask_from_js(components: u32) -> Result<ComponentMask, JsError> {
+    u8::try_from(components)
+        .ok()
+        .and_then(ComponentMask::from_bits)
+        .ok_or_else(|| JsError::new(&format!("invalid component mask {components}")))
 }

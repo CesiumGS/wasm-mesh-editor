@@ -2,21 +2,23 @@
 
 mod build;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 
 use event_emitter::{Event, EventEmitter};
 use glam::{DVec3, Vec3};
+use slotmap::SecondaryMap;
 
 use crate::geometry::corner_angle;
 use crate::selection::{SelectionBoundary, SelectionState};
 use crate::{
-    Aabb, AttributeChange, Attributes, ComponentKey, ComponentRef, EdgeKey, EdgeRef, FaceKey,
-    FaceRef, LoopKey, MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
+    Aabb, AttributeChange, AttributeError, AttributeKey, AttributeValue, Attributes, ComponentKey,
+    ComponentRef, EdgeKey, EdgeRef, FaceKey, FaceRef, LoopKey, MeshChange, Selection,
+    SelectionView, Topology, VertKey, VertRef,
 };
 
-pub use build::{MeshBuffers, MeshBuildError};
+pub use build::{EdgeAttributeBuffer, MeshBuffers, MeshBuildError};
 
 /// A headless, editable mesh: connectivity, geometry attributes, and selection.
 #[derive(Default)]
@@ -87,6 +89,7 @@ impl Mesh {
         }
         Some(EdgeRef {
             topo: &self.topology,
+            attrs: &self.attributes,
             key,
         })
     }
@@ -118,8 +121,9 @@ impl Mesh {
             ..
         } = self;
 
+        let positions = attributes.positions_mut();
         for &key in selection.verts.iter() {
-            attributes.positions[key] += delta;
+            positions[key] += delta;
         }
 
         selection.translate_bounds(delta);
@@ -128,12 +132,109 @@ impl Mesh {
         let loops = Rc::clone(boundary.mixed_face_loops());
         Self::recompute_flat_normals(topology, attributes, boundary.mixed_faces().iter().copied());
 
-        self.changes
-            .emit(MeshChange::Attributes(AttributeChange::Position(
-                Rc::clone(&selection.verts),
-            )));
-
+        let verts = Rc::clone(&selection.verts);
+        self.emit_position_change(verts);
         self.emit_normal_change(loops);
+    }
+
+    /// Adds a custom attribute called `name` keyed by `K`, giving every `K` component `default`.
+    ///
+    /// # Errors
+    /// If `name` is reserved or already used.
+    pub fn add_attribute<K: AttributeKey, T: AttributeValue>(
+        &mut self,
+        name: &str,
+        default: T,
+    ) -> Result<(), AttributeError> {
+        if Attributes::RESERVED_NAMES.contains(&name) {
+            return Err(AttributeError::Reserved { name: name.into() });
+        }
+        if self.attributes.descriptor(name).is_some() {
+            return Err(AttributeError::AlreadyExists { name: name.into() });
+        }
+
+        let values: SecondaryMap<K, T> =
+            K::keys(&self.topology).map(|key| (key, default)).collect();
+        self.attributes.add(name.into(), T::wrap_map(values));
+        Ok(())
+    }
+
+    /// Removes the custom attribute called `name`, in any domain.
+    ///
+    /// # Errors
+    /// If there's no attribute called `name`, or it's built-in.
+    pub fn remove_attribute(&mut self, name: &str) -> Result<(), AttributeError> {
+        if Attributes::RESERVED_NAMES.contains(&name) {
+            return Err(AttributeError::Reserved { name: name.into() });
+        }
+        if !self.attributes.remove(name) {
+            return Err(AttributeError::NotFound { name: name.into() });
+        }
+        Ok(())
+    }
+
+    /// Writes `values` to the attribute called `name`, built-in or custom, ignoring keys that
+    /// aren't in the mesh. Writing positions is a special case that triggers normals recomputation
+    /// on the faces using the written vertices. For writing positions, prefer
+    /// [`Self::translate_selected`], which amortizes  the overhead frame-to-frame by caching
+    /// derived sets of the selection.
+    ///
+    /// # Errors
+    /// Like [`Attributes::values`]. Writes nothing on error.
+    pub fn set_attribute_values<K: AttributeKey, T: AttributeValue>(
+        &mut self,
+        name: &str,
+        values: &[(K, T)],
+    ) -> Result<(), AttributeError> {
+        let map = self.attributes.values_mut::<K, T>(name)?;
+
+        // Write the provided values to the attribute map, collecting the keys that were successfully written.
+        let written: Vec<K> = values
+            .iter()
+            .filter_map(|&(key, value)| {
+                *map.get_mut(key)? = value;
+                Some(key)
+            })
+            .collect();
+
+        if written.is_empty() {
+            return Ok(());
+        }
+
+        let keys = written.iter().map(|key| key.data());
+        match name {
+            Attributes::POSITION => {
+                let verts: HashSet<_> = keys.map(VertKey::from).collect();
+                let faces: HashSet<_> = verts
+                    .iter()
+                    .flat_map(|&vert| self.topology.vert_faces(vert))
+                    .collect();
+                let loops = faces
+                    .iter()
+                    .flat_map(|&face| self.topology.face_loops(face))
+                    .collect();
+
+                Self::recompute_flat_normals(
+                    &self.topology,
+                    &mut self.attributes,
+                    faces.iter().copied(),
+                );
+
+                self.selection.invalidate_bounds();
+                self.emit_position_change(Rc::new(verts));
+                self.emit_normal_change(Rc::new(loops));
+            }
+            Attributes::NORMAL => {
+                self.emit_normal_change(Rc::new(keys.map(LoopKey::from).collect()));
+            }
+            Attributes::TEXCOORD_0 => {
+                let change = AttributeChange::Uv(Rc::new(keys.map(LoopKey::from).collect()));
+                self.changes.emit(MeshChange::Attributes(change));
+            }
+            _ => {}
+        }
+
+        Ok(())
     }
 
     /// Recompute flat normals on the selected faces.
@@ -202,6 +303,11 @@ impl Mesh {
         self.changes.subscribe()
     }
 
+    fn emit_position_change(&mut self, verts: Rc<HashSet<VertKey>>) {
+        self.changes
+            .emit(MeshChange::Attributes(AttributeChange::Position(verts)));
+    }
+
     fn emit_normal_change(&mut self, loops: Rc<Vec<LoopKey>>) {
         let change = AttributeChange::Normal(loops);
 
@@ -225,8 +331,9 @@ impl Mesh {
             }
             .normal();
 
+            let normals = attributes.normals_mut();
             for loop_key in topology.face_loops(key) {
-                attributes.normals.insert(loop_key, normal);
+                normals.insert(loop_key, normal);
             }
         }
     }
@@ -244,7 +351,8 @@ impl Mesh {
         let mut loops = Vec::new();
 
         for key in vertices {
-            let origin = attributes.positions[key].as_dvec3();
+            let positions = attributes.positions();
+            let origin = positions[key].as_dvec3();
             let mut normal = DVec3::ZERO;
 
             for loop_key in topology.vert_loops(key) {
@@ -266,16 +374,17 @@ impl Mesh {
 
                 let previous_vertex = topology.loops[corner.prev].vert;
                 let next_vertex = topology.loops[corner.next].vert;
-                let previous = attributes.positions[previous_vertex].as_dvec3() - origin;
-                let next = attributes.positions[next_vertex].as_dvec3() - origin;
+                let previous = positions[previous_vertex].as_dvec3() - origin;
+                let next = positions[next_vertex].as_dvec3() - origin;
 
                 normal += face_normal * corner_angle(previous, next, face_normal);
             }
 
             let normal = normal.normalize_or_zero().as_vec3();
 
+            let normals = attributes.normals_mut();
             for loop_key in topology.vert_loops(key) {
-                attributes.normals.insert(loop_key, normal);
+                normals.insert(loop_key, normal);
                 loops.push(loop_key);
             }
         }

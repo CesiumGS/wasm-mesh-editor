@@ -125,9 +125,10 @@ impl OverlayBuffers {
             faces,
         } = &component_keys;
 
+        let mesh_positions = mesh.attributes().positions();
         let positions = vertices
             .iter()
-            .map(|&key| mesh.attributes().positions[key].extend(0.0).to_array())
+            .map(|&key| mesh_positions[key].extend(0.0).to_array())
             .collect();
 
         let edge_endpoints = edges
@@ -314,12 +315,12 @@ impl TopologyOverlay {
 
     fn update_positions(&mut self, mesh: &Mesh, keys: impl IntoIterator<Item = VertKey>) {
         let mut dirty = DirtyRangeBuilder::new();
+        let positions = mesh.attributes().positions();
 
         for key in keys {
-            let (Some(&index), Some(position)) = (
-                self.vertex_key_to_buffer_index.get(key),
-                mesh.attributes().positions.get(key),
-            ) else {
+            let (Some(&index), Some(position)) =
+                (self.vertex_key_to_buffer_index.get(key), positions.get(key))
+            else {
                 continue;
             };
 

@@ -7,7 +7,11 @@ import { after, before, test } from "node:test";
 import { chromium } from "playwright";
 
 import init, {
+  AttributeComparison,
+  AttributeComponentType,
+  AttributeDomain,
   ComponentType,
+  CustomAttribute,
   Mesh,
   MeshEditor,
   SelectAction,
@@ -15,6 +19,7 @@ import init, {
   SelectionStep,
   TranslateTool,
   UpdateResult,
+  AttributeResult,
   topologyOverlayShaders,
 } from "../../mesh-editor/pkg/mesh-editor.js";
 
@@ -883,4 +888,564 @@ test("the default modifiers policy toggles with Shift, Ctrl, or Cmd", () => {
     assert.deepEqual(selected()[0], [], JSON.stringify(modifiers));
   }
   editor.free();
+});
+
+/**
+ * An editor with one active, vertex-mode mesh of two triangles. `_ID` is -1, 0, 1, 2 by vertex, and
+ * `_COLOR` is red at vertices 1 and 2.
+ */
+function attributeEditor() {
+  const editor = new MeshEditor();
+  const key = editor.addMesh(
+    Mesh.fromBuffers(
+      new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0, 0.5, 0, 0.5, 0.5, 0]),
+      new Uint32Array([0, 1, 2, 1, 3, 2]),
+      undefined,
+      undefined,
+      undefined,
+      [
+        CustomAttribute.int32("_ID", AttributeDomain.Vertex, 1, new Int32Array([-1, 0, 1, 2])),
+        CustomAttribute.float32(
+          "_COLOR",
+          AttributeDomain.Vertex,
+          3,
+          new Float32Array([0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0]),
+        ),
+      ],
+    ),
+  );
+  editor.setMode(1 << ComponentType.Vertex);
+  editor.setMeshActive(key);
+
+  return { editor, key };
+}
+
+/** Overlay indices of the selected vertices. */
+function selectedVerts(editor, key) {
+  const result = new UpdateResult();
+  editor.update(0, result);
+  result.free();
+
+  const { address, elementCount } = editor.overlayViews(key).selection.verts;
+  const values = new Uint8Array(memory.buffer, address, elementCount);
+  return [...values.keys()].filter((index) => values[index] & 1);
+}
+
+test("selectByAttribute compares scalar attributes", () => {
+  for (const [comparison, value, expected] of [
+    [AttributeComparison.Equal, 0, [1]],
+    [AttributeComparison.NotEqual, 0, [0, 2, 3]],
+    [AttributeComparison.Less, 1, [0, 1]],
+    [AttributeComparison.LessOrEqual, 1, [0, 1, 2]],
+    [AttributeComparison.Greater, 0, [2, 3]],
+    [AttributeComparison.GreaterOrEqual, 1, [2, 3]],
+  ]) {
+    const { editor, key } = attributeEditor();
+
+    assert.equal(
+      editor.selectByAttribute(key, "_ID", comparison, value),
+      AttributeResult.Ok,
+    );
+    assert.deepEqual(selectedVerts(editor, key), expected, AttributeComparison[comparison]);
+    editor.free();
+  }
+});
+
+test("selectByAttribute compares vector attributes for equality only", () => {
+  for (const [comparison, result, expected] of [
+    [AttributeComparison.Equal, AttributeResult.Ok, [1, 2]],
+    [AttributeComparison.NotEqual, AttributeResult.Ok, [0, 3]],
+    [AttributeComparison.Less, AttributeResult.UnsupportedComparison, []],
+    [AttributeComparison.GreaterOrEqual, AttributeResult.UnsupportedComparison, []],
+  ]) {
+    const { editor, key } = attributeEditor();
+
+    assert.equal(editor.selectByAttribute(key, "_COLOR", comparison, [1, 0, 0]), result);
+    assert.deepEqual(selectedVerts(editor, key), expected, AttributeComparison[comparison]);
+    editor.free();
+  }
+});
+
+test("selectByAttribute reports lookups that select nothing", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal } = AttributeComparison;
+
+  for (const [name, value, result] of [
+    ["_MISSING", 0, AttributeResult.AttributeNotFound],
+    ["_ID", 1.5, AttributeResult.WrongType],
+    ["_COLOR", 1, AttributeResult.WrongType],
+    ["_COLOR", [1, 0], AttributeResult.WrongType],
+  ]) {
+    assert.equal(editor.selectByAttribute(key, name, Equal, value), result, name);
+  }
+  assert.deepEqual(selectedVerts(editor, key), []);
+
+  editor.setMeshInactive(key);
+  assert.equal(
+    editor.selectByAttribute(key, "_ID", Equal, 0),
+    AttributeResult.MeshInactive,
+  );
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.selectByAttribute(key, "_ID", Equal, 0), /is not registered/);
+  editor.free();
+});
+
+/** Overlay indices of the vertices with `keys`, sorted. */
+function vertIndices(editor, key, keys) {
+  const vertKeys = readKeys(editor.overlayViews(key).componentKeys.verts);
+  return Array.from(keys, (vertKey) => vertKeys.indexOf(vertKey)).sort();
+}
+
+test("queryByAttribute returns matching keys without selecting them", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal, GreaterOrEqual } = AttributeComparison;
+
+  for (const [name, comparison, value, expected] of [
+    ["_ID", Equal, 0, [1]],
+    ["_ID", GreaterOrEqual, 0, [1, 2, 3]],
+    ["_COLOR", Equal, [1, 0, 0], [1, 2]],
+  ]) {
+    const { status, keys } = editor.queryByAttribute(key, name, comparison, value);
+    assert.equal(status, AttributeResult.Ok);
+    assert.ok(keys.verts instanceof BigUint64Array);
+    assert.deepEqual([keys.edges.length, keys.faces.length], [0, 0]);
+    assert.deepEqual(vertIndices(editor, key, keys.verts), expected, name);
+  }
+  assert.deepEqual(selectedVerts(editor, key), []);
+
+  editor.setMeshInactive(key);
+  const { keys } = editor.queryByAttribute(key, "_ID", Equal, 2);
+  assert.deepEqual(vertIndices(editor, key, keys.verts), [3]);
+
+  editor.setMeshActive(key);
+  editor.setSelection(key, keys);
+  assert.deepEqual(selectedVerts(editor, key), [3]);
+  editor.free();
+});
+
+/** `ComponentKeys` with no keys. */
+const noKeys = () => ({
+  verts: new BigUint64Array(),
+  edges: new BigUint64Array(),
+  faces: new BigUint64Array(),
+});
+
+test("componentKeys lists the requested types' keys in overlay order", () => {
+  const { editor, key } = edgeAndFaceEditor(ComponentType.Vertex);
+  const result = new UpdateResult();
+  editor.update(0, result);
+  result.free();
+
+  const all = (1 << ComponentType.Vertex) | (1 << ComponentType.Edge) | (1 << ComponentType.Face);
+  const keys = editor.componentKeys(key, all);
+  const overlay = editor.overlayViews(key).componentKeys;
+  assert.deepEqual([...keys.verts], readKeys(overlay.verts));
+  assert.deepEqual([...keys.edges], readKeys(overlay.edges));
+  assert.deepEqual([...keys.faces], readKeys(overlay.faces));
+  assert.deepEqual([keys.verts.length, keys.edges.length, keys.faces.length], [4, 5, 2]);
+
+  const edges = editor.componentKeys(key, 1 << ComponentType.Edge);
+  assert.deepEqual([edges.verts.length, edges.edges.length, edges.faces.length], [0, 5, 0]);
+  assert.deepEqual(editor.componentKeys(key, 0), noKeys());
+  assert.throws(() => editor.componentKeys(key, 8), /invalid component mask 8/);
+
+  const positions = new Float32Array(keys.verts.length * 3);
+  editor.attributeValues(key, "POSITION", keys.verts, positions);
+  assert.deepEqual([...positions.slice(0, 3)], [-0.5, -0.5, 0]);
+
+  editor.setMeshInactive(key);
+  assert.equal(editor.componentKeys(key, 1 << ComponentType.Face).faces.length, 2);
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.componentKeys(key, all), /is not registered/);
+  editor.free();
+});
+
+test("queryByAttribute reports failed lookups with no keys", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal, Less } = AttributeComparison;
+
+  for (const [name, comparison, value, status] of [
+    ["_MISSING", Equal, 0, AttributeResult.AttributeNotFound],
+    ["_ID", Equal, 1.5, AttributeResult.WrongType],
+    ["_COLOR", Equal, [1, 0], AttributeResult.WrongType],
+    ["_COLOR", Less, [1, 0, 0], AttributeResult.UnsupportedComparison],
+  ]) {
+    const result = editor.queryByAttribute(key, name, comparison, value);
+    assert.deepEqual(result, { status, keys: noKeys() }, name);
+  }
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.queryByAttribute(key, "_ID", Equal, 0), /is not registered/);
+  editor.free();
+});
+
+test("attributeValues reads values by key in the form selectByAttribute takes", () => {
+  const { editor, key } = attributeEditor();
+  const [vert0, vert1, vert2] = readKeys(editor.overlayViews(key).componentKeys.verts);
+
+  const ids = new Int32Array(2);
+  assert.equal(
+    editor.attributeValues(key, "_ID", BigUint64Array.of(vert2, vert0), ids),
+    AttributeResult.Ok,
+  );
+  assert.deepEqual([...ids], [1, -1]);
+
+  const color = new Float32Array(3);
+  editor.attributeValues(key, "_COLOR", BigUint64Array.of(vert1), color);
+  assert.deepEqual([...color], [1, 0, 0]);
+  editor.selectByAttribute(key, "_COLOR", AttributeComparison.Equal, color);
+  assert.deepEqual(selectedVerts(editor, key), [1, 2]);
+
+  const positions = new Float32Array(6);
+  editor.attributeValues(key, "POSITION", BigUint64Array.of(vert0, vert2), positions);
+  assert.deepEqual([...positions], [-0.5, -0.5, 0, 0, 0.5, 0]);
+
+  editor.setMeshInactive(key);
+  editor.attributeValues(key, "_ID", BigUint64Array.of(0n, vert1), ids, 99);
+  assert.deepEqual([...ids], [99, 0]);
+  editor.free();
+});
+
+test("attributeValues reports failed reads and throws for a wrong out", () => {
+  const { editor, key } = attributeEditor();
+  const [vert0] = readKeys(editor.overlayViews(key).componentKeys.verts);
+  const keys = BigUint64Array.of(vert0);
+  const { AttributeNotFound, KeyNotFound, UnsupportedDomain, WrongType } = AttributeResult;
+
+  for (const [name, keys_, out, noData, result] of [
+    ["_MISSING", keys, new Int32Array(1), undefined, AttributeNotFound],
+    ["NORMAL", keys, new Float32Array(3), undefined, UnsupportedDomain],
+    ["_ID", BigUint64Array.of(vert0, 0n), new Int32Array([5, 5]), undefined, KeyNotFound],
+    ["_ID", BigUint64Array.of(0n), new Int32Array([5]), 1.5, WrongType],
+    ["_COLOR", keys, new Float32Array([5, 5, 5]), [1, 0], WrongType],
+  ]) {
+    const before = [...out];
+    assert.equal(editor.attributeValues(key, name, keys_, out, noData), result, name);
+    assert.deepEqual([...out], before, name);
+  }
+
+  for (const [out, error] of [
+    [new Float32Array(1), /out is not an Int32Array/],
+    [new Int32Array(2), /out length 2 is not 1/],
+  ]) {
+    assert.throws(() => editor.attributeValues(key, "_ID", keys, out), error);
+  }
+
+  editor.removeMesh(key).free();
+  assert.throws(
+    () => editor.attributeValues(key, "_ID", keys, new Int32Array(1)),
+    /is not registered/,
+  );
+  editor.free();
+});
+
+test("setAttributeValues writes values by key and ignores unknown keys", () => {
+  const { editor, key } = attributeEditor();
+  const [vert0, , vert2] = readKeys(editor.overlayViews(key).componentKeys.verts);
+  const read = (name, keys, out) => (editor.attributeValues(key, name, keys, out), [...out]);
+
+  assert.equal(
+    editor.setAttributeValues(key, "_ID", BigUint64Array.of(vert2, 0n), new Int32Array([7, 8])),
+    AttributeResult.Ok,
+  );
+  assert.deepEqual(read("_ID", BigUint64Array.of(vert0, vert2), new Int32Array(2)), [-1, 7]);
+
+  const moved = new Float32Array([0, 0.5, 1]);
+  assert.equal(
+    editor.setAttributeValues(key, "POSITION", BigUint64Array.of(vert2), moved),
+    AttributeResult.Ok,
+  );
+  assert.deepEqual(read("POSITION", BigUint64Array.of(vert2), new Float32Array(3)), [0, 0.5, 1]);
+
+  const result = new UpdateResult();
+  editor.update(0, result);
+  result.free();
+  const view = editor.overlayViews(key).positions;
+  const overlayPositions = new Float32Array(memory.buffer, view.address, view.elementCount * 4);
+  assert.deepEqual([...overlayPositions.slice(8, 11)], [0, 0.5, 1]);
+
+  assert.throws(
+    () => editor.setAttributeValues(key, "_ID", BigUint64Array.of(vert0), new Uint32Array(1)),
+    /values is not an Int32Array/,
+  );
+  for (const [name, result] of [
+    ["NORMAL", AttributeResult.UnsupportedDomain],
+    ["_MISSING", AttributeResult.AttributeNotFound],
+  ]) {
+    const values = new Float32Array(3);
+    assert.equal(editor.setAttributeValues(key, name, BigUint64Array.of(vert0), values), result);
+  }
+
+  editor.setMeshInactive(key);
+  assert.equal(
+    editor.setAttributeValues(key, "_ID", BigUint64Array.of(vert0), new Int32Array([5])),
+    AttributeResult.MeshInactive,
+  );
+  assert.deepEqual(read("_ID", BigUint64Array.of(vert0), new Int32Array(1)), [-1]);
+  editor.free();
+});
+
+/**
+ * An editor with one active mesh of two triangles, interactable in `mode`. `_FEATURE` is 3 on the
+ * first face and 4 on the second, and `_CREASE` is 1 on the shared edge and 0 on the others.
+ */
+function edgeAndFaceEditor(mode) {
+  const editor = new MeshEditor();
+  const key = editor.addMesh(
+    Mesh.fromBuffers(
+      new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0, 0.5, 0, 0.5, 0.5, 0]),
+      new Uint32Array([0, 1, 2, 1, 3, 2]),
+      undefined,
+      undefined,
+      undefined,
+      [
+        CustomAttribute.uint32("_FEATURE", AttributeDomain.Face, 1, new Uint32Array([3, 4])),
+        CustomAttribute.uint32(
+          "_CREASE",
+          AttributeDomain.Edge,
+          1,
+          new Uint32Array([1]),
+          new Uint32Array([0]),
+        ),
+        CustomAttribute.float32("_CORNER", AttributeDomain.Corner, 1, new Float32Array(6)),
+      ],
+      new Uint32Array([2, 1]),
+    ),
+  );
+  editor.setMode(1 << mode);
+  editor.setMeshActive(key);
+
+  return { editor, key };
+}
+
+test("addAttribute adds a writable attribute with a default value", () => {
+  const { editor, key } = attributeEditor();
+  const { Ok } = AttributeResult;
+  const mask = (1 << ComponentType.Vertex) | (1 << ComponentType.Edge);
+  const { verts, edges } = editor.componentKeys(key, mask);
+
+  assert.equal(
+    editor.addAttribute(key, "_WEIGHT", AttributeDomain.Vertex, new Float32Array([0.5])),
+    Ok,
+  );
+  assert.equal(
+    editor.addAttribute(key, "_CELL", AttributeDomain.Edge, new Int32Array([-1, 2])),
+    Ok,
+  );
+  assert.equal(
+    editor.addAttribute(key, "_SEAM", AttributeDomain.Corner, new Uint32Array([0])),
+    Ok,
+  );
+
+  const weights = new Float32Array(verts.length);
+  editor.attributeValues(key, "_WEIGHT", verts, weights);
+  assert.deepEqual([...weights], [0.5, 0.5, 0.5, 0.5]);
+  const cells = new Int32Array(edges.length * 2);
+  editor.attributeValues(key, "_CELL", edges, cells);
+  assert.deepEqual([...cells.slice(0, 4)], [-1, 2, -1, 2]);
+
+  editor.setAttributeValues(key, "_WEIGHT", verts.subarray(1, 2), new Float32Array([2]));
+  editor.attributeValues(key, "_WEIGHT", verts, weights);
+  assert.deepEqual([...weights], [0.5, 2, 0.5, 0.5]);
+
+  const added = editor
+    .meshAttributes(key)
+    .map(({ name, domain, componentCount }) => [name, domain, componentCount])
+    .filter(([name]) => ["_WEIGHT", "_CELL", "_SEAM"].includes(name));
+  assert.deepEqual(
+    added,
+    [
+      ["_WEIGHT", AttributeDomain.Vertex, 1],
+      ["_CELL", AttributeDomain.Edge, 2],
+      ["_SEAM", AttributeDomain.Corner, 1],
+    ],
+  );
+  editor.free();
+});
+
+test("addAttribute and removeAttribute report failures", () => {
+  const { editor, key } = attributeEditor();
+  const { Vertex } = AttributeDomain;
+  const { AttributeNotFound, MeshInactive, NameInUse, Ok, Reserved, WrongType } = AttributeResult;
+
+  for (const [name, defaultValue, result] of [
+    ["_ID", new Int32Array([0]), NameInUse],
+    ["POSITION", new Float32Array(3), Reserved],
+    ["_NEW", new Float32Array(5), WrongType],
+    ["_NEW", new Float32Array(0), WrongType],
+    ["_NEW", new Float64Array([1]), WrongType],
+    ["_NEW", [1], WrongType],
+  ]) {
+    assert.equal(editor.addAttribute(key, name, Vertex, defaultValue), result, name);
+  }
+
+  assert.equal(editor.removeAttribute(key, "_ID"), Ok);
+  assert.equal(editor.removeAttribute(key, "_ID"), AttributeNotFound);
+  assert.equal(editor.removeAttribute(key, "NORMAL"), Reserved);
+  assert.equal(editor.addAttribute(key, "_ID", Vertex, new Float32Array([1])), Ok);
+
+  editor.setMeshInactive(key);
+  assert.equal(editor.addAttribute(key, "_X", Vertex, new Float32Array([1])), MeshInactive);
+  assert.equal(editor.removeAttribute(key, "_ID"), MeshInactive);
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.removeAttribute(key, "_ID"), /is not registered/);
+  editor.free();
+});
+
+test("selectByAttribute and queryByAttribute operate on edges and faces", () => {
+  const { Equal } = AttributeComparison;
+
+  const faces = edgeAndFaceEditor(ComponentType.Face);
+  assert.equal(faces.editor.selectByAttribute(faces.key, "_FEATURE", Equal, 4), AttributeResult.Ok);
+  const faceKeys = readKeys(faces.editor.overlayViews(faces.key).componentKeys.faces);
+  assert.deepEqual(faces.editor.selectedComponents(faces.key).faces, BigUint64Array.of(faceKeys[1]));
+  faces.editor.free();
+
+  const edges = edgeAndFaceEditor(ComponentType.Edge);
+  const { status, keys } = edges.editor.queryByAttribute(edges.key, "_CREASE", Equal, 1);
+  assert.equal(status, AttributeResult.Ok);
+  const crease = new Uint32Array(1);
+  edges.editor.attributeValues(edges.key, "_CREASE", keys.edges, crease);
+  assert.deepEqual([keys.verts.length, keys.edges.length, crease[0]], [0, 1, 1]);
+  const { keys: others } = edges.editor.queryByAttribute(edges.key, "_CREASE", Equal, 0);
+  assert.equal(others.edges.length, 4);
+
+  assert.equal(
+    edges.editor.selectByAttribute(edges.key, "_CORNER", Equal, 0),
+    AttributeResult.UnsupportedDomain,
+  );
+  assert.deepEqual(edges.editor.queryByAttribute(edges.key, "_CORNER", Equal, 0), {
+    status: AttributeResult.UnsupportedDomain,
+    keys: noKeys(),
+  });
+  edges.editor.free();
+});
+
+/** An editor like `attributeEditor`'s with integer vector attributes: `_CELL` (ivec2) is equal at
+ * vertices 1 and 2, and `_MASK` (uvec4) at vertices 0 and 3. */
+function integerVectorEditor() {
+  const editor = new MeshEditor();
+  const key = editor.addMesh(
+    Mesh.fromBuffers(
+      new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0, 0.5, 0, 0.5, 0.5, 0]),
+      new Uint32Array([0, 1, 2, 1, 3, 2]),
+      undefined,
+      undefined,
+      undefined,
+      [
+        CustomAttribute.int32(
+          "_CELL",
+          AttributeDomain.Vertex,
+          2,
+          new Int32Array([0, 0, 1, -1, 1, -1, 2, 0]),
+        ),
+        CustomAttribute.uint32(
+          "_MASK",
+          AttributeDomain.Vertex,
+          4,
+          new Uint32Array([1, 2, 3, 4, 0, 0, 0, 0, 5, 6, 7, 8, 1, 2, 3, 4]),
+        ),
+      ],
+    ),
+  );
+  editor.setMode(1 << ComponentType.Vertex);
+  editor.setMeshActive(key);
+
+  return { editor, key };
+}
+
+test("integer vector attributes read back and compare for equality only", () => {
+  const { Equal, NotEqual, Less } = AttributeComparison;
+
+  for (const [name, comparison, value, result, expected] of [
+    ["_CELL", Equal, [1, -1], AttributeResult.Ok, [1, 2]],
+    ["_CELL", NotEqual, [1, -1], AttributeResult.Ok, [0, 3]],
+    ["_MASK", Equal, new Uint32Array([1, 2, 3, 4]), AttributeResult.Ok, [0, 3]],
+    ["_CELL", Less, [1, -1], AttributeResult.UnsupportedComparison, []],
+    ["_CELL", Equal, [1, -1, 0], AttributeResult.WrongType, []],
+    ["_CELL", Equal, [1.5, -1], AttributeResult.WrongType, []],
+    ["_CELL", Equal, 1, AttributeResult.WrongType, []],
+    ["_MASK", Equal, [-1, 2, 3, 4], AttributeResult.WrongType, []],
+  ]) {
+    const { editor, key } = integerVectorEditor();
+
+    assert.equal(editor.selectByAttribute(key, name, comparison, value), result, name);
+    assert.deepEqual(selectedVerts(editor, key), expected, `${name} ${value}`);
+    editor.free();
+  }
+
+  const { editor, key } = integerVectorEditor();
+  const [vert0, vert1] = readKeys(editor.overlayViews(key).componentKeys.verts);
+  const cell = new Int32Array(2);
+  editor.attributeValues(key, "_CELL", BigUint64Array.of(vert1), cell);
+  assert.deepEqual([...cell], [1, -1]);
+  const mask = new Uint32Array(4);
+  editor.attributeValues(key, "_MASK", BigUint64Array.of(vert0), mask);
+  assert.deepEqual([...mask], [1, 2, 3, 4]);
+  editor.free();
+});
+
+test("meshAttributes lists attributes by domain with their types", () => {
+  const { Vertex, Corner } = AttributeDomain;
+  const { Float32, Int32 } = AttributeComponentType;
+  const editor = new MeshEditor();
+
+  const withoutUvs = editor.addMesh(
+    Mesh.fromBuffers(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), new Uint32Array([0, 1, 2])),
+  );
+  assert.deepEqual(editor.meshAttributes(withoutUvs), [
+    { name: "POSITION", domain: Vertex, componentType: Float32, componentCount: 3 },
+    { name: "NORMAL", domain: Corner, componentType: Float32, componentCount: 3 },
+  ]);
+
+  const custom = integerVectorEditor();
+  assert.deepEqual(
+    custom.editor.meshAttributes(custom.key).map(({ name }) => name),
+    ["POSITION", "_CELL", "_MASK", "NORMAL"],
+  );
+  assert.deepEqual(custom.editor.meshAttributes(custom.key)[1], {
+    name: "_CELL",
+    domain: Vertex,
+    componentType: Int32,
+    componentCount: 2,
+  });
+  custom.editor.free();
+
+  const withUvs = editor.addMesh(
+    Mesh.fromBuffers(
+      new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      new Uint32Array([0, 1, 2]),
+      undefined,
+      new Float32Array([0, 0, 1, 0, 0, 1]),
+      undefined,
+      [CustomAttribute.float32("_COLOR", Corner, 4, new Float32Array(12))],
+    ),
+  );
+  assert.deepEqual(editor.meshAttributes(withUvs).slice(2), [
+    { name: "TEXCOORD_0", domain: Corner, componentType: Float32, componentCount: 2 },
+    { name: "_COLOR", domain: Corner, componentType: Float32, componentCount: 4 },
+  ]);
+
+  editor.free();
+});
+
+test("CustomAttribute constructors throw for a componentCount that doesn't fit the values", () => {
+  const { Vertex } = AttributeDomain;
+
+  for (const create of [
+    () => CustomAttribute.uint32("_A", Vertex, 0, new Uint32Array(4)),
+    () => CustomAttribute.int32("_A", Vertex, 5, new Int32Array(5)),
+    () => CustomAttribute.float32("_A", Vertex, 0, new Float32Array(4)),
+  ]) {
+    assert.throws(create, /_A componentCount \d is not 1, 2, 3 or 4/);
+  }
+
+  for (const create of [
+    () => CustomAttribute.uint32("_A", Vertex, 3, new Uint32Array(4)),
+    () => CustomAttribute.int32("_A", Vertex, 2, new Int32Array(3)),
+  ]) {
+    assert.throws(create, /_A length \d is not a multiple of \d/);
+  }
 });

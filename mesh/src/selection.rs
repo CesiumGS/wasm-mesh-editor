@@ -14,8 +14,9 @@ use event_emitter::EventEmitter;
 use glam::Vec3;
 
 use crate::{
-    Aabb, Attributes, ComponentKey, ComponentKeys, ComponentMask, ComponentRef, ComponentType,
-    EdgeKey, FaceKey, MeshChange, SelectionChange, Topology, VertKey,
+    Aabb, AttributeError, AttributeKey, AttributeValue, Attributes, ComponentKey, ComponentKeys,
+    ComponentMask, ComponentRef, ComponentType, EdgeKey, FaceKey, MeshChange, SelectionChange,
+    Topology, VertKey,
 };
 
 /// A component kind that can be selected: the three handle types and
@@ -65,21 +66,22 @@ impl SelectionState {
 
     /// `None` for an empty selection.
     pub(crate) fn selected_bounds(&self, attrs: &Attributes) -> Option<Aabb> {
-        *self
-            .bounds
-            .selected
-            .get_or_init(|| Aabb::from_points(self.verts.iter().map(|&key| attrs.positions[key])))
+        *self.bounds.selected.get_or_init(|| {
+            let positions = attrs.positions();
+            Aabb::from_points(self.verts.iter().map(|&key| positions[key]))
+        })
     }
 
     /// The bounds for the entire mesh -- combining the bounds of the selected components and unselected components. `None` for an empty mesh.
     pub(crate) fn mesh_bounds(&self, topo: &Topology, attrs: &Attributes) -> Option<Aabb> {
         let selected = self.selected_bounds(attrs);
         let unselected = *self.bounds.unselected.get_or_init(|| {
+            let positions = attrs.positions();
             Aabb::from_points(
                 topo.verts
                     .keys()
                     .filter(|key| !self.verts.contains(key))
-                    .map(|key| attrs.positions[key]),
+                    .map(|key| positions[key]),
             )
         });
 
@@ -277,6 +279,23 @@ impl<'a> Selection<'a> {
         let delta = self.apply_action(keys, Action::Toggle, self.state.level);
 
         self.emit_change(delta);
+    }
+
+    /// Selects every component whose `name` attribute satisfies `predicate`, such as
+    /// `|id: u32| id == 7`. Works just like [`Self::select`], so it does nothing unless `K`'s
+    /// components are selectable.
+    ///
+    /// # Errors
+    /// Like [`Attributes::values`].
+    pub fn select_by_attribute<K: AttributeKey + SelectionKind, T: AttributeValue>(
+        &mut self,
+        name: &str,
+        predicate: impl Fn(T) -> bool,
+    ) -> Result<(), AttributeError> {
+        let keys: Vec<K> = self.attrs.keys_where(name, predicate)?.collect();
+
+        self.select(&keys);
+        Ok(())
     }
 
     /// Clears all selected components, regardless of the current mode.
