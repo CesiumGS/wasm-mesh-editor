@@ -164,11 +164,12 @@ impl AttributeBuffer {
     }
 
     /// Like [`Self::into_map`], also giving every key in `all_keys` that `keys` doesn't list
-    /// `default`'s single value. `default` must hold one value of the same type.
+    /// `default`'s single value, or zero if `default` is `None`. `default` must hold one value of the
+    /// same type.
     pub(crate) fn into_map_with_default<K: Key>(
         self,
         keys: impl IntoIterator<Item = K>,
-        default: &AttributeBuffer,
+        default: Option<&AttributeBuffer>,
         all_keys: impl IntoIterator<Item = K>,
     ) -> AttributeMap<K> {
         match_variants!(Self, self, values => zip_map_with_default(keys, values, default, all_keys))
@@ -189,11 +190,13 @@ fn zip_map<K: Key, T: AttributeValue>(
 fn zip_map_with_default<K: Key, T: AttributeValue>(
     keys: impl IntoIterator<Item = K>,
     values: Vec<T>,
-    default: &AttributeBuffer,
+    default: Option<&AttributeBuffer>,
     all_keys: impl IntoIterator<Item = K>,
 ) -> AttributeMap<K> {
     // First write default value for all keys in `all_keys`
-    let default = T::from_buffer(default).expect("default must match the values' type")[0];
+    let default = default.map_or_else(T::default, |default| {
+        T::from_buffer(default).expect("default must match the values' type")[0]
+    });
 
     // Then overwrite with the provided values for the keys in `keys`
     let mut map: SecondaryMap<K, T> = all_keys.into_iter().map(|key| (key, default)).collect();
@@ -205,7 +208,7 @@ fn zip_map_with_default<K: Key, T: AttributeValue>(
 /// of one (`Vec2`..`Vec4`, `UVec2`..`UVec4`, `IVec2`..`IVec4`).
 /// Used to request typed values, as in [`AttributeMap::typed`]. Sealed; it can't be implemented
 /// outside this crate.
-pub trait AttributeValue: Copy + 'static + sealed::Sealed {
+pub trait AttributeValue: Copy + Default + 'static + sealed::Sealed {
     /// The attribute type with values of this type.
     const VALUE_TYPE: AttributeType;
 }

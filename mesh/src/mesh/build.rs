@@ -42,8 +42,9 @@ pub struct MeshBuffers {
 pub struct EdgeAttributeBuffer {
     pub name: String,
     pub values: AttributeBuffer,
-    /// One value of the same type, for the edges that `edge_indices` doesn't list.
-    pub default: AttributeBuffer,
+    /// One value of the same type, for the edges that `edge_indices` doesn't list. `None` means
+    /// zero.
+    pub default: Option<AttributeBuffer>,
 }
 
 /// Invalid input buffers supplied to [`Mesh::from_buffers`].
@@ -336,7 +337,9 @@ impl MeshBuffers {
             default,
         } in &self.edge_attributes
         {
-            if default.len() != 1 || discriminant(default) != discriminant(values) {
+            if default.as_ref().is_some_and(|default| {
+                default.len() != 1 || discriminant(default) != discriminant(values)
+            }) {
                 return Err(MeshBuildError::InvalidDefault { name: name.clone() });
             }
         }
@@ -446,7 +449,7 @@ fn add_custom_attributes(
     {
         let values = values.into_map_with_default(
             listed_edges.iter().copied(),
-            &default,
+            default.as_ref(),
             edges.values().copied(),
         );
         mesh.attributes.add(name, values);

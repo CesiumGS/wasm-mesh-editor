@@ -2138,12 +2138,12 @@ fn edge_value<T: AttributeValue>(mesh: &Mesh, name: &str, a: usize, b: usize) ->
 fn edge_attribute(
     name: &str,
     values: AttributeBuffer,
-    default: AttributeBuffer,
+    default: impl Into<Option<AttributeBuffer>>,
 ) -> EdgeAttributeBuffer {
     EdgeAttributeBuffer {
         name: name.into(),
         values,
-        default,
+        default: default.into(),
     }
 }
 
@@ -2175,6 +2175,21 @@ fn builds_edge_attributes_with_defaults_for_unlisted_edges() {
     }
     assert_eq!(edge_value::<i32>(&mesh, "_ID", 0, 1), None);
     assert_eq!(edge_value::<u32>(&mesh, "_MISSING", 0, 1), None);
+}
+
+#[test]
+fn edge_attributes_default_to_zero_when_no_default_is_given() {
+    let mut options = quad_and_triangle_buffers();
+    options.edge_indices = vec![0, 1];
+    options.edge_attributes = vec![
+        edge_attribute("_ID", AttributeBuffer::U32(vec![10]), None),
+        edge_attribute("_UV", AttributeBuffer::Vec2(vec![Vec2::ONE]), None),
+    ];
+    let mesh = Mesh::from_buffers(options).unwrap();
+
+    assert_eq!(edge_value(&mesh, "_ID", 0, 1), Some(10u32));
+    assert_eq!(edge_value(&mesh, "_ID", 1, 2), Some(0u32));
+    assert_eq!(edge_value(&mesh, "_UV", 1, 2), Some(Vec2::ZERO));
 }
 
 #[test]

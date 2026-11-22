@@ -43,10 +43,10 @@ macro_rules! by_component_count {
 #[wasm_bindgen]
 impl CustomAttribute {
     /// Float values with 1 to 4 components each (scalar, vec2, vec3 or vec4), flattened.
-    /// `Edge` attributes require `defaultValue`, one value for the edges `edgeIndices` doesn't
-    /// list, and other domains don't take one.
+    /// `Edge` attributes may take `defaultValue`, one value for the edges `edgeIndices` doesn't
+    /// list, which is zero when omitted. Other domains don't take one.
     /// Throws if `componentCount` is out of range or doesn't divide the length of `values`, or for
-    /// a missing or unexpected `defaultValue`.
+    /// an unexpected `defaultValue`.
     pub fn float32(
         name: String,
         domain: AttributeDomain,
@@ -131,9 +131,9 @@ impl CustomAttribute {
         values: AttributeBuffer,
         default: Option<AttributeBuffer>,
     ) -> Result<Self, JsError> {
-        if (domain == AttributeDomain::Edge) != default.is_some() {
+        if domain != AttributeDomain::Edge && default.is_some() {
             return Err(JsError::new(&format!(
-                "{name} defaultValue is required for Edge attributes and not allowed for others"
+                "{name} defaultValue is only allowed for Edge attributes"
             )));
         }
 
@@ -196,7 +196,7 @@ fn add_custom_attributes(buffers: &mut MeshBuffers, attributes: Vec<CustomAttrib
             AttributeDomain::Edge => buffers.edge_attributes.push(EdgeAttributeBuffer {
                 name,
                 values,
-                default: default.expect("CustomAttribute::new requires an edge default"),
+                default,
             }),
         }
     }
