@@ -265,8 +265,10 @@ fn assert_empty_editor(editor: &MeshEditor) {
     assert_eq!(editor.active_tool(), None);
 }
 
-fn assert_no_overlay_changes(buffers: &OverlayBuffers) {
-    assert!(!buffers.full_refresh);
+fn assert_no_overlay_changes(editor: &MeshEditor, key: MeshKey) {
+    assert!(!editor.overlay(key).unwrap().full_refresh());
+
+    let buffers = editor.overlay_buffers(key).unwrap();
     assert!(buffers.positions.dirty_range.is_none());
     assert!(buffers.edges.dirty_range.is_none());
     assert!(buffers.triangles.dirty_range.is_none());
@@ -302,8 +304,8 @@ fn update_without_tools_uploads_all_registered_meshes_once() {
     let empty = editor.add_mesh(Mesh::new());
     let triangle = editor.add_mesh(triangle_mesh());
 
-    assert!(editor.overlay_buffers(empty).unwrap().full_refresh);
-    assert!(editor.overlay_buffers(triangle).unwrap().full_refresh);
+    assert!(editor.overlay(empty).unwrap().full_refresh());
+    assert!(editor.overlay(triangle).unwrap().full_refresh());
     assert_eq!(
         editor
             .overlay_buffers(triangle)
@@ -321,7 +323,7 @@ fn update_without_tools_uploads_all_registered_meshes_once() {
     for &key in &result.changed_overlays {
         let buffers = editor.overlay_buffers(key).unwrap();
 
-        assert!(buffers.full_refresh);
+        assert!(editor.overlay(key).unwrap().full_refresh());
         assert!(std::ptr::eq(buffers, editor.overlay_buffers(key).unwrap()));
         assert!(std::ptr::eq(
             buffers,
@@ -351,8 +353,8 @@ fn update_without_tools_uploads_all_registered_meshes_once() {
     editor.update(0.016, &mut result);
 
     assert!(result.changed_overlays.is_empty());
-    assert_no_overlay_changes(editor.overlay_buffers(empty).unwrap());
-    assert_no_overlay_changes(editor.overlay_buffers(triangle).unwrap());
+    assert_no_overlay_changes(&editor, empty);
+    assert_no_overlay_changes(&editor, triangle);
     assert_eq!(
         editor
             .overlay_buffers(triangle)
@@ -365,15 +367,64 @@ fn update_without_tools_uploads_all_registered_meshes_once() {
 
     let added = editor.add_mesh(triangle_mesh());
 
-    assert!(editor.overlay_buffers(added).unwrap().full_refresh);
+    assert!(editor.overlay(added).unwrap().full_refresh());
     editor.update(0.016, &mut result);
 
     assert_eq!(result.changed_overlays, vec![added]);
     assert_eq!(result.changed_overlays.capacity(), capacity);
     assert_eq!(result.changed_overlays.as_ptr(), allocation);
-    assert_no_overlay_changes(editor.overlay_buffers(empty).unwrap());
-    assert_no_overlay_changes(editor.overlay_buffers(triangle).unwrap());
-    assert!(editor.overlay_buffers(added).unwrap().full_refresh);
+    assert_no_overlay_changes(&editor, empty);
+    assert_no_overlay_changes(&editor, triangle);
+    assert!(editor.overlay(added).unwrap().full_refresh());
+}
+
+#[test]
+fn update_reports_meshes_whose_selection_changed() {
+    let mut editor = MeshEditor::new();
+    let mut result = UpdateResult::default();
+    let first = editor.add_mesh(triangle_mesh());
+    let second = editor.add_mesh(triangle_mesh());
+    let verts: Vec<_> = editor.meshes[first].topology().verts().collect();
+
+    editor.update(0.0, &mut result);
+
+    editor.meshes[first].selection_mut().select(&[verts[0]]);
+    editor.meshes[first].selection_mut().select(&[verts[1]]);
+    editor.update(0.0, &mut result);
+
+    assert_eq!(result.selection_changed_meshes, vec![first]);
+
+    editor.update(0.0, &mut result);
+
+    assert!(result.selection_changed_meshes.is_empty());
+
+    editor.meshes[first].selection_mut().select(&[verts[0]]);
+    editor.update(0.0, &mut result);
+
+    assert!(result.selection_changed_meshes.is_empty());
+
+    editor.meshes[first].selection_mut().clear();
+    editor.update(0.0, &mut result);
+
+    assert_eq!(result.selection_changed_meshes, vec![first]);
+    assert!(!result.selection_changed_meshes.contains(&second));
+}
+
+#[test]
+fn update_does_not_report_selection_changed_for_other_overlay_changes() {
+    let mut editor = MeshEditor::new();
+    let mut result = UpdateResult::default();
+    let key = editor.add_mesh(triangle_mesh());
+
+    let vertex = editor.meshes[key].topology().verts().next().unwrap();
+
+    editor.meshes[key].selection_mut().select(&[vertex]);
+    editor.update(0.0, &mut result);
+    editor.meshes[key].translate_selected(glam::Vec3::X);
+    editor.update(0.0, &mut result);
+
+    assert_eq!(result.changed_overlays, vec![key]);
+    assert!(result.selection_changed_meshes.is_empty());
 }
 
 #[test]
@@ -414,13 +465,13 @@ fn update_applies_active_tool_configuration_and_edits_in_the_same_frame() {
 
     let buffers = editor.overlay_buffers(active).unwrap();
 
-    assert!(!buffers.full_refresh);
+    assert!(!editor.overlay(active).unwrap().full_refresh());
     assert_eq!(buffers.positions.data.as_ptr(), positions);
     assert_eq!(buffers.positions.data[0], [2.0, 0.0, 0.0, 0.0]);
     assert_eq!(buffers.positions.dirty_range, Some(0..1));
     assert_eq!(buffers.selection.verts.data, vec![255, 0, 0]);
     assert_eq!(buffers.selection.verts.dirty_range, Some(0..1));
-    assert_no_overlay_changes(editor.overlay_buffers(inactive).unwrap());
+    assert_no_overlay_changes(&editor, inactive);
 
     let mesh = editor.mesh(active).unwrap();
     let vertex = mesh.topology().verts().next().unwrap();
@@ -434,8 +485,8 @@ fn update_applies_active_tool_configuration_and_edits_in_the_same_frame() {
     editor.update(0.5, &mut result);
 
     assert!(result.changed_overlays.is_empty());
-    assert_no_overlay_changes(editor.overlay_buffers(active).unwrap());
-    assert_no_overlay_changes(editor.overlay_buffers(inactive).unwrap());
+    assert_no_overlay_changes(&editor, active);
+    assert_no_overlay_changes(&editor, inactive);
     assert_eq!(
         editor.overlay_buffers(active).unwrap().positions.data[0],
         [2.0, 0.0, 0.0, 0.0]
@@ -507,7 +558,7 @@ fn update_processes_cancellation_changes_after_mesh_deactivation() {
 
     let buffers = editor.overlay_buffers(key).unwrap();
 
-    assert!(!buffers.full_refresh);
+    assert!(!editor.overlay(key).unwrap().full_refresh());
     assert_eq!(buffers.selection.verts.data, vec![0, 0, 0]);
     assert_eq!(buffers.selection.verts.dirty_range, Some(0..1));
     assert!(editor.active_meshes().is_empty());
@@ -515,7 +566,7 @@ fn update_processes_cancellation_changes_after_mesh_deactivation() {
     editor.update(0.016, &mut result);
 
     assert!(result.changed_overlays.is_empty());
-    assert_no_overlay_changes(editor.overlay_buffers(key).unwrap());
+    assert_no_overlay_changes(&editor, key);
     assert_eq!(
         editor.overlay_buffers(key).unwrap().selection.verts.data,
         vec![0, 0, 0]
@@ -537,13 +588,13 @@ fn update_does_not_expose_buffers_for_removed_mesh_keys() {
 
     let replacement = editor.add_mesh(Mesh::new());
 
-    assert!(editor.overlay_buffers(replacement).unwrap().full_refresh);
+    assert!(editor.overlay(replacement).unwrap().full_refresh());
     editor.update(0.016, &mut result);
 
     assert_eq!(result.changed_overlays, vec![replacement]);
     assert!(editor.overlay_buffers(removed).is_none());
     assert!(editor.overlay_buffers(MeshKey::null()).is_none());
-    assert!(editor.overlay_buffers(replacement).unwrap().full_refresh);
+    assert!(editor.overlay(replacement).unwrap().full_refresh());
 }
 
 #[test]
@@ -643,9 +694,10 @@ fn add_mesh_registers_inactive_mesh_and_builds_overlay() {
     assert_eq!(mesh.selection().level(), ComponentMask::VERTEX);
     assert!(mesh.selection().contains(vertex));
 
-    let buffers = editor.overlays[key].update(&editor.meshes[key]).unwrap();
+    let update = editor.overlays[key].update(&editor.meshes[key]).unwrap();
+    let buffers = update.buffers;
 
-    assert!(buffers.full_refresh);
+    assert!(update.full_refresh);
     assert_eq!(
         buffers.positions.data,
         vec![

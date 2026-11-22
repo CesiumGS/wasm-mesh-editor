@@ -131,6 +131,7 @@ impl MeshEditor {
     /// swapped with the editor's rather than copied, so they alternate between updates.
     pub fn update(&mut self, delta_seconds: f64, result: &mut UpdateResult) {
         result.changed_overlays.clear();
+        result.selection_changed_meshes.clear();
 
         if let Some(mut tool_accessor) = self.active_tool_mut() {
             tool_accessor
@@ -142,8 +143,14 @@ impl MeshEditor {
             .take_changes(&mut result.activated_meshes, &mut result.deactivated_meshes);
 
         for (key, overlay) in &mut self.overlays {
-            if overlay.update(&self.meshes[key]).is_some() {
-                result.changed_overlays.push(key);
+            let Some(update) = overlay.update(&self.meshes[key]) else {
+                continue;
+            };
+
+            result.changed_overlays.push(key);
+
+            if update.selection_changed {
+                result.selection_changed_meshes.push(key);
             }
         }
     }
