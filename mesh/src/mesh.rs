@@ -1,4 +1,4 @@
-//! The [`Mesh`] aggregate: topology, attributes, and selection.
+//! The [`Mesh`] aggregate: topology, attributes, selection, and hidden components.
 
 mod build;
 
@@ -14,19 +14,20 @@ use crate::geometry::corner_angle;
 use crate::selection::{SelectionBoundary, SelectionState};
 use crate::{
     Aabb, AttributeChange, AttributeError, AttributeKey, AttributeValue, Attributes, ComponentKey,
-    ComponentRef, EdgeKey, EdgeRef, FaceKey, FaceRef, LoopKey, MeshChange, Selection,
-    SelectionView, Topology, VertKey, VertRef,
+    ComponentMask, ComponentRef, ComponentSet, EdgeKey, EdgeRef, FaceKey, FaceRef,
+    HiddenComponents, LoopKey, MeshChange, Selection, SelectionView, Topology, VertKey, VertRef,
 };
 
 pub use build::{EdgeAttributeBuffer, MeshBuffers, MeshBuildError};
 
-/// A headless, editable mesh: connectivity, geometry attributes, and selection.
-#[derive(Default)]
+/// A headless, editable mesh: connectivity, geometry attributes, selection, and hidden components.
 #[cfg_attr(feature = "wasm", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct Mesh {
     pub(crate) topology: Topology,
     pub(crate) attributes: Attributes,
     pub(crate) selection: SelectionState,
+    pub(crate) hidden_components: ComponentSet,
+    interactable_components: ComponentMask,
     changes: EventEmitter<MeshChange>,
 
     /// Face normals cached per smooth update; storage is reused across updates
@@ -34,8 +35,22 @@ pub struct Mesh {
     face_normals: HashMap<FaceKey, DVec3>,
 }
 
+impl Default for Mesh {
+    fn default() -> Self {
+        Self {
+            topology: Topology::default(),
+            attributes: Attributes::default(),
+            selection: SelectionState::default(),
+            hidden_components: ComponentSet::default(),
+            interactable_components: ComponentMask::VERTEX,
+            changes: EventEmitter::default(),
+            face_normals: HashMap::new(),
+        }
+    }
+}
+
 impl Mesh {
-    /// Creates an empty mesh with selection at vertex level.
+    /// Creates an empty mesh with interactable vertices.
     pub fn new() -> Self {
         Self::default()
     }
@@ -110,7 +125,7 @@ impl Mesh {
     /// Translate the currently selected vertices by `delta`.
     /// TODO: provide richer options for recomputing normals flat (smooth, sharp edges, transforming custom normals or regions or smooth/flat)
     pub fn translate_selected(&mut self, delta: Vec3) {
-        if delta == Vec3::ZERO || self.selection.verts.is_empty() {
+        if delta == Vec3::ZERO || self.selection.components.verts.is_empty() {
             return;
         }
 
@@ -122,7 +137,7 @@ impl Mesh {
         } = self;
 
         let positions = attributes.positions_mut();
-        for &key in selection.verts.iter() {
+        for &key in selection.components.verts.iter() {
             positions[key] += delta;
         }
 
@@ -132,7 +147,7 @@ impl Mesh {
         let loops = Rc::clone(boundary.mixed_face_loops());
         Self::recompute_flat_normals(topology, attributes, boundary.mixed_faces().iter().copied());
 
-        let verts = Rc::clone(&selection.verts);
+        let verts = Rc::clone(&selection.components.verts);
         self.emit_position_change(verts);
         self.emit_normal_change(loops);
     }
@@ -246,9 +261,14 @@ impl Mesh {
             ..
         } = self;
 
-        Self::recompute_flat_normals(topology, attributes, selection.faces.iter().copied());
+        Self::recompute_flat_normals(
+            topology,
+            attributes,
+            selection.components.faces.iter().copied(),
+        );
 
         let loops = selection
+            .components
             .faces
             .iter()
             .flat_map(|&key| topology.face_loops(key))
@@ -271,10 +291,30 @@ impl Mesh {
             topology,
             attributes,
             face_normals,
-            selection.verts.iter().copied(),
+            selection.components.verts.iter().copied(),
         );
 
         self.emit_normal_change(Rc::new(loops));
+    }
+
+    /// The types of components that can currently be directly modified (i.e. selected, hidden, etc).
+    /// Note: components not included in this mask may still be indirectly affected by operations on included components.
+    pub fn interactable_components(&self) -> ComponentMask {
+        self.interactable_components
+    }
+
+    /// Sets the types of components that can be directly modified (i.e. selected, hidden, etc).
+    ///
+    /// Notes:
+    /// 1. Setting this may have side effects on the mesh state (like what is selected).
+    /// 2. Components not included in this mask may still be indirectly affected by operations on included components.
+    pub fn set_interactable_components(&mut self, components: ComponentMask) {
+        if self.interactable_components == components {
+            return;
+        }
+
+        self.interactable_components = components;
+        self.selection_mut().rebuild();
     }
 
     pub fn selection(&self) -> SelectionView<'_> {
@@ -290,6 +330,22 @@ impl Mesh {
             state: &mut self.selection,
             topo: &self.topology,
             attrs: &self.attributes,
+            interactable: self.interactable_components,
+            hidden: &self.hidden_components,
+            changes: &mut self.changes,
+        }
+    }
+
+    pub fn hidden_components(&self) -> &ComponentSet {
+        &self.hidden_components
+    }
+
+    pub fn hidden_components_mut(&mut self) -> HiddenComponents<'_> {
+        HiddenComponents {
+            hidden: &mut self.hidden_components,
+            topo: &self.topology,
+            attrs: &self.attributes,
+            interactable: self.interactable_components,
             changes: &mut self.changes,
         }
     }

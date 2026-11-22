@@ -115,7 +115,7 @@ impl MeshEditor {
             .activate(&mut self.meshes, self.mode, key)
     }
 
-    /// Stops editing this mesh without changing its selection or selection level.
+    /// Stops editing this mesh without changing its selection or interactable components.
     /// Returns [`MeshNotFound`] for an unknown key.
     #[cfg_attr(feature = "wasm", wasm_bindgen(js_name = setMeshInactive))]
     pub fn set_mesh_inactive(&mut self, key: MeshKey) -> Result<(), MeshNotFound> {
@@ -168,7 +168,7 @@ impl MeshEditor {
         self.mode
     }
 
-    /// Applies the mode's selection level to active meshes and deactivates incompatible tools.
+    /// Applies the mode's interactable components to active meshes and deactivates incompatible tools.
     pub fn set_mode(&mut self, mode: EditMode) {
         if self.mode == mode {
             return;
@@ -178,9 +178,7 @@ impl MeshEditor {
         self.mode = mode;
 
         for &key in self.active_meshes.keys() {
-            self.meshes[key]
-                .selection_mut()
-                .set_level(mode.selection_level);
+            self.meshes[key].set_interactable_components(mode.interactable_components);
         }
     }
 

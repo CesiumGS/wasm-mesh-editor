@@ -63,9 +63,9 @@ pub mod uniforms {
 
     /// `positions`, in every shader.
     pub const POSITION_TEXTURE: &str = "u_positionTexture";
-    /// The drawn component kind's selection buffer, in every shader: `selection.verts` for
-    /// points, `selection.edges` for edges, and `selection.faces` for faces.
-    pub const SELECTION_TEXTURE: &str = "u_selectionTexture";
+    /// The drawn component type's flag buffer, in every shader: `flags.verts` for points,
+    /// `flags.edges` for edges, and `flags.faces` for faces. Hidden components should not be drawn.
+    pub const FLAG_TEXTURE: &str = "u_flagTexture";
     /// `edges`, in the edge shader.
     pub const EDGE_TEXTURE: &str = "u_edgeTexture";
     /// `triangles`, in the face shader.

@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bitflags.workspace = true
 event-emitter = { path = "../utils/event-emitter" }
 mesh = { path = "../mesh" }
 glam.workspace = true

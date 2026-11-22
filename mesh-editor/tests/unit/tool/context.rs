@@ -23,18 +23,14 @@ fn context_exposes_mode_and_borrowed_active_meshes() {
     let first = meshes.insert(Mesh::new());
     let second = meshes.insert(Mesh::new());
 
-    meshes[first]
-        .selection_mut()
-        .set_level(ComponentMask::VERTEX);
-    meshes[second]
-        .selection_mut()
-        .set_level(ComponentMask::EDGE);
+    meshes[first].set_interactable_components(ComponentMask::VERTEX);
+    meshes[second].set_interactable_components(ComponentMask::EDGE);
 
     let mut active_meshes = ActiveMeshes::from(vec![second, first]);
     let active_meshes_ptr = active_meshes.keys().as_ptr();
     let mode = EditMode {
         renderable_components: ComponentMask::FACE,
-        selection_level: ComponentMask::VERTEX.union(ComponentMask::EDGE),
+        interactable_components: ComponentMask::VERTEX.union(ComponentMask::EDGE),
     };
     let context = ToolContext::new(&mut meshes, &mut active_meshes, mode);
 
@@ -45,11 +41,11 @@ fn context_exposes_mode_and_borrowed_active_meshes() {
         active_meshes_ptr
     ));
     assert_eq!(
-        context.mesh(first).unwrap().selection().level(),
+        context.mesh(first).unwrap().interactable_components(),
         ComponentMask::VERTEX
     );
     assert_eq!(
-        context.mesh(second).unwrap().selection().level(),
+        context.mesh(second).unwrap().interactable_components(),
         ComponentMask::EDGE
     );
 }
@@ -86,7 +82,7 @@ fn active_meshes_mut_edits_only_active_meshes() {
     let inactive = meshes.insert(Mesh::new());
 
     for key in [first, second, inactive] {
-        meshes[key].selection_mut().set_level(ComponentMask::FACE);
+        meshes[key].set_interactable_components(ComponentMask::FACE);
     }
 
     let mut active_meshes = ActiveMeshes::from(vec![second, first]);
@@ -95,15 +91,18 @@ fn active_meshes_mut_edits_only_active_meshes() {
         let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::FACE);
 
         for mesh in context.active_meshes_mut() {
-            mesh.selection_mut().set_level(ComponentMask::EDGE);
+            mesh.set_interactable_components(ComponentMask::EDGE);
         }
     }
 
     for key in [first, second] {
-        assert_eq!(meshes[key].selection().level(), ComponentMask::EDGE);
+        assert_eq!(meshes[key].interactable_components(), ComponentMask::EDGE);
     }
 
-    assert_eq!(meshes[inactive].selection().level(), ComponentMask::FACE);
+    assert_eq!(
+        meshes[inactive].interactable_components(),
+        ComponentMask::FACE
+    );
 }
 
 #[test]
@@ -112,9 +111,7 @@ fn activation_applies_mode_and_appends_once() {
     let first = meshes.insert(Mesh::new());
     let second = meshes.insert(Mesh::new());
 
-    meshes[second]
-        .selection_mut()
-        .set_level(ComponentMask::FACE);
+    meshes[second].set_interactable_components(ComponentMask::FACE);
 
     let mut active_meshes = ActiveMeshes::from(vec![first]);
     let mut context = ToolContext::new(&mut meshes, &mut active_meshes, EditMode::VERTEX);
@@ -123,14 +120,13 @@ fn activation_applies_mode_and_appends_once() {
     context
         .mesh_mut(second)
         .unwrap()
-        .selection_mut()
-        .set_level(ComponentMask::EDGE);
+        .set_interactable_components(ComponentMask::EDGE);
     context.set_mesh_active(second).unwrap();
 
     assert_eq!(context.active_meshes(), &[first, second]);
     assert!(context.is_mesh_active(second));
     assert_eq!(
-        context.mesh(second).unwrap().selection().level(),
+        context.mesh(second).unwrap().interactable_components(),
         ComponentMask::EDGE
     );
 }
@@ -142,9 +138,7 @@ fn retain_active_meshes_preserves_order_and_deactivated_selection() {
     let middle = meshes.insert(Mesh::new());
     let last = meshes.insert(Mesh::new());
 
-    meshes[middle]
-        .selection_mut()
-        .set_level(ComponentMask::VERTEX);
+    meshes[middle].set_interactable_components(ComponentMask::VERTEX);
 
     let mut active_meshes = ActiveMeshes::from(vec![last, middle, first]);
 
@@ -159,7 +153,10 @@ fn retain_active_meshes_preserves_order_and_deactivated_selection() {
     }
 
     assert_eq!(active_meshes.keys(), [last, first]);
-    assert_eq!(meshes[middle].selection().level(), ComponentMask::VERTEX);
+    assert_eq!(
+        meshes[middle].interactable_components(),
+        ComponentMask::VERTEX
+    );
 }
 
 #[test]

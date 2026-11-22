@@ -7,7 +7,6 @@ use std::mem::discriminant;
 use glam::{Vec2, Vec3};
 
 use super::Mesh;
-use crate::selection::SelectionState;
 use crate::{AttributeBuffer, Attributes, EdgeKey, FaceKey, FaceRef, Topology, Vert, VertKey};
 
 /// Decoded vertex attribute and face index buffers describing a mesh to build.
@@ -381,9 +380,7 @@ pub(super) fn from_buffers(mut buffers: MeshBuffers) -> Result<Mesh, MeshBuildEr
     let mut mesh = Mesh {
         topology: Topology::with_capacity(vertex_count, loop_count),
         attributes: Attributes::with_capacity(vertex_count, loop_count, uv_count),
-        selection: SelectionState::default(),
-        changes: Default::default(),
-        face_normals: Default::default(),
+        ..Mesh::default()
     };
 
     let positions = mesh.attributes.positions_mut();

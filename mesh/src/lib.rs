@@ -9,6 +9,7 @@ mod attributes;
 mod edge;
 mod face;
 mod geometry;
+mod hidden_components;
 mod loop_;
 mod mesh;
 mod mesh_change;
@@ -26,13 +27,14 @@ pub use attributes::{
 pub use edge::{Edge, EdgeRef};
 pub use face::{Face, FaceRef};
 pub use geometry::{Aabb, Plane, Ray, centroid, try_inverse_affine};
+pub use hidden_components::{HiddenComponents, HideOptions};
 pub use loop_::Loop;
 pub use mesh::{EdgeAttributeBuffer, Mesh, MeshBuffers, MeshBuildError};
-pub use mesh_change::{AttributeChange, MeshChange, SelectionChange, TopologyChange};
+pub use mesh_change::{AttributeChange, ComponentSetChange, MeshChange, TopologyChange};
 pub use mesh_component::{
-    ComponentKey, ComponentKeys, ComponentMask, ComponentRef, ComponentType, EdgeKey, FaceKey,
-    LoopKey, VertKey,
+    ComponentKey, ComponentKeys, ComponentMask, ComponentRef, ComponentSet, ComponentType, EdgeKey,
+    FaceKey, IntoComponentKey, LoopKey, VertKey,
 };
-pub use selection::{Selection, SelectionBoundary, SelectionKind, SelectionStep, SelectionView};
+pub use selection::{Selection, SelectionBoundary, SelectionStep, SelectionView};
 pub use topology::Topology;
 pub use vert::{Vert, VertRef};

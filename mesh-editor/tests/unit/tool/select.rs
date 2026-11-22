@@ -87,9 +87,7 @@ fn shift_hit_toggles_each_selectable_kind_and_preserves_other_meshes() {
         let other = meshes.insert(triangle_mesh());
         let other_vertex = meshes[other].topology().verts().next().unwrap();
         meshes[other].selection_mut().select(&[other_vertex]);
-        meshes[target]
-            .selection_mut()
-            .set_level(mode.selection_level);
+        meshes[target].set_interactable_components(mode.interactable_components);
 
         let component = if mode == EditMode::VERTEX {
             ComponentKey::from(meshes[target].topology().verts().next().unwrap())
@@ -241,16 +239,14 @@ fn rejected_hits_are_ignored() {
 }
 
 #[test]
-fn combined_selection_levels_accept_each_enabled_kind() {
+fn combined_interactable_components_accept_each_enabled_kind() {
     let mut meshes = SlotMap::with_key();
     let target = meshes.insert(triangle_mesh());
     let mode = EditMode {
         renderable_components: ComponentMask::empty(),
-        selection_level: ComponentMask::VERTEX | ComponentMask::EDGE,
+        interactable_components: ComponentMask::VERTEX | ComponentMask::EDGE,
     };
-    meshes[target]
-        .selection_mut()
-        .set_level(mode.selection_level);
+    meshes[target].set_interactable_components(mode.interactable_components);
     let vertex = meshes[target].topology().verts().next().unwrap();
     let edge = meshes[target].topology().edges().next().unwrap();
     let face = meshes[target].topology().faces().next().unwrap();
@@ -315,7 +311,7 @@ const EMPTY_SELECTION_MODES: [EditMode; 2] = [
     EditMode::NONE,
     EditMode {
         renderable_components: ComponentMask::all(),
-        selection_level: ComponentMask::empty(),
+        interactable_components: ComponentMask::empty(),
     },
 ];
 
@@ -350,7 +346,7 @@ fn every_mode_is_supported() {
 }
 
 #[test]
-fn empty_selection_levels_make_hits_without_modifiers_the_only_active_mesh() {
+fn empty_interactable_components_make_hits_without_modifiers_the_only_active_mesh() {
     for mode in EMPTY_SELECTION_MODES {
         let mut meshes = SlotMap::with_key();
         let first = meshes.insert(triangle_mesh());
@@ -359,9 +355,7 @@ fn empty_selection_levels_make_hits_without_modifiers_the_only_active_mesh() {
         let vertex = meshes[first].topology().verts().next().unwrap();
 
         meshes[first].selection_mut().select(&[vertex]);
-        meshes[clicked]
-            .selection_mut()
-            .set_level(ComponentMask::VERTEX);
+        meshes[clicked].set_interactable_components(ComponentMask::VERTEX);
 
         let hits = mesh_hit(clicked);
         let hit = PickResult::Hits(&hits);
@@ -377,8 +371,8 @@ fn empty_selection_levels_make_hits_without_modifiers_the_only_active_mesh() {
         }
 
         assert_eq!(
-            meshes[clicked].selection().level(),
-            mode.selection_level,
+            meshes[clicked].interactable_components(),
+            mode.interactable_components,
             "activation applies the mode"
         );
         assert!(
@@ -389,7 +383,7 @@ fn empty_selection_levels_make_hits_without_modifiers_the_only_active_mesh() {
 }
 
 #[test]
-fn empty_selection_levels_toggle_shift_hits_and_preserve_other_meshes() {
+fn empty_interactable_components_toggle_shift_hits_and_preserve_other_meshes() {
     for mode in EMPTY_SELECTION_MODES {
         let mut meshes = SlotMap::with_key();
         let active = meshes.insert(triangle_mesh());
@@ -408,7 +402,7 @@ fn empty_selection_levels_toggle_shift_hits_and_preserve_other_meshes() {
 }
 
 #[test]
-fn empty_selection_levels_deactivate_all_only_on_misses_without_modifiers() {
+fn empty_interactable_components_deactivate_all_only_on_misses_without_modifiers() {
     for mode in EMPTY_SELECTION_MODES {
         let mut meshes = SlotMap::with_key();
         let first = meshes.insert(triangle_mesh());
@@ -450,7 +444,7 @@ fn empty_selection_levels_deactivate_all_only_on_misses_without_modifiers() {
 }
 
 #[test]
-fn empty_selection_levels_ignore_hit_components() {
+fn empty_interactable_components_ignore_hit_components() {
     let mut meshes = SlotMap::with_key();
     let target = meshes.insert(triangle_mesh());
     let vertex = meshes[target].topology().verts().next().unwrap();

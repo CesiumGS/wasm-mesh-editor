@@ -1,15 +1,15 @@
 use mesh::ComponentMask;
 
-/// Which components are visible and directly selectable.
+/// Which components are visible and interactable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EditMode {
     /// Component visibility policy for the renderer.
     pub renderable_components: ComponentMask,
-    pub selection_level: ComponentMask,
+    pub interactable_components: ComponentMask,
 }
 
 impl EditMode {
-    /// Nothing is selectable; faces are still drawn so the mesh stays visible.
+    /// Nothing is interactable; faces are still drawn so the mesh stays visible.
     pub const NONE: Self = Self::from_components(ComponentMask::empty());
 
     pub const VERTEX: Self = Self::from_components(ComponentMask::VERTEX);
@@ -18,7 +18,7 @@ impl EditMode {
 
     pub const FACE: Self = Self::from_components(ComponentMask::FACE);
 
-    /// The mode in which `components` are selectable. Each mode comes
+    /// The mode in which `components` are interactable. Each mode comes
     /// with a policy for which components should be rendered.
     pub const fn from_components(components: ComponentMask) -> Self {
         // Always render at least faces (even in NONE mode).
@@ -35,7 +35,7 @@ impl EditMode {
 
         Self {
             renderable_components,
-            selection_level: components,
+            interactable_components: components,
         }
     }
 }

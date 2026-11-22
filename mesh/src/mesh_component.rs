@@ -1,8 +1,10 @@
 //! Component handles, kinds, and composed component views.
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use slotmap::{Key, KeyData, new_key_type};
 
@@ -136,6 +138,12 @@ impl ComponentKey {
     }
 }
 
+/// A component key: [`VertKey`], [`EdgeKey`], [`FaceKey`], or [`ComponentKey`].
+/// A named alias over `Copy + Into<ComponentKey>`.
+pub trait IntoComponentKey: Copy + Into<ComponentKey> {}
+
+impl<T: Copy + Into<ComponentKey>> IntoComponentKey for T {}
+
 /// Component keys grouped by kind.
 #[derive(Clone, Default)]
 pub struct ComponentKeys {
@@ -179,6 +187,94 @@ impl ComponentKeys {
     /// Handles of this kind in insertion order.
     pub fn iter(&self, kind: ComponentType) -> impl ExactSizeIterator<Item = ComponentKey> + '_ {
         (0..self.len(kind)).map(move |index| self.get(kind, index).unwrap())
+    }
+}
+
+/// A set of vertices, edges, and faces.
+#[derive(Default)]
+pub struct ComponentSet {
+    /// `Rc` so the vertex set can be shared without copying.
+    pub(crate) verts: Rc<HashSet<VertKey>>,
+    pub(crate) edges: HashSet<EdgeKey>,
+    pub(crate) faces: HashSet<FaceKey>,
+}
+
+impl ComponentSet {
+    pub fn contains<K: IntoComponentKey>(&self, key: K) -> bool {
+        match key.into() {
+            ComponentKey::Vert(key) => self.verts.contains(&key),
+            ComponentKey::Edge(key) => self.edges.contains(&key),
+            ComponentKey::Face(key) => self.faces.contains(&key),
+        }
+    }
+
+    /// Returns whether `key` was added.
+    pub(crate) fn insert(&mut self, key: ComponentKey) -> bool {
+        match key {
+            // Checked first so a shared vertex set isn't copied when nothing changes.
+            ComponentKey::Vert(key) => {
+                !self.verts.contains(&key) && Rc::make_mut(&mut self.verts).insert(key)
+            }
+            ComponentKey::Edge(key) => self.edges.insert(key),
+            ComponentKey::Face(key) => self.faces.insert(key),
+        }
+    }
+
+    /// Returns whether `key` was removed.
+    pub(crate) fn remove(&mut self, key: ComponentKey) -> bool {
+        match key {
+            // Checked first so a shared vertex set isn't copied when nothing changes.
+            ComponentKey::Vert(key) => {
+                self.verts.contains(&key) && Rc::make_mut(&mut self.verts).remove(&key)
+            }
+            ComponentKey::Edge(key) => self.edges.remove(&key),
+            ComponentKey::Face(key) => self.faces.remove(&key),
+        }
+    }
+
+    pub fn verts(&self) -> impl Iterator<Item = VertKey> + '_ {
+        self.verts.iter().copied()
+    }
+
+    pub fn edges(&self) -> impl Iterator<Item = EdgeKey> + '_ {
+        self.edges.iter().copied()
+    }
+
+    pub fn faces(&self) -> impl Iterator<Item = FaceKey> + '_ {
+        self.faces.iter().copied()
+    }
+
+    pub fn len(&self) -> usize {
+        self.verts.len() + self.edges.len() + self.faces.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Every component, in unspecified order.
+    pub fn iter(&self) -> impl Iterator<Item = ComponentKey> + '_ {
+        self.verts
+            .iter()
+            .copied()
+            .map(ComponentKey::Vert)
+            .chain(self.edges.iter().copied().map(ComponentKey::Edge))
+            .chain(self.faces.iter().copied().map(ComponentKey::Face))
+    }
+
+    /// Empties the set, returning the removed keys.
+    pub(crate) fn take(&mut self) -> ComponentKeys {
+        let verts = match Rc::get_mut(&mut self.verts) {
+            Some(verts) => verts.drain().collect(),
+            // Leaves the shared set intact for its other owners.
+            None => std::mem::take(&mut self.verts).iter().copied().collect(),
+        };
+
+        ComponentKeys {
+            verts,
+            edges: self.edges.drain().collect(),
+            faces: self.faces.drain().collect(),
+        }
     }
 }
 

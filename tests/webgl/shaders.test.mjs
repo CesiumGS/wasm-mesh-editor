@@ -38,7 +38,7 @@ const sharedUniforms = [
   "u_modelView",
   "u_projection",
   "u_positionTexture",
-  "u_selectionTexture",
+  "u_flagTexture",
   "u_depthBias",
 ];
 
@@ -350,7 +350,7 @@ test("point shader draws a disc per vertex, colored by selection", async () => {
     componentType: ComponentType.Vertex,
     index: 1,
   });
-  const textures = [overlayTexture(views.positions), overlayTexture(views.selection.verts)];
+  const textures = [overlayTexture(views.positions), overlayTexture(views.flags.verts)];
   editor.free();
 
   const { error, pixels } = await page.evaluate((args) => window.renderShader(args), {
@@ -413,7 +413,7 @@ test("edge shader draws a fixed-width quad per edge, colored by selection", asyn
   ]);
   const textures = [
     overlayTexture(views.positions),
-    overlayTexture(views.selection.edges),
+    overlayTexture(views.flags.edges),
     overlayTexture(views.edges),
   ];
   editor.free();
@@ -465,7 +465,7 @@ for (const [label, bZ] of [
     const { editor, views } = triangleOverlay([0, -0.2, -2, 0, -0.2, bZ, 0, -1, -2]);
     const textures = [
       overlayTexture(views.positions),
-      overlayTexture(views.selection.edges),
+      overlayTexture(views.flags.edges),
       overlayTexture(views.edges),
     ];
     editor.free();
@@ -562,7 +562,7 @@ function facePickDraw(views) {
   return {
     textures: [
       overlayTexture(views.positions),
-      overlayTexture(views.selection.faces),
+      overlayTexture(views.flags.faces),
       overlayTexture(views.triangles),
     ],
     uniforms: { [uniforms.face.isPickPass]: { type: "bool", value: true } },
@@ -590,7 +590,7 @@ test("setVertexOutputs receives each drawn component's overlay index", async () 
   const edges = readElements(views.edges);
   const draws = {
     point: {
-      textures: [positions, overlayTexture(views.selection.verts)],
+      textures: [positions, overlayTexture(views.flags.verts)],
       uniforms: {
         [uniforms.point.size]: { type: "float", value: 6 },
         [uniforms.point.color]: { type: "vec4", value: [1, 1, 1, 1] },
@@ -600,7 +600,7 @@ test("setVertexOutputs receives each drawn component's overlay index", async () 
       instanceCount: views.positions.elementCount,
     },
     edge: {
-      textures: [positions, overlayTexture(views.selection.edges), overlayTexture(views.edges)],
+      textures: [positions, overlayTexture(views.flags.edges), overlayTexture(views.edges)],
       uniforms: {
         [uniforms.edge.width]: { type: "float", value: 4 },
         [uniforms.edge.color]: { type: "vec4", value: [1, 1, 1, 1] },
@@ -634,6 +634,182 @@ test("setVertexOutputs receives each drawn component's overlay index", async () 
   assert.deepEqual([face(32, 24), face(44, 36), face(8, 56)], [0, 1, -1]);
 });
 
+/** `ComponentFlags.HIDDEN`, as documented on `OverlayFlagViews`. */
+const HIDDEN = 2;
+
+const ALL_COMPONENTS =
+  (1 << ComponentType.Vertex) | (1 << ComponentType.Edge) | (1 << ComponentType.Face);
+
+/** Activates the mesh with every component type interactable. */
+function activate(editor, key) {
+  editor.setMode(ALL_COMPONENTS);
+  editor.setMeshActive(key);
+}
+
+/** Runs an update, so overlay buffers reflect the latest mesh changes. */
+function update(editor) {
+  const result = new UpdateResult();
+  editor.update(0, result);
+  result.free();
+}
+
+/** Indices of the hidden components in one flag buffer. */
+function hiddenIndices(view) {
+  const flags = new Uint8Array(memory.buffer, view.address, view.elementCount);
+  return [...flags.keys()].filter((index) => flags[index] & HIDDEN);
+}
+
+/** Overlay indices of the hidden components of each type. */
+function hiddenByType(editor, key) {
+  const { flags } = editor.overlayViews(key);
+  return {
+    verts: hiddenIndices(flags.verts),
+    edges: hiddenIndices(flags.edges),
+    faces: hiddenIndices(flags.faces),
+  };
+}
+
+/** Copies of the keys at `indices` in one of `componentKeys`' views. */
+function keysAt(view, indices) {
+  const keys = readKeys(view);
+  return BigUint64Array.from(indices, (index) => keys[index]);
+}
+
+test("hideComponents hides components so they aren't drawn or picked", async () => {
+  const { editor, key } = twoTriangleEditor();
+  activate(editor, key);
+  const { componentKeys } = editor.overlayViews(key);
+  const edges = readElements(editor.overlayViews(key).edges);
+  const sharedEdge = edges.findIndex(([a, b]) => a + b === 3);
+
+  assert.equal(
+    editor.hideComponents(key, {
+      verts: keysAt(componentKeys.verts, [1]),
+      edges: keysAt(componentKeys.edges, [sharedEdge]),
+      faces: keysAt(componentKeys.faces, [1]),
+    }),
+    true,
+  );
+  update(editor);
+
+  const views = editor.overlayViews(key);
+  const positions = overlayTexture(views.positions);
+  const draws = {
+    point: {
+      textures: [positions, overlayTexture(views.flags.verts)],
+      uniforms: {
+        [uniforms.point.size]: { type: "float", value: 6 },
+        [uniforms.point.color]: { type: "vec4", value: [1, 1, 1, 1] },
+      },
+      mode: "TRIANGLE_STRIP",
+      vertexCount: 4,
+      instanceCount: views.positions.elementCount,
+    },
+    edge: {
+      textures: [positions, overlayTexture(views.flags.edges), overlayTexture(views.edges)],
+      uniforms: {
+        [uniforms.edge.width]: { type: "float", value: 4 },
+        [uniforms.edge.color]: { type: "vec4", value: [1, 1, 1, 1] },
+      },
+      mode: "TRIANGLE_STRIP",
+      vertexCount: 4,
+      instanceCount: views.edges.elementCount,
+    },
+    face: facePickDraw(views),
+  };
+  editor.free();
+
+  const render = (name) => renderPick(name, draws[name]);
+
+  // Vertex 1 is at pixel (48, 16).
+  const point = await render("point");
+  assert.deepEqual([point(16, 16), point(48, 16), point(32, 48), point(48, 48)], [0, -1, 2, 3]);
+
+  // The shared edge, from vertex 1 to 2, has its midpoint at pixel (40, 32).
+  const edge = await render("edge");
+  assert.equal(edge(40, 32), -1);
+  assert.equal(edge(32, 16), edges.findIndex(([a, b]) => a + b === 1));
+
+  const face = await render("face");
+  assert.deepEqual([face(32, 24), face(44, 36)], [0, -1]);
+});
+
+test("hideComponents extends to connected faces, and showComponents reverses it", () => {
+  const { editor, key } = twoTriangleEditor();
+  activate(editor, key);
+  const { componentKeys } = editor.overlayViews(key);
+  const verts = keysAt(componentKeys.verts, [0]);
+
+  editor.hideComponents(key, { verts }, { extendToConnectedFaces: true });
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [0], edges: [], faces: [0] });
+
+  editor.showComponents(key, { verts });
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [0] });
+
+  editor.hideComponents(key, { verts });
+  editor.showComponents(key, { verts }, { extendToConnectedFaces: true });
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [] });
+  editor.free();
+});
+
+test("hideComponents ignores non-interactable types and invalid keys", () => {
+  const { editor, key } = twoTriangleEditor();
+  editor.setMode(1 << ComponentType.Vertex);
+  editor.setMeshActive(key);
+  const { componentKeys } = editor.overlayViews(key);
+
+  editor.hideComponents(key, {
+    verts: BigUint64Array.of(0n, ...keysAt(componentKeys.verts, [2])),
+    faces: keysAt(componentKeys.faces, [0]),
+  });
+  update(editor);
+
+  assert.deepEqual(hiddenByType(editor, key), { verts: [2], edges: [], faces: [] });
+  editor.free();
+});
+
+test("showAllComponents shows every hidden component", () => {
+  const { editor, key } = twoTriangleEditor();
+  activate(editor, key);
+  const { componentKeys } = editor.overlayViews(key);
+  editor.hideComponents(key, {
+    verts: keysAt(componentKeys.verts, [0, 3]),
+    edges: keysAt(componentKeys.edges, [1]),
+    faces: keysAt(componentKeys.faces, [0, 1]),
+  });
+  editor.setMode(0);
+
+  assert.equal(editor.showAllComponents(key), true);
+  update(editor);
+
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [] });
+  editor.free();
+});
+
+test("hiding needs an active mesh and throws for unknown meshes", () => {
+  const { editor, key } = twoTriangleEditor();
+  const verts = keysAt(editor.overlayViews(key).componentKeys.verts, [0]);
+
+  assert.equal(editor.hideComponents(key, { verts }), false);
+  assert.equal(editor.showComponents(key, { verts }), false);
+  assert.equal(editor.showAllComponents(key), false);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [] });
+
+  editor.removeMesh(key).free();
+  for (const call of [
+    () => editor.hideComponents(key, { verts }),
+    () => editor.showComponents(key, { verts }),
+    () => editor.showAllComponents(key),
+  ]) {
+    assert.throws(call, /is not registered/);
+  }
+  editor.free();
+});
+
 test("a picked overlay index selects its component through componentKeys", async () => {
   const { editor, key } = twoTriangleEditor();
   const views = editor.overlayViews(key);
@@ -652,38 +828,10 @@ test("a picked overlay index selects its component through componentKeys", async
   editor.update(0, result);
   result.free();
 
-  const { address, elementCount } = editor.overlayViews(key).selection.faces;
-  assert.deepEqual(Array.from(new Uint8Array(memory.buffer, address, elementCount)), [0, 255]);
+  const { address, elementCount } = editor.overlayViews(key).flags.faces;
+  assert.deepEqual(Array.from(new Uint8Array(memory.buffer, address, elementCount)), [0, 1]);
   editor.free();
 });
-
-/** Runs an update, so overlay buffers reflect the latest mesh changes. */
-function update(editor) {
-  const result = new UpdateResult();
-  editor.update(0, result);
-  result.free();
-}
-
-/** Copies of the keys at `indices` in one of `componentKeys`' views. */
-function keysAt(view, indices) {
-  const keys = readKeys(view);
-  return BigUint64Array.from(indices, (index) => keys[index]);
-}
-
-/** Overlay indices of the selected components of each type. */
-function selectedByType(editor, key) {
-  const selected = (view) => {
-    const values = new Uint8Array(memory.buffer, view.address, view.elementCount);
-    return [...values.keys()].filter((index) => values[index]);
-  };
-  const { selection } = editor.overlayViews(key);
-
-  return {
-    verts: selected(selection.verts),
-    edges: selected(selection.edges),
-    faces: selected(selection.faces),
-  };
-}
 
 /** Activates the two-triangle mesh in vertex mode. Returns a getter for its selected vertices. */
 function vertexSelection(editor, key) {
@@ -926,7 +1074,7 @@ function selectedVerts(editor, key) {
   editor.update(0, result);
   result.free();
 
-  const { address, elementCount } = editor.overlayViews(key).selection.verts;
+  const { address, elementCount } = editor.overlayViews(key).flags.verts;
   const values = new Uint8Array(memory.buffer, address, elementCount);
   return [...values.keys()].filter((index) => values[index] & 1);
 }
@@ -1448,4 +1596,145 @@ test("CustomAttribute constructors throw for a componentCount that doesn't fit t
   ]) {
     assert.throws(create, /_A length \d is not a multiple of \d/);
   }
+});
+
+test("hideByAttribute and showByAttribute hide and show matching vertices", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal, Less, GreaterOrEqual } = AttributeComparison;
+  const { Ok } = AttributeResult;
+  const extend = { extendToConnectedFaces: true };
+
+  assert.equal(editor.hideByAttribute(key, "_ID", Less, 0), Ok);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [0], edges: [], faces: [] });
+
+  // Vertex 3 is only in face 1.
+  assert.equal(editor.hideByAttribute(key, "_ID", Equal, 2, extend), Ok);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [0, 3], edges: [], faces: [1] });
+
+  assert.equal(editor.showByAttribute(key, "_ID", GreaterOrEqual, 0), Ok);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [0], edges: [], faces: [1] });
+
+  // Vertex 0 is only in face 0, so face 1 stays hidden.
+  assert.equal(editor.showByAttribute(key, "_ID", Less, 0, extend), Ok);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [1] });
+
+  assert.equal(editor.showByAttribute(key, "_ID", Equal, 2, extend), Ok);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [] });
+  editor.free();
+});
+
+test("queryByAttribute includes hidden components", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal, GreaterOrEqual } = AttributeComparison;
+  editor.hideByAttribute(key, "_ID", Equal, 1);
+
+  const { keys } = editor.queryByAttribute(key, "_ID", GreaterOrEqual, 0);
+  assert.deepEqual(vertIndices(editor, key, keys.verts), [1, 2, 3]);
+  editor.free();
+});
+
+test("hideByAttribute reports lookups that hide nothing", () => {
+  const { editor, key } = attributeEditor();
+  const { Equal, Less } = AttributeComparison;
+
+  for (const [name, comparison, value, result] of [
+    ["_MISSING", Equal, 0, AttributeResult.AttributeNotFound],
+    ["_ID", Equal, 1.5, AttributeResult.WrongType],
+    ["_COLOR", Less, [1, 0, 0], AttributeResult.UnsupportedComparison],
+  ]) {
+    assert.equal(editor.hideByAttribute(key, name, comparison, value), result, name);
+  }
+
+  editor.setMode(1 << ComponentType.Face);
+  assert.equal(
+    editor.hideByAttribute(key, "_ID", Equal, 0),
+    AttributeResult.Ok,
+    "vertices aren't interactable",
+  );
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [] });
+
+  editor.setMeshInactive(key);
+  for (const call of [
+    () => editor.hideByAttribute(key, "_ID", Equal, 0),
+    () => editor.showByAttribute(key, "_ID", Equal, 0),
+  ]) {
+    assert.equal(call(), AttributeResult.MeshInactive);
+  }
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.hideByAttribute(key, "_ID", Equal, 0), /is not registered/);
+  editor.free();
+});
+
+/** Overlay indices of the selected components of each type. */
+function selectedByType(editor, key) {
+  const selected = (view) => {
+    const flags = new Uint8Array(memory.buffer, view.address, view.elementCount);
+    return [...flags.keys()].filter((index) => flags[index] & 1);
+  };
+  const { flags } = editor.overlayViews(key);
+
+  return { verts: selected(flags.verts), edges: selected(flags.edges), faces: selected(flags.faces) };
+}
+
+/**
+ * Activates the two-triangle mesh in edge mode and selects the edge from vertex 0 to 1, which is
+ * only in face 0. Returns that edge's overlay index.
+ */
+function selectOuterEdge(editor, key) {
+  const edge = readElements(editor.overlayViews(key).edges).findIndex(([a, b]) => a + b === 1);
+  const edges = keysAt(editor.overlayViews(key).componentKeys.edges, [edge]);
+
+  editor.setMode(1 << ComponentType.Edge);
+  editor.setMeshActive(key);
+  editor.setActiveTool(SelectTool.addTo(editor));
+  editor.pointerClick({ pick: [{ mesh: key, componentKeys: { edges } }] });
+  update(editor);
+
+  return edge;
+}
+
+test("hideSelected deselects and hides the selected components of interactable types", () => {
+  const { editor, key } = twoTriangleEditor();
+  const edge = selectOuterEdge(editor, key);
+  assert.deepEqual(selectedByType(editor, key), { verts: [0, 1], edges: [edge], faces: [] });
+
+  assert.equal(editor.hideSelected(key), true);
+  update(editor);
+
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [edge], faces: [] });
+  assert.deepEqual(selectedByType(editor, key), { verts: [], edges: [], faces: [] });
+  editor.free();
+});
+
+test("hideSelected extends to connected faces", () => {
+  const { editor, key } = twoTriangleEditor();
+  const edge = selectOuterEdge(editor, key);
+
+  editor.hideSelected(key, { extendToConnectedFaces: true });
+  update(editor);
+
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [edge], faces: [0] });
+  editor.free();
+});
+
+test("hideSelected needs an active mesh and throws for unknown meshes", () => {
+  const { editor, key } = twoTriangleEditor();
+  const edge = selectOuterEdge(editor, key);
+  editor.setMeshInactive(key);
+
+  assert.equal(editor.hideSelected(key), false);
+  update(editor);
+  assert.deepEqual(hiddenByType(editor, key), { verts: [], edges: [], faces: [] });
+  assert.deepEqual(selectedByType(editor, key), { verts: [0, 1], edges: [edge], faces: [] });
+
+  editor.removeMesh(key).free();
+  assert.throws(() => editor.hideSelected(key), /is not registered/);
+  editor.free();
 });

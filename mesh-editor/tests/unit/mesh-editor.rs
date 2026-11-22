@@ -154,7 +154,7 @@ impl RecordingTool {
         let meshes = context
             .active_meshes()
             .iter()
-            .map(|&key| (key, context.mesh(key).unwrap().selection().level()))
+            .map(|&key| (key, context.mesh(key).unwrap().interactable_components()))
             .collect();
 
         self.calls.borrow_mut().push(ToolCall {
@@ -307,9 +307,9 @@ fn assert_no_overlay_changes(editor: &MeshEditor, key: MeshKey) {
     assert!(buffers.triangles.dirty_range.is_none());
 
     for selection in [
-        &buffers.selection.verts,
-        &buffers.selection.edges,
-        &buffers.selection.faces,
+        &buffers.flags.verts,
+        &buffers.flags.edges,
+        &buffers.flags.faces,
     ] {
         assert!(selection.dirty_range.is_none());
     }
@@ -328,7 +328,7 @@ fn translate_tool_updates_selected_components_and_overlay_positions() {
             ComponentType::Edge => mesh.topology().edges().next().unwrap().into(),
             ComponentType::Face => mesh.topology().faces().next().unwrap().into(),
         };
-        mesh.selection_mut().set_level(mode.selection_level);
+        mesh.set_interactable_components(mode.interactable_components);
         mesh.selection_mut().select(&[component]);
         let selected: Vec<_> = mesh.selection().verts().collect();
         let original: Vec<_> = mesh
@@ -582,7 +582,7 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
             .positions
             .data
             .as_ptr();
-        let selection = editor.overlay_buffers(target).unwrap().selection[kind]
+        let selection = editor.overlay_buffers(target).unwrap().flags[kind]
             .data
             .as_ptr();
         let hits = [PickHit {
@@ -598,7 +598,7 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
             selected_vertices
         );
         assert_eq!(
-            editor.overlay_buffers(target).unwrap().selection[kind].data[0],
+            editor.overlay_buffers(target).unwrap().flags[kind].data[0],
             0
         );
 
@@ -610,16 +610,16 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
         assert!(!editor.overlay(target).unwrap().full_refresh());
         assert_eq!(buffers.positions.data.as_ptr(), positions);
         assert!(buffers.positions.dirty_range.is_none());
-        assert_eq!(buffers.selection[kind].data.as_ptr(), selection);
-        assert_eq!(buffers.selection[kind].data[0], 255);
-        assert_eq!(buffers.selection[kind].dirty_range, Some(0..1));
+        assert_eq!(buffers.flags[kind].data.as_ptr(), selection);
+        assert_eq!(buffers.flags[kind].data[0], 1);
+        assert_eq!(buffers.flags[kind].dirty_range, Some(0..1));
         assert_eq!(
             buffers
-                .selection
+                .flags
                 .verts
                 .data
                 .iter()
-                .filter(|&&value| value == 255)
+                .filter(|&&value| value == 1)
                 .count(),
             selected_vertices
         );
@@ -630,8 +630,8 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
         assert!(editor.active_tool_mut().unwrap().pointer_click(&input));
         assert!(editor.mesh(target).unwrap().selection().is_empty());
         assert_eq!(
-            editor.overlay_buffers(target).unwrap().selection[kind].data[0],
-            255
+            editor.overlay_buffers(target).unwrap().flags[kind].data[0],
+            1
         );
 
         editor.update(0.016, &mut result);
@@ -639,9 +639,9 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
         assert_eq!(result.changed_overlays, vec![target]);
         let buffers = editor.overlay_buffers(target).unwrap();
         for selection in [
-            &buffers.selection.verts,
-            &buffers.selection.edges,
-            &buffers.selection.faces,
+            &buffers.flags.verts,
+            &buffers.flags.edges,
+            &buffers.flags.faces,
         ] {
             assert!(selection.data.iter().all(|&value| value == 0));
         }
@@ -948,8 +948,8 @@ fn update_applies_active_tool_configuration_and_edits_in_the_same_frame() {
     assert_eq!(buffers.positions.data.as_ptr(), positions);
     assert_eq!(buffers.positions.data[0], [2.0, 0.0, 0.0, 0.0]);
     assert_eq!(buffers.positions.dirty_range, Some(0..1));
-    assert_eq!(buffers.selection.verts.data, vec![255, 0, 0]);
-    assert_eq!(buffers.selection.verts.dirty_range, Some(0..1));
+    assert_eq!(buffers.flags.verts.data, vec![1, 0, 0]);
+    assert_eq!(buffers.flags.verts.dirty_range, Some(0..1));
     assert_no_overlay_changes(&editor, inactive);
 
     let mesh = editor.mesh(active).unwrap();
@@ -971,8 +971,8 @@ fn update_applies_active_tool_configuration_and_edits_in_the_same_frame() {
         [2.0, 0.0, 0.0, 0.0]
     );
     assert_eq!(
-        editor.overlay_buffers(active).unwrap().selection.verts.data,
-        vec![255, 0, 0]
+        editor.overlay_buffers(active).unwrap().flags.verts.data,
+        vec![1, 0, 0]
     );
     assert_eq!(
         editor.tool_config_mut(&tool).unwrap().update_deltas,
@@ -1019,18 +1019,12 @@ fn update_processes_cancellation_changes_after_mesh_deactivation() {
     editor.update(0.016, &mut result);
 
     assert_eq!(result.changed_overlays, vec![key]);
-    assert_eq!(
-        editor.overlay_buffers(key).unwrap().selection.verts.data[0],
-        255
-    );
+    assert_eq!(editor.overlay_buffers(key).unwrap().flags.verts.data[0], 1);
 
     editor.set_mesh_inactive(key).unwrap();
     editor.set_active_tool(None).unwrap();
 
-    assert_eq!(
-        editor.overlay_buffers(key).unwrap().selection.verts.data[0],
-        255
-    );
+    assert_eq!(editor.overlay_buffers(key).unwrap().flags.verts.data[0], 1);
     editor.update(0.016, &mut result);
 
     assert_eq!(result.changed_overlays, vec![key]);
@@ -1038,8 +1032,8 @@ fn update_processes_cancellation_changes_after_mesh_deactivation() {
     let buffers = editor.overlay_buffers(key).unwrap();
 
     assert!(!editor.overlay(key).unwrap().full_refresh());
-    assert_eq!(buffers.selection.verts.data, vec![0, 0, 0]);
-    assert_eq!(buffers.selection.verts.dirty_range, Some(0..1));
+    assert_eq!(buffers.flags.verts.data, vec![0, 0, 0]);
+    assert_eq!(buffers.flags.verts.dirty_range, Some(0..1));
     assert!(editor.active_meshes().is_empty());
 
     editor.update(0.016, &mut result);
@@ -1047,7 +1041,7 @@ fn update_processes_cancellation_changes_after_mesh_deactivation() {
     assert!(result.changed_overlays.is_empty());
     assert_no_overlay_changes(&editor, key);
     assert_eq!(
-        editor.overlay_buffers(key).unwrap().selection.verts.data,
+        editor.overlay_buffers(key).unwrap().flags.verts.data,
         vec![0, 0, 0]
     );
 }
@@ -1156,7 +1150,7 @@ fn add_mesh_registers_inactive_mesh_and_builds_overlay() {
     let mut mesh = triangle_mesh();
     let vertex = mesh.topology().verts().next().unwrap();
 
-    mesh.selection_mut().set_level(ComponentMask::VERTEX);
+    mesh.set_interactable_components(ComponentMask::VERTEX);
     mesh.selection_mut().select(&[vertex]);
 
     let key = editor.add_mesh(mesh);
@@ -1170,7 +1164,7 @@ fn add_mesh_registers_inactive_mesh_and_builds_overlay() {
 
     let mesh = editor.mesh(key).unwrap();
     assert_eq!(mesh.topology().vert_count(), 3);
-    assert_eq!(mesh.selection().level(), ComponentMask::VERTEX);
+    assert_eq!(mesh.interactable_components(), ComponentMask::VERTEX);
     assert!(mesh.selection().contains(vertex));
 
     let update = editor.overlays[key].update(&editor.meshes[key]).unwrap();
@@ -1187,7 +1181,7 @@ fn add_mesh_registers_inactive_mesh_and_builds_overlay() {
     );
     assert_eq!(buffers.edges.data.len(), 3);
     assert_eq!(buffers.triangles.data.len(), 1);
-    assert_eq!(buffers.selection.verts.data, vec![255, 0, 0]);
+    assert_eq!(buffers.flags.verts.data, vec![1, 0, 0]);
 }
 
 #[test]
@@ -1196,7 +1190,7 @@ fn remove_mesh_returns_original_mesh_and_removes_overlay() {
     let mut mesh = triangle_mesh();
     let vertices: Vec<_> = mesh.topology().verts().collect();
 
-    mesh.selection_mut().set_level(ComponentMask::VERTEX);
+    mesh.set_interactable_components(ComponentMask::VERTEX);
     mesh.selection_mut().select(&[vertices[1]]);
 
     let key = editor.add_mesh(mesh);
@@ -1214,7 +1208,7 @@ fn remove_mesh_returns_original_mesh_and_removes_overlay() {
         mesh.attributes().positions()[vertices[1]].to_array(),
         [1.0, 0.0, 0.0]
     );
-    assert_eq!(mesh.selection().level(), ComponentMask::VERTEX);
+    assert_eq!(mesh.interactable_components(), ComponentMask::VERTEX);
     assert!(mesh.selection().contains(vertices[1]));
 }
 
@@ -1380,14 +1374,14 @@ fn activation_applies_current_mode_and_repeated_calls_are_noops() {
     let mut editor = MeshEditor::new();
     let mut mesh = triangle_mesh();
 
-    mesh.selection_mut().set_level(ComponentMask::FACE);
+    mesh.set_interactable_components(ComponentMask::FACE);
     editor.set_mode(EditMode::EDGE);
 
     let first = editor.add_mesh(mesh);
     let second = editor.add_mesh(triangle_mesh());
 
     assert_eq!(
-        editor.mesh(first).unwrap().selection().level(),
+        editor.mesh(first).unwrap().interactable_components(),
         ComponentMask::FACE
     );
     assert_eq!(editor.set_mesh_active(first), Ok(()));
@@ -1403,7 +1397,7 @@ fn activation_applies_current_mode_and_repeated_calls_are_noops() {
     for key in [first, second] {
         assert!(editor.is_mesh_active(key));
         assert_eq!(
-            editor.mesh(key).unwrap().selection().level(),
+            editor.mesh(key).unwrap().interactable_components(),
             ComponentMask::EDGE
         );
     }
@@ -1417,7 +1411,7 @@ fn deactivation_preserves_selection_and_reactivation_applies_latest_mode() {
     let mut mesh = triangle_mesh();
     let vertex = mesh.topology().verts().next().unwrap();
 
-    mesh.selection_mut().set_level(ComponentMask::VERTEX);
+    mesh.set_interactable_components(ComponentMask::VERTEX);
     mesh.selection_mut().select(&[vertex]);
 
     let changes = mesh.subscribe();
@@ -1436,7 +1430,10 @@ fn deactivation_preserves_selection_and_reactivation_applies_latest_mode() {
 
     let selection = editor.mesh(key).unwrap().selection();
 
-    assert_eq!(selection.level(), ComponentMask::VERTEX);
+    assert_eq!(
+        editor.mesh(key).unwrap().interactable_components(),
+        ComponentMask::VERTEX
+    );
     assert_eq!(selection.len(), 1);
     assert!(selection.contains(vertex));
     assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
@@ -1445,7 +1442,7 @@ fn deactivation_preserves_selection_and_reactivation_applies_latest_mode() {
 
     assert_eq!(editor.active_meshes(), &[key]);
     assert_eq!(
-        editor.mesh(key).unwrap().selection().level(),
+        editor.mesh(key).unwrap().interactable_components(),
         ComponentMask::FACE
     );
     assert!(editor.mesh(key).unwrap().selection().is_empty());
@@ -1458,7 +1455,7 @@ fn mode_changes_apply_only_to_active_meshes() {
         [triangle_mesh(), triangle_mesh(), triangle_mesh()].map(|mut mesh| {
             let vertex = mesh.topology().verts().next().unwrap();
 
-            mesh.selection_mut().set_level(ComponentMask::VERTEX);
+            mesh.set_interactable_components(ComponentMask::VERTEX);
             mesh.selection_mut().select(&[vertex]);
 
             editor.add_mesh(mesh)
@@ -1477,13 +1474,19 @@ fn mode_changes_apply_only_to_active_meshes() {
         for key in [first, second] {
             let selection = editor.mesh(key).unwrap().selection();
 
-            assert_eq!(selection.level(), mode.selection_level);
+            assert_eq!(
+                editor.mesh(key).unwrap().interactable_components(),
+                mode.interactable_components
+            );
             assert!(selection.is_empty());
         }
 
         let selection = editor.mesh(inactive).unwrap().selection();
 
-        assert_eq!(selection.level(), ComponentMask::VERTEX);
+        assert_eq!(
+            editor.mesh(inactive).unwrap().interactable_components(),
+            ComponentMask::VERTEX
+        );
         assert_eq!(selection.len(), 1);
     }
 }
@@ -1514,7 +1517,7 @@ fn rendering_policy_is_exposed_without_changing_selection() {
     let mut editor = MeshEditor::new();
     let mode = EditMode {
         renderable_components: ComponentMask::empty(),
-        selection_level: ComponentMask::VERTEX.union(ComponentMask::EDGE),
+        interactable_components: ComponentMask::VERTEX.union(ComponentMask::EDGE),
     };
 
     editor.set_mode(mode);
@@ -1525,7 +1528,7 @@ fn rendering_policy_is_exposed_without_changing_selection() {
     let mut mesh = triangle_mesh();
     let vertex = mesh.topology().verts().next().unwrap();
 
-    mesh.selection_mut().set_level(mode.selection_level);
+    mesh.set_interactable_components(mode.interactable_components);
     mesh.selection_mut().select(&[vertex]);
 
     let changes = mesh.subscribe();
@@ -1544,7 +1547,10 @@ fn rendering_policy_is_exposed_without_changing_selection() {
 
     let selection = editor.mesh(key).unwrap().selection();
 
-    assert_eq!(selection.level(), mode.selection_level);
+    assert_eq!(
+        editor.mesh(key).unwrap().interactable_components(),
+        mode.interactable_components
+    );
     assert_eq!(selection.len(), 1);
     assert!(selection.contains(vertex));
     assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)));
@@ -1849,19 +1855,22 @@ fn mode_changes_cancel_with_old_context_and_keep_compatible_tool_active() {
         assert_eq!(calls.borrow()[0].mode, previous);
         assert_eq!(
             calls.borrow()[0].meshes,
-            vec![(mesh, previous.selection_level)]
+            vec![(mesh, previous.interactable_components)]
         );
         assert_eq!(editor.active_tool(), Some(tool.id()));
         assert_eq!(editor.mode(), mode);
         assert_eq!(
-            editor.mesh(mesh).unwrap().selection().level(),
-            mode.selection_level
+            editor.mesh(mesh).unwrap().interactable_components(),
+            mode.interactable_components
         );
 
         editor.active_tool_mut().unwrap().confirm();
 
         assert_eq!(calls.borrow()[1].mode, mode);
-        assert_eq!(calls.borrow()[1].meshes, vec![(mesh, mode.selection_level)]);
+        assert_eq!(
+            calls.borrow()[1].meshes,
+            vec![(mesh, mode.interactable_components)]
+        );
     }
 }
 
@@ -1892,7 +1901,7 @@ fn mode_changes_deactivate_incompatible_tool_before_applying_mode() {
 
     assert_eq!(editor.mode(), EditMode::FACE);
     assert_eq!(
-        editor.mesh(mesh).unwrap().selection().level(),
+        editor.mesh(mesh).unwrap().interactable_components(),
         ComponentMask::FACE
     );
     assert_eq!(editor.active_tool(), None);
@@ -1975,7 +1984,7 @@ fn active_mesh_changes_from_the_active_tool_do_not_cancel_it() {
     assert_tool_calls(&calls, &[("tool", "pointer_click")]);
     assert_eq!(editor.active_meshes(), &[second]);
     assert_eq!(
-        editor.mesh(second).unwrap().selection().level(),
+        editor.mesh(second).unwrap().interactable_components(),
         ComponentMask::VERTEX
     );
     assert_eq!(editor.active_tool(), Some(tool.id()));
@@ -1987,7 +1996,7 @@ fn removing_active_mesh_returns_it_after_cancellation_edits() {
     let mut mesh = triangle_mesh();
     let vertex = mesh.topology().verts().next().unwrap();
 
-    mesh.selection_mut().set_level(ComponentMask::VERTEX);
+    mesh.set_interactable_components(ComponentMask::VERTEX);
     mesh.selection_mut().select(&[vertex]);
 
     let mesh = editor.add_mesh(mesh);
