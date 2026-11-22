@@ -109,9 +109,6 @@ pub struct OverlayBuffers {
     /// an entry here corresponds to a face (the 4th element) in the `triangles` buffer entry.
     /// Changes only on a full refresh.
     pub component_keys: ComponentKeys,
-    /// Upload all buffers and re-read `component_keys`. Dirty ranges are `None` when this is set.
-    /// True on the first update and after topology edits.
-    pub full_refresh: bool,
 }
 
 impl OverlayBuffers {
@@ -182,12 +179,10 @@ impl OverlayBuffers {
             triangles: OverlayBuffer::new(triangles),
             selection,
             component_keys,
-            full_refresh: true,
         }
     }
 
     fn clear_changes(&mut self) {
-        self.full_refresh = false;
         self.positions.dirty_range = None;
         self.edges.dirty_range = None;
         self.triangles.dirty_range = None;
@@ -200,6 +195,16 @@ impl OverlayBuffers {
             self.selection[kind].dirty_range = None;
         }
     }
+}
+
+/// The result of a [`TopologyOverlay::update`] that changed something.
+pub struct OverlayUpdate<'a> {
+    pub buffers: &'a OverlayBuffers,
+    /// Upload all buffers and re-read `component_keys`. Dirty ranges are `None` when this is set.
+    /// True on the first update and after topology edits.
+    pub full_refresh: bool,
+    /// The selection changed since the previous update.
+    pub selection_changed: bool,
 }
 
 #[derive(Default)]
@@ -229,6 +234,8 @@ pub struct TopologyOverlay {
     edge_key_to_buffer_index: SecondaryMap<EdgeKey, u32>,
     face_key_to_buffer_index: SecondaryMap<FaceKey, u32>,
     pending_upload: PendingChanges,
+    full_refresh: bool,
+    selection_changed: bool,
     mesh_changes: Receiver<Event<MeshChange>>,
 }
 
@@ -241,6 +248,8 @@ impl TopologyOverlay {
             edge_key_to_buffer_index: SecondaryMap::new(),
             face_key_to_buffer_index: SecondaryMap::new(),
             pending_upload: PendingChanges::None,
+            full_refresh: true,
+            selection_changed: false,
             mesh_changes: mesh.subscribe(),
         };
 
@@ -248,12 +257,14 @@ impl TopologyOverlay {
         overlay
     }
 
-    /// Drains mesh changes and returns buffers to upload, or `None` if nothing changed.
+    /// Drains mesh changes and returns the buffers to upload, or `None` if nothing changed.
     /// The first call returns a full upload, even if no changes have arrived.
     /// Pass the same mesh used in `new`. Topology edits rebuild all buffers.
     /// Consume the result before the next update, which clears the previous dirty ranges.
-    pub fn update(&mut self, mesh: &Mesh) -> Option<&OverlayBuffers> {
+    pub fn update(&mut self, mesh: &Mesh) -> Option<OverlayUpdate<'_>> {
         self.buffers.clear_changes();
+        self.full_refresh = false;
+        self.selection_changed = false;
         self.process_mesh_changes(mesh);
 
         let pending = std::mem::take(&mut self.pending_upload);
@@ -263,10 +274,20 @@ impl TopologyOverlay {
 
         if matches!(pending, PendingChanges::Full) {
             self.buffers.clear_changes();
-            self.buffers.full_refresh = true;
+            self.full_refresh = true;
         }
 
-        Some(&self.buffers)
+        Some(OverlayUpdate {
+            buffers: &self.buffers,
+            full_refresh: self.full_refresh,
+            selection_changed: self.selection_changed,
+        })
+    }
+
+    /// Whether the latest update, or the initial build if there hasn't been one, requires a full
+    /// upload. See [`OverlayUpdate::full_refresh`].
+    pub fn full_refresh(&self) -> bool {
+        self.full_refresh
     }
 
     /// Borrows the packed buffers. Queued mesh changes are applied by [`Self::update`].
@@ -337,6 +358,7 @@ impl TopologyOverlay {
         }
 
         if !change.is_empty() {
+            self.selection_changed = true;
             self.pending_upload.request_partial();
         }
     }
@@ -381,6 +403,7 @@ impl TopologyOverlay {
             &self.face_key_to_buffer_index,
         );
         self.pending_upload = PendingChanges::Full;
+        self.full_refresh = true;
     }
 }
 

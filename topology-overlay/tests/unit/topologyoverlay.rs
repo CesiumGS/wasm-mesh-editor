@@ -77,13 +77,15 @@ fn update_merges_sparse_changes_into_covering_range() {
 
     mesh.selection_mut().select(&[verts[4], verts[1]]);
 
-    let buffers = overlay.update(&mesh).unwrap();
+    let update = overlay.update(&mesh).unwrap();
+    let buffers = update.buffers;
     assert_eq!(buffers.selection.verts.dirty_range, Some(1..5));
     assert!(buffers.positions.dirty_range.is_none());
 
     mesh.translate_selected(Vec3::X);
 
-    let buffers = overlay.update(&mesh).unwrap();
+    let update = overlay.update(&mesh).unwrap();
+    let buffers = update.buffers;
     assert_eq!(buffers.positions.dirty_range, Some(1..5));
     assert!(buffers.selection.verts.dirty_range.is_none());
 }
@@ -167,7 +169,7 @@ fn new_packs_buffers_with_keys_in_buffer_order() {
         assert!(buffers.selection[kind].dirty_range.is_none());
     }
 
-    assert!(buffers.full_refresh);
+    assert!(overlay.full_refresh());
     assert!(matches!(overlay.pending_upload, PendingChanges::Full));
     assert!(buffers.positions.dirty_range.is_none());
     assert!(buffers.edges.dirty_range.is_none());
@@ -257,7 +259,7 @@ fn new_accepts_an_empty_mesh() {
         assert!(overlay.buffers.selection[kind].data.is_empty());
     }
 
-    assert!(overlay.buffers.full_refresh);
+    assert!(overlay.full_refresh());
     assert!(matches!(overlay.pending_upload, PendingChanges::Full));
 }
 
@@ -266,14 +268,15 @@ fn update_delivers_initial_upload_once() {
     for mut mesh in [Mesh::new(), mixed_face_mesh()] {
         let mut overlay = TopologyOverlay::new(&mut mesh);
 
-        assert!(overlay.buffers().full_refresh);
+        assert!(overlay.full_refresh());
         assert_eq!(
             overlay.buffers().positions.data.len(),
             mesh.topology().vert_count()
         );
 
-        let buffers = overlay.update(&mesh).unwrap();
-        assert!(buffers.full_refresh);
+        let update = overlay.update(&mesh).unwrap();
+        let buffers = update.buffers;
+        assert!(update.full_refresh);
         assert!(buffers.positions.dirty_range.is_none());
         let returned = std::ptr::from_ref(buffers);
 
@@ -281,7 +284,7 @@ fn update_delivers_initial_upload_once() {
         assert!(std::ptr::eq(returned, overlay.buffers()));
         assert!(matches!(overlay.pending_upload, PendingChanges::None));
         assert!(overlay.update(&mesh).is_none());
-        assert!(!overlay.buffers().full_refresh);
+        assert!(!overlay.full_refresh());
         assert!(std::ptr::eq(returned, overlay.buffers()));
         assert_eq!(
             overlay.buffers().positions.data.len(),
@@ -305,7 +308,7 @@ fn buffers_preserves_data_between_updates() {
     for _ in 0..2 {
         let buffers = overlay.buffers();
 
-        assert!(!buffers.full_refresh);
+        assert!(!overlay.full_refresh());
         assert_eq!(buffers.selection.verts.data[5], 255);
         assert_eq!(buffers.selection.verts.dirty_range, Some(5..6));
         assert!(buffers.positions.dirty_range.is_none());
@@ -317,7 +320,7 @@ fn buffers_preserves_data_between_updates() {
     assert!(overlay.update(&mesh).is_none());
     assert_eq!(overlay.buffers().selection.verts.data[5], 0);
     assert!(overlay.buffers().selection.verts.dirty_range.is_none());
-    assert!(!overlay.buffers().full_refresh);
+    assert!(!overlay.full_refresh());
 }
 
 #[test]
@@ -329,8 +332,9 @@ fn update_includes_changes_queued_before_initial_upload() {
     mesh.selection_mut().select(&[vertex]);
     mesh.translate_selected(Vec3::X);
 
-    let buffers = overlay.update(&mesh).unwrap();
-    assert!(buffers.full_refresh);
+    let update = overlay.update(&mesh).unwrap();
+    let buffers = update.buffers;
+    assert!(update.full_refresh);
     assert_eq!(buffers.positions.data[5], [3.0, 3.0, 4.0, 0.0]);
     assert_eq!(
         buffers.selection[ComponentType::Vertex].data,
@@ -346,6 +350,46 @@ fn update_includes_changes_queued_before_initial_upload() {
 }
 
 #[test]
+fn update_reports_selection_changes_without_detail() {
+    let mut mesh = mixed_face_mesh();
+    let verts: Vec<_> = mesh.topology().verts().collect();
+    let mut overlay = TopologyOverlay::new(&mut mesh);
+
+    // Queued before the initial upload, which is still a selection change.
+    mesh.selection_mut().select(&[verts[0]]);
+    assert!(overlay.update(&mesh).unwrap().selection_changed);
+
+    // Several edits in one frame report once, even when they cancel out.
+    mesh.selection_mut().select(&[verts[1]]);
+    mesh.selection_mut().deselect(&[verts[1]]);
+    assert!(overlay.update(&mesh).unwrap().selection_changed);
+
+    // Only the update that applied the change reports it.
+    assert!(overlay.update(&mesh).is_none());
+
+    // No-op selection edits are not changes.
+    mesh.selection_mut().select(&[verts[0]]);
+    mesh.selection_mut().deselect(&[verts[1]]);
+    assert!(overlay.update(&mesh).is_none());
+}
+
+#[test]
+fn update_does_not_report_selection_changed_for_other_changes() {
+    let mut mesh = mixed_face_mesh();
+    let vertex = mesh.topology().verts().last().unwrap();
+    let mut overlay = TopologyOverlay::new(&mut mesh);
+
+    mesh.selection_mut().select(&[vertex]);
+    overlay.update(&mesh).unwrap();
+
+    mesh.translate_selected(Vec3::X);
+
+    let update = overlay.update(&mesh).unwrap();
+    assert!(!update.selection_changed);
+    assert!(update.buffers.positions.dirty_range.is_some());
+}
+
+#[test]
 fn update_returns_partial_uploads_and_clears_previous_ranges() {
     let mut mesh = mixed_face_mesh();
     let vertex = mesh.topology().verts().last().unwrap();
@@ -354,8 +398,9 @@ fn update_returns_partial_uploads_and_clears_previous_ranges() {
 
     mesh.selection_mut().select(&[vertex]);
 
-    let buffers = overlay.update(&mesh).unwrap();
-    assert!(!buffers.full_refresh);
+    let update = overlay.update(&mesh).unwrap();
+    let buffers = update.buffers;
+    assert!(!update.full_refresh);
     assert_eq!(buffers.selection[ComponentType::Vertex].data[5], 255);
     assert_eq!(
         buffers.selection[ComponentType::Vertex].dirty_range,
@@ -366,8 +411,9 @@ fn update_returns_partial_uploads_and_clears_previous_ranges() {
     mesh.translate_selected(Vec3::X);
     mesh.translate_selected(Vec3::Y);
 
-    let buffers = overlay.update(&mesh).unwrap();
-    assert!(!buffers.full_refresh);
+    let update = overlay.update(&mesh).unwrap();
+    let buffers = update.buffers;
+    assert!(!update.full_refresh);
     assert_eq!(buffers.positions.data[5], [3.0, 4.0, 4.0, 0.0]);
     assert_eq!(buffers.positions.dirty_range, Some(5..6));
     assert!(
@@ -378,8 +424,9 @@ fn update_returns_partial_uploads_and_clears_previous_ranges() {
 
     mesh.selection_mut().clear();
 
-    let buffers = overlay.update(&mesh).unwrap();
-    assert!(!buffers.full_refresh);
+    let update = overlay.update(&mesh).unwrap();
+    let buffers = update.buffers;
+    assert!(!update.full_refresh);
     assert_eq!(buffers.selection[ComponentType::Vertex].data[5], 0);
     assert!(buffers.positions.dirty_range.is_none());
     assert!(overlay.update(&mesh).is_none());
@@ -402,8 +449,9 @@ fn update_replays_queued_selection_changes_in_order() {
     mesh.selection_mut().clear();
     mesh.selection_mut().select(&[faces[0]]);
 
-    let buffers = overlay.update(&mesh).unwrap();
-    assert!(!buffers.full_refresh);
+    let update = overlay.update(&mesh).unwrap();
+    let buffers = update.buffers;
+    assert!(!update.full_refresh);
     assert_eq!(
         buffers.selection[ComponentType::Vertex].data,
         vec![255, 255, 255, 255, 0, 0]
@@ -433,7 +481,8 @@ fn update_replays_queued_selection_changes_in_order() {
 
     mesh.selection_mut().set(&[faces[1]]);
 
-    let buffers = overlay.update(&mesh).unwrap();
+    let update = overlay.update(&mesh).unwrap();
+    let buffers = update.buffers;
     assert_eq!(
         buffers.selection[ComponentType::Vertex].data,
         vec![255, 255, 0, 0, 255, 0]
@@ -444,8 +493,9 @@ fn update_replays_queued_selection_changes_in_order() {
     mesh.selection_mut().select(&[faces[0]]);
     mesh.selection_mut().clear();
 
-    let buffers = overlay.update(&mesh).unwrap();
-    assert!(!buffers.full_refresh);
+    let update = overlay.update(&mesh).unwrap();
+    let buffers = update.buffers;
+    assert!(!update.full_refresh);
 
     for kind in [
         ComponentType::Vertex,
@@ -478,8 +528,9 @@ fn update_reports_nonempty_selection_deltas_even_when_keys_are_unmapped() {
     change.added.faces.push(FaceKey::null());
     changes.emit(MeshChange::Selection(change));
 
-    let buffers = overlay.update(&mesh).unwrap();
-    assert!(!buffers.full_refresh);
+    let update = overlay.update(&mesh).unwrap();
+    let buffers = update.buffers;
+    assert!(!update.full_refresh);
 
     for kind in [
         ComponentType::Vertex,
@@ -537,9 +588,10 @@ fn update_rebuilds_buffers_keys_and_maps_on_topology_events() {
         selection_change.added.verts = mesh.topology().verts().collect();
         changes.emit(MeshChange::Selection(selection_change));
 
-        let buffers = overlay.update(&mesh).unwrap();
+        let update = overlay.update(&mesh).unwrap();
+        let buffers = update.buffers;
         let topology = mesh.topology();
-        assert!(buffers.full_refresh);
+        assert!(update.full_refresh);
         assert_eq!(buffers.positions.data.len(), topology.vert_count());
         assert_eq!(buffers.edges.data.len(), topology.edge_count());
         assert_eq!(

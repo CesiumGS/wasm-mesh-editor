@@ -5,4 +5,6 @@
 
 mod topologyoverlay;
 
-pub use topologyoverlay::{OverlayBuffer, OverlayBuffers, SelectionBuffers, TopologyOverlay};
+pub use topologyoverlay::{
+    OverlayBuffer, OverlayBuffers, OverlayUpdate, SelectionBuffers, TopologyOverlay,
+};
