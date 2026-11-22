@@ -393,7 +393,7 @@ fn translate_tool_updates_selected_components_and_overlay_positions() {
                 .as_ptr(),
             allocation
         );
-        assert_no_overlay_changes(editor.overlay_buffers(inactive).unwrap());
+        assert_no_overlay_changes(&editor, inactive);
 
         for (vertex, position) in &original {
             let expected = if selected.contains(vertex) {
@@ -605,7 +605,7 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
         assert_eq!(result.changed_overlays, vec![target]);
 
         let buffers = editor.overlay_buffers(target).unwrap();
-        assert!(!buffers.full_refresh);
+        assert!(!editor.overlay(target).unwrap().full_refresh());
         assert_eq!(buffers.positions.data.as_ptr(), positions);
         assert!(buffers.positions.dirty_range.is_none());
         assert_eq!(buffers.selection[kind].data.as_ptr(), selection);
@@ -621,7 +621,7 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
                 .count(),
             selected_vertices
         );
-        assert_no_overlay_changes(editor.overlay_buffers(inactive).unwrap());
+        assert_no_overlay_changes(&editor, inactive);
 
         input.modifiers.shift = true;
 
@@ -653,7 +653,7 @@ fn select_tool_clicks_update_selection_immediately_and_overlays_on_update() {
         editor.update(0.016, &mut result);
 
         assert!(result.changed_overlays.is_empty());
-        assert_no_overlay_changes(editor.overlay_buffers(target).unwrap());
+        assert_no_overlay_changes(&editor, target);
     }
 }
 
