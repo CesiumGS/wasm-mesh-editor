@@ -12,19 +12,22 @@ pub struct Modifiers {
     pub meta: bool,
 }
 
+/// The components picked on one mesh.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PickHit<'input> {
+    pub mesh: MeshKey,
+    pub components: &'input [ComponentKey],
+}
+
 /// A pick result for a pointer event
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PickResult {
+pub enum PickResult<'input> {
     /// No picking was requested for this event. This is not a miss.
     #[default]
     NotPerformed,
-    /// Picking found no selectable component.
-    Miss,
-    /// Tools receive hits on missing meshes / components as misses.
-    Hit {
-        mesh: MeshKey,
-        component: ComponentKey,
-    },
+    /// The picked components, grouped by mesh. Empty if picking found nothing.
+    /// Renderers may pick from buffers that can lag behind mesh edits, so hits may be stale.
+    Hits(&'input [PickHit<'input>]),
 }
 
 /// Renderer-provided scene context
@@ -41,7 +44,7 @@ pub struct SceneInput<'input> {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PointerInput<'input> {
     pub modifiers: Modifiers,
-    pub pick: PickResult,
+    pub pick: PickResult<'input>,
     pub ray: Option<WorldRay>,
     pub scene: Option<SceneInput<'input>>,
 }
