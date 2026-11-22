@@ -225,10 +225,10 @@ pub struct OverlayViews {
     component_keys: OverlayKeyViews,
 }
 
-impl From<&OverlayBuffers> for OverlayViews {
-    fn from(buffers: &OverlayBuffers) -> Self {
+impl OverlayViews {
+    fn new(buffers: &OverlayBuffers, full_refresh: bool) -> Self {
         Self {
-            full_refresh: buffers.full_refresh,
+            full_refresh,
             positions: OverlayBufferView::new(&buffers.positions, uniforms::POSITION_TEXTURE),
             edges: OverlayBufferView::new(&buffers.edges, uniforms::EDGE_TEXTURE),
             triangles: OverlayBufferView::new(&buffers.triangles, uniforms::TRIANGLE_TEXTURE),
@@ -337,9 +337,9 @@ impl MeshEditor {
     /// [`MeshEditor::update`] changed. Throws for an unknown mesh key.
     #[wasm_bindgen(js_name = overlayViews)]
     pub fn overlay_views(&self, key: MeshKey) -> Result<Ts<OverlayViews>, JsError> {
-        let buffers = self.overlay_buffers(key).ok_or(MeshNotFound { key })?;
+        let overlay = self.overlay(key).ok_or(MeshNotFound { key })?;
 
-        Ok(OverlayViews::from(buffers).into_ts()?)
+        Ok(OverlayViews::new(overlay.buffers(), overlay.full_refresh()).into_ts()?)
     }
 
     /// Writes a mesh's local-space bounds to `result` as `[minX, minY, minZ, maxX, maxY, maxZ]`.
